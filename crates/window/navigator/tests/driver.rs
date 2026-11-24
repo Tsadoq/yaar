@@ -1,9 +1,6 @@
-//! The driver: one language server, started from a [`Launch`] and spoken to in the Language
-//! Server Protocol, shown with the stand-in language server (`--log` tells what it
-//! received). Every wait is for an event on the callback, or for a line of the stand-in's
-//! log, with a deadline; no test sleeps. The negative clauses are read after a barrier: an
-//! answer to a request sent after the fact, which the reading thread can only hand over
-//! after everything that came before it.
+//! Driver tests: one language server, started from a `Launch`, against the stand-in (`--log`
+//! records what it received). Waits are for callback events or log lines, with a deadline; no
+//! sleeps. A negative is read after a barrier: an answer to a later request, handed over last.
 
 mod support;
 
@@ -19,11 +16,9 @@ use yaar_navigator::driver::{Launch, Server, ServerEvent};
 use yaar_navigator::lsp::{file_uri, read_frame};
 use yaar_navigator::registry::Ready;
 
-/// A server started by a test, and what its callback was handed so far.
 struct Run {
     server: Server,
     events: Receiver<ServerEvent>,
-    /// Every event read, in the order it came, whichever wait read it.
     told: Vec<ServerEvent>,
 }
 
@@ -44,7 +39,6 @@ impl Run {
         }
     }
 
-    /// The next event, waiting for it up to the deadline.
     fn next(&mut self) -> ServerEvent {
         let event = match self.events.recv_timeout(DEADLINE) {
             Ok(event) => event,
@@ -59,13 +53,10 @@ impl Run {
         event
     }
 
-    /// Reads events until `Ready`.
     fn ready(&mut self) {
         while self.next() != ServerEvent::Ready {}
     }
 
-    /// The answer to `request`: the one already read while a wait looked for another, or the
-    /// next one that comes.
     fn answer(&mut self, request: u64) -> Result<Value, String> {
         let read = self.told.iter().find_map(|event| match event {
             ServerEvent::Answered {
@@ -89,7 +80,6 @@ impl Run {
         }
     }
 
-    /// Reads events until `Exited`, and gives its code.
     fn exited(&mut self) -> Option<i32> {
         loop {
             if let ServerEvent::Exited { code } = self.next() {
@@ -98,13 +88,11 @@ impl Run {
         }
     }
 
-    /// Asks `textDocument/hover` at the position, and gives the answer.
     fn hover(&mut self, file: &Path, line: u32, character: u32) -> Result<Value, String> {
         let request = self.ask_hover(file, line, character);
         self.answer(request)
     }
 
-    /// Sends `textDocument/hover` and gives its number.
     fn ask_hover(&self, file: &Path, line: u32, character: u32) -> u64 {
         self.server
             .request(
@@ -117,14 +105,11 @@ impl Run {
             .expect("send the request")
     }
 
-    /// The text a hover answer holds.
     fn text(answer: &Result<Value, String>) -> Option<String> {
         yaar_navigator::lsp::hover_text(answer.as_ref().expect("an answer, not an error"))
     }
 }
 
-/// A launch of the stand-in with `args`, serving `root`, in the scratch's environment, with
-/// the row's rule `Answer`, the extension `sil`, and its standard error in the scratch.
 fn launch(scratch: &Scratch, root: &Path, args: &[&str]) -> Launch {
     Launch {
         program: standin(),
@@ -140,7 +125,6 @@ fn launch(scratch: &Scratch, root: &Path, args: &[&str]) -> Launch {
     }
 }
 
-/// A folder to serve, with `main.sil` in it.
 fn project(scratch: &Scratch, text: &str) -> (PathBuf, PathBuf) {
     let root = scratch.root.join("repos").join("project");
     std::fs::create_dir_all(&root).expect("make the project");
@@ -149,7 +133,6 @@ fn project(scratch: &Scratch, text: &str) -> (PathBuf, PathBuf) {
     (root, file)
 }
 
-/// The lines of the stand-in's log as objects; none for a log not written.
 fn log(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -158,13 +141,10 @@ fn log(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// The first line of the log whose `event` is `event`.
 fn logged(path: &Path, event: &str) -> Option<Value> {
     log(path).into_iter().find(|line| line["event"] == event)
 }
 
-/// Waits until the stand-in logged `event`, looking at the file every few milliseconds:
-/// a line that is there stays there.
 fn wait_logged(path: &Path, event: &str) -> Value {
     let end = Instant::now() + DEADLINE;
     loop {
@@ -181,7 +161,6 @@ fn wait_logged(path: &Path, event: &str) -> Value {
     }
 }
 
-/// The methods of the notifications the stand-in received, in order.
 fn notifications(path: &Path) -> Vec<String> {
     log(path)
         .iter()
@@ -190,8 +169,6 @@ fn notifications(path: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The wait for a notification of `method` in the stand-in's log, a line that stays there
-/// once it is: looked at every few milliseconds up to the deadline.
 fn wait_notified(path: &Path, method: &str) {
     let end = Instant::now() + DEADLINE;
     while !notifications(path).iter().any(|seen| seen == method) {
@@ -205,9 +182,7 @@ fn wait_notified(path: &Path, method: &str) {
     }
 }
 
-/// `launch`, with the stand-in run behind `tee`, which copies every byte the driver sends
-/// into `frames` before the stand-in reads it: what the server was sent, which its own log
-/// does not hold.
+/// `launch` with the stand-in behind `tee`, which copies what the driver sends into `frames`.
 fn recorded(scratch: &Scratch, root: &Path, args: &[&str], frames: &Path) -> Launch {
     let mut given = launch(scratch, root, &[]);
     given.program = PathBuf::from("/bin/sh");
@@ -224,7 +199,6 @@ fn recorded(scratch: &Scratch, root: &Path, args: &[&str], frames: &Path) -> Lau
     given
 }
 
-/// The whole frames `recorded` has written so far; `tee` may be part way through the last.
 fn frames_so_far(path: &Path) -> Vec<Value> {
     let mut input = std::io::Cursor::new(std::fs::read(path).unwrap_or_default());
     let mut found = Vec::new();
@@ -234,8 +208,6 @@ fn frames_so_far(path: &Path) -> Vec<Value> {
     found
 }
 
-/// Waits until `enough` says the frames so far hold what the test needs: a frame that is
-/// there stays there, so it looks every few milliseconds up to the deadline.
 fn wait_frames(path: &Path, enough: impl Fn(&[Value]) -> bool) -> Vec<Value> {
     let end = Instant::now() + DEADLINE;
     loop {
@@ -252,7 +224,6 @@ fn wait_frames(path: &Path, enough: impl Fn(&[Value]) -> bool) -> Vec<Value> {
     }
 }
 
-/// The methods of the frames that have one, in order.
 fn methods(frames: &[Value]) -> Vec<&str> {
     frames
         .iter()
@@ -260,7 +231,6 @@ fn methods(frames: &[Value]) -> Vec<&str> {
         .collect()
 }
 
-/// Whether the process is stopped by `SIGSTOP`, as the kernel says.
 #[cfg(target_os = "linux")]
 fn is_stopped(pid: u32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
@@ -269,7 +239,6 @@ fn is_stopped(pid: u32) -> bool {
         .is_some_and(|state| state == 'T')
 }
 
-/// Whether the process is stopped by `SIGSTOP`, as `ps` says.
 #[cfg(not(target_os = "linux"))]
 fn is_stopped(pid: u32) -> bool {
     std::process::Command::new("ps")
@@ -282,8 +251,6 @@ fn is_stopped(pid: u32) -> bool {
         })
 }
 
-/// Stops the process with `SIGSTOP` and returns once the kernel says it is stopped, so that
-/// nothing it was about to do is done: a request sent after this is never answered.
 fn freeze(pid: u32) {
     // SAFETY: a signal to a process of this test's own.
     let sent = unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) };
@@ -295,7 +262,6 @@ fn freeze(pid: u32) {
     }
 }
 
-/// Ends the process with `SIGKILL`.
 fn kill(pid: u32) {
     // SAFETY: a signal to a process of this test's own.
     let sent = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
@@ -317,8 +283,6 @@ fn a_server_gets_exactly_the_environment_it_is_given() {
     let dump = scratch.root.join("environment.txt");
     let stand_in_log = scratch.root.join("standin.log");
     let mut given = launch(&scratch, &root, &[]);
-    // The environment is listed by the program that starts the stand-in, which is the last
-    // to see it all.
     given.program = PathBuf::from("/bin/sh");
     given.args = [
         "-c",
@@ -345,7 +309,6 @@ fn a_server_gets_exactly_the_environment_it_is_given() {
         .collect();
     assert!(names.contains(&"HOME".to_owned()), "{names:?}");
     assert!(names.contains(&"STANDIN_X".to_owned()), "{names:?}");
-    // What a shell adds of its own is not the driver's; nothing else is there.
     for name in &names {
         assert!(
             ["HOME", "STANDIN_X", "PWD", "OLDPWD", "SHLVL", "_"].contains(&name.as_str()),
@@ -402,14 +365,11 @@ fn initialize_carries_the_options_and_the_rows_capabilities_merged_over_the_driv
         json!({"mode": "strict", "depth": 3})
     );
     let capabilities = &initialize["capabilities"];
-    // The row's own key, beside the driver's.
     assert_eq!(capabilities["experimental"]["flag"], true);
     assert_eq!(
         capabilities["general"]["positionEncodings"],
         json!(["utf-16"])
     );
-    // The row's value wins where both say something; the driver's other keys under the same
-    // table stay.
     assert_eq!(
         capabilities["textDocument"]["hover"]["contentFormat"],
         json!(["plaintext"])
@@ -426,12 +386,10 @@ fn initialize_carries_the_options_and_the_rows_capabilities_merged_over_the_driv
 #[test]
 fn a_server_that_asks_for_a_setting_is_answered_with_the_one_of_its_section() {
     let settings = json!({"a": {"b": {"c": 1}}, "other": 2});
-    // The section, and what the server is answered with.
     let cases = [
         ("a.b", json!([{"c": 1}])),
         ("a.nothere", json!([null])),
         ("other.deeper", json!([null])),
-        // No section: the whole table.
         ("", json!([settings.clone()])),
     ];
     for (n, (section, expected)) in cases.into_iter().enumerate() {
@@ -450,15 +408,12 @@ fn a_server_that_asks_for_a_setting_is_answered_with_the_one_of_its_section() {
         );
         given.settings = settings.clone();
         let run = Run::start(given);
-        // The reading thread answered by itself: this test hands the server nothing.
         let line = wait_logged(&stand_in_log, "configuration");
         assert_eq!(line["result"], expected, "section {section:?}");
         run.server.stop(STOP);
     }
 }
 
-/// A server of the rule `rule`, which the stand-in shows as `kind`, held back until a file
-/// exists: not told ready before, told ready once after.
 fn ready_only_when_its_rule_is_met(kind: &str, rule: Ready) {
     let scratch = Scratch::new();
     let (root, file) = project(&scratch, "def total\n");
@@ -472,9 +427,6 @@ fn ready_only_when_its_rule_is_met(kind: &str, rule: Ready) {
             kind,
             "--ready-when",
             go.to_str().unwrap(),
-            // The stand-in's request, which it makes after everything it sends at
-            // `initialized`: that its answer is logged says the reading thread has read what
-            // the stand-in said of its readiness.
             "--ask-configuration",
             "",
             "--log",
@@ -484,7 +436,6 @@ fn ready_only_when_its_rule_is_met(kind: &str, rule: Ready) {
     given.ready = rule;
     let mut run = Run::start(given);
     wait_logged(&stand_in_log, "configuration");
-    // The barrier: an answer comes after everything the server said before it.
     let before = run.hover(&file, 0, 5);
     assert_eq!(before, Ok(Value::Null));
     assert!(
@@ -529,10 +480,9 @@ fn a_server_ready_by_its_answer_is_told_ready_once_after_initialize() {
     let scratch = Scratch::new();
     let (root, file) = project(&scratch, "def total\n");
     let never = scratch.root.join("never");
-    // The row's rule is `Answer`, which the stand-in does not follow: it says it is not ready
-    // (`standin/status`, which it sends after `initialized`, and never ready as `never` is
-    // not there) and asks for its configuration after that. Each of these reaches the reading
-    // thread after the answer to `initialize`, and none may tell `Ready` again.
+    // The row's rule is `Answer`, which the stand-in does not follow: it says it is not ready and
+    // then asks for its configuration. Each follows the `initialize` answer; none may tell `Ready`
+    // again.
     let stand_in_log = scratch.root.join("standin.log");
     let mut run = Run::start(launch(
         &scratch,
@@ -550,10 +500,7 @@ fn a_server_ready_by_its_answer_is_told_ready_once_after_initialize() {
     ));
     run.ready();
     assert!(run.server.is_ready());
-    // The reading thread answered the configuration request, which the stand-in made after
-    // its notification: it has handled the notification.
     wait_logged(&stand_in_log, "configuration");
-    // The barrier: an answer comes after everything the server said before it.
     let answer = run.hover(&file, 0, 5);
     assert_eq!(answer, Ok(Value::Null), "the stand-in itself is not ready");
     assert_eq!(
@@ -565,7 +512,6 @@ fn a_server_ready_by_its_answer_is_told_ready_once_after_initialize() {
         "told once: {:?}",
         run.told
     );
-    // In order: it was told before the answer.
     assert_eq!(run.told[0], ServerEvent::Ready);
     run.server.stop(STOP);
 }
@@ -582,19 +528,15 @@ fn a_hover_is_answered_from_the_text_last_opened_and_by_the_number_of_its_reques
     ));
     run.ready();
 
-    // The file on disk says `disk`; the text the server is given says `opened`.
     run.server.open(&file, "def opened\n").expect("open");
-    // Two places of the line, so that the two answers differ.
     let first = run.ask_hover(&file, 0, 5);
     let second = run.ask_hover(&file, 0, 0);
     assert_ne!(first, second, "each request has a number of its own");
-    // The answers are told by the number, whichever is read first.
     let second_answer = run.answer(second);
     let first_answer = run.answer(first);
     assert_eq!(Run::text(&first_answer), Some("standin: opened".to_owned()));
     assert_eq!(Run::text(&second_answer), Some("standin: def".to_owned()));
 
-    // The file again, changed: the whole text is sent again, as a change.
     run.server.open(&file, "def changed\n").expect("open again");
     let third = run.hover(&file, 0, 5);
     assert_eq!(Run::text(&third), Some("standin: changed".to_owned()));
@@ -656,8 +598,7 @@ fn a_cancelled_request_has_no_answer_told_and_the_server_is_told_to_cancel() {
     let scratch = Scratch::new();
     let (root, file) = project(&scratch, "def total\n");
     let stand_in_log = scratch.root.join("standin.log");
-    // The callback holds the reading thread on the answer to the first request until the
-    // test lets it go: what the server answers meanwhile waits in the pipe, unread. So the
+    // The callback holds the reading thread on the first answer until the test lets it go, so the
     // test cancels a request whose answer certainly has not been handed over.
     let (to_test, events) = channel();
     let (hold, held) = channel::<()>();
@@ -670,7 +611,6 @@ fn a_cancelled_request_has_no_answer_told_and_the_server_is_told_to_cancel() {
             if matches!(event, ServerEvent::Answered { .. })
                 && seen_armed.swap(false, Ordering::SeqCst)
             {
-                // Until released, or until the test ends and drops the sender.
                 let _ = held.lock().unwrap().recv();
             }
             let _ = to_test.send(event);
@@ -684,22 +624,14 @@ fn a_cancelled_request_has_no_answer_told_and_the_server_is_told_to_cancel() {
     };
     run.ready();
 
-    // Armed before `a` is sent, so that the callback holds at the first answer there is,
-    // which is `a`'s: nothing else is waiting for one.
     armed.store(true, Ordering::SeqCst);
     let a = run.server.request("standin/unknown", json!({})).unwrap();
-    // The callback is held at `a`'s answer once the reading thread reads it; `b` and `c`
-    // are asked behind it.
-    // Two places of the line, so that an answer told to the wrong request shows: `b`'s
-    // answer, if it were told as `c`'s, would say `def`.
     let b = run.ask_hover(&file, 0, 0);
     let c = run.ask_hover(&file, 0, 5);
     run.server.cancel(b);
     hold.send(()).expect("release the callback");
 
     assert!(run.answer(a).is_err());
-    // `c` was not cancelled and was asked after `b`: its answer coming says that `b`'s,
-    // which the server sent before it, was passed over and not told.
     let answer = run.answer(c);
     assert_eq!(Run::text(&answer), Some("standin: total".to_owned()));
     assert!(
@@ -710,8 +642,6 @@ fn a_cancelled_request_has_no_answer_told_and_the_server_is_told_to_cancel() {
         "the answer of a cancelled request was told: {:?}",
         run.told
     );
-    // The server was told. The cancel was queued after `c`, so the stand-in may have
-    // answered `c` before it read the cancel: the line is waited for, and stays once there.
     wait_notified(&stand_in_log, "$/cancelRequest");
     run.server.stop(STOP);
 }
@@ -722,8 +652,6 @@ fn a_server_that_fails_initialize_is_told_exited_and_never_ready() {
     let (root, _) = project(&scratch, "def a\n");
     let mut run = Run::start(launch(&scratch, &root, &["--fail-initialize"]));
     run.exited();
-    // `Exited` is told last, so nothing is to come after it, and what came before it holds
-    // no `Ready`.
     assert!(
         !run.told.contains(&ServerEvent::Ready),
         "ready: {:?}",
@@ -737,9 +665,8 @@ fn a_server_that_fails_initialize_is_told_exited_and_never_ready() {
 fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and_never_ready() {
     let scratch = Scratch::new();
     let (root, _) = project(&scratch, "def a\n");
-    // The shell writes the status frame and only then becomes the stand-in, so the frame is
-    // in the pipe before the stand-in has started and before it answers `initialize`: a
-    // pipe keeps its order, so the driver reads the status first, with nothing to race.
+    // The shell writes the status frame and only then becomes the stand-in: the frame is in the
+    // pipe before the stand-in answers `initialize`, so the driver reads it first.
     let status = json!({"jsonrpc": "2.0", "method": "standin/status", "params": {"ready": true}});
     let with_status_first = |standin_args: &[&str]| {
         let mut given = launch(&scratch, &root, &[]);
@@ -754,8 +681,6 @@ fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and
             &status.to_string(),
         ]
         .into_iter()
-        // The stand-in says `standin/status` again after it was initialized, so a second
-        // `Ready` has a notification to be told on if the driver tells it more than once.
         .chain(["--ready", "notification"])
         .chain(standin_args.iter().copied())
         .map(str::to_owned)
@@ -765,7 +690,6 @@ fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and
     };
 
     let mut run = Run::start(with_status_first(&["--fail-initialize"]));
-    // `Exited` is the barrier: the status frame was read before it.
     run.exited();
     assert!(
         !run.told.contains(&ServerEvent::Ready),
@@ -774,10 +698,6 @@ fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and
     );
     assert!(!run.server.is_ready());
 
-    // The control: the same wrapper and the same frame, and the stand-in answers initialize.
-    // The frame was parsed and the rule was met, so exactly one `Ready` comes, once the
-    // answer did, though the stand-in says `standin/status` twice more; so the first half is
-    // not passing because the frame never arrived.
     let mut control = Run::start(with_status_first(&[]));
     control.ready();
     assert!(control.server.is_ready());
@@ -787,8 +707,6 @@ fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and
         mut told,
     } = control;
     server.stop(STOP);
-    // `Exited` is the last event and is waited for, up to the deadline: a second `Ready`
-    // would be before it.
     loop {
         let event = events
             .recv_timeout(DEADLINE)
@@ -810,9 +728,6 @@ fn a_server_that_fails_initialize_and_runs_on_is_killed_and_told_exited() {
     let scratch = Scratch::new();
     let (root, _) = project(&scratch, "def a\n");
     let mut given = launch(&scratch, &root, &[]);
-    // A server that refuses `initialize` and stays up, holding its output open: only the
-    // driver's kill ends it (`sleep` is no wait of the test's: it is the process that does
-    // not end, and a failing test kills it when its server is dropped).
     given.program = PathBuf::from("/bin/sh");
     given.args = [
         "-c",
@@ -843,7 +758,6 @@ fn a_server_that_ends_after_ready_is_told_ready_then_exited_with_its_code() {
         [ServerEvent::Ready, ServerEvent::Exited { code: Some(2) }]
     );
     assert!(!run.server.is_ready());
-    // A server that ended takes no more: the caller is told, not left waiting.
     assert!(run.server.request("textDocument/hover", json!({})).is_err());
     assert!(run.server.open(&file, "def b\n").is_err());
 }
@@ -856,7 +770,6 @@ fn a_request_still_waiting_when_the_server_dies_is_answered_with_an_error_before
     run.ready();
     let pid = run.server.pid();
 
-    // A stopped server answers nothing: the request is certainly waiting when it dies.
     freeze(pid);
     let waiting = run.ask_hover(&file, 0, 5);
     kill(pid);
@@ -866,7 +779,6 @@ fn a_request_still_waiting_when_the_server_dies_is_answered_with_an_error_before
     };
     assert_eq!(request, waiting);
     assert!(result.is_err());
-    // Killed by a signal: no exit code.
     assert_eq!(run.next(), ServerEvent::Exited { code: None });
 }
 
@@ -880,10 +792,8 @@ fn stop_ends_the_server_by_shutdown_and_exit_and_returns_with_the_process_reaped
     assert!(is_alive(pid));
 
     run.server.stop(STOP);
-    // The stand-in ends with 0 only for `exit` after `shutdown`; alone `exit` gives 1. And
-    // `Exited` is told before stop returns: this reads it, first of all, without waiting. A
-    // stop that did not wait for it would pass this on some runs: the clause is caught by
-    // likelihood, as no stand-in can hold the reading thread back from the outside.
+    // The stand-in ends with 0 only for `exit` after `shutdown`. `Exited` is told before stop
+    // returns, so this reads it without waiting.
     let told: Vec<ServerEvent> = run.events.try_iter().collect();
     assert_eq!(told, [ServerEvent::Exited { code: Some(0) }]);
     assert!(!is_alive(pid), "the process still exists after stop");
@@ -897,10 +807,8 @@ fn stop_kills_a_server_that_does_not_end_within_the_time_and_returns_with_it_rea
     run.ready();
     let pid = run.server.pid();
 
-    // A stopped server never acts on `shutdown` and `exit`.
     freeze(pid);
     run.server.stop(Duration::from_millis(50));
-    // Read first of all, as above.
     let told: Vec<ServerEvent> = run.events.try_iter().collect();
     assert_eq!(told, [ServerEvent::Exited { code: None }]);
     assert!(!is_alive(pid), "the process still exists after stop");
@@ -915,7 +823,6 @@ fn a_server_that_reads_nothing_stalls_neither_the_caller_nor_the_stop() {
     let pid = run.server.pid();
     freeze(pid);
 
-    // Far more than a pipe holds: a caller that wrote it itself would wait for the server.
     let text = "x".repeat(1024 * 1024);
     let (done, finished) = channel();
     let server = &run.server;
@@ -949,7 +856,6 @@ fn what_a_server_writes_on_its_standard_error_is_appended_to_the_log_whose_folde
         let mut given = launch(&scratch, &root, &["--version", "--fail-trial"]);
         given.log = Some(path.clone());
         let mut run = Run::start(given);
-        // The stand-in says it is broken on its standard error and ends with 3.
         assert_eq!(run.exited(), Some(3));
         let text = std::fs::read_to_string(path).expect("the log");
         assert!(text.contains("standin-lsp: broken"), "{text:?}");
@@ -979,8 +885,6 @@ fn the_files_that_changed_are_told_and_an_empty_list_tells_nothing() {
     run.ready();
 
     run.server.files_changed(&[]);
-    // The barrier: the server has read every frame sent before the hover when it answers,
-    // and the copy holds the hover once `tee` has written it.
     run.hover(&file, 0, 5).expect("answer");
     let seen = wait_frames(&frames, |frames| {
         methods(frames).contains(&"textDocument/hover")
@@ -1000,7 +904,6 @@ fn the_files_that_changed_are_told_and_an_empty_list_tells_nothing() {
         .filter(|frame| frame["method"] == "workspace/didChangeWatchedFiles")
         .collect();
     assert_eq!(notices.len(), 1, "one notice for the whole list");
-    // The file that is there changed (2), the one that is not deleted (3).
     assert_eq!(
         notices[0]["params"]["changes"],
         json!([
@@ -1023,7 +926,6 @@ fn a_file_opened_again_and_again_is_told_at_the_next_version_each_time() {
     for text in ["def one\n", "def two\n", "def three\n"] {
         run.server.open(&file, text).expect("open");
     }
-    // Another file has its own count.
     run.server.open(&other, "def x\n").expect("open");
     let seen = wait_frames(&frames, |frames| {
         methods(frames)
@@ -1072,12 +974,10 @@ fn what_a_caller_sends_before_the_server_is_initialized_follows_initialized() {
     let (root, file) = project(&scratch, "def total\n");
     let frames = scratch.root.join("frames");
     let mut run = Run::start(recorded(&scratch, &root, &[], &frames));
-    // Straight after the start, before the server could answer `initialize`.
     run.server.files_changed(std::slice::from_ref(&file));
     run.server.open(&file, "def early\n").expect("open");
     let early = run.ask_hover(&file, 0, 5);
 
-    // What was held is sent once the server is initialized, and is answered from it.
     let answer = run.answer(early);
     assert_eq!(Run::text(&answer), Some("standin: early".to_owned()));
     let seen = wait_frames(&frames, |frames| {
@@ -1107,9 +1007,6 @@ fn a_server_dropped_is_killed_and_reaped() {
 
     let Run { server, events, .. } = run;
     drop(server);
-    // `Exited` is told once the process is reaped. The stand-in's input stays open (the
-    // reading thread still holds its queue) and the stand-in ends by itself only at the end
-    // of its input, as most servers do, so only a kill ends it: no exit code.
     match events.recv_timeout(DEADLINE) {
         Ok(ServerEvent::Exited { code: None }) => {}
         other => panic!("expected the exit of a process that was killed, got {other:?}"),
@@ -1117,11 +1014,8 @@ fn a_server_dropped_is_killed_and_reaped() {
     assert!(!is_alive(pid));
 }
 
-/// A server that does not end when its input closes, as rust-analyzer does not, and that
-/// ignores `SIGTERM`: `sleep` shows the kernel's part alone, which the stand-in would hide by
-/// ending at the end of its input, and that it ends all the same shows the signal the kernel
-/// sends is `SIGKILL`. The script says it ignores the signal before the Window says anything
-/// of the server, so that the Window is not killed while the signal is still the default.
+/// The server ignores `SIGTERM` and, unlike the stand-in, does not end when its input closes
+/// (nor does rust-analyzer): that it ends when its Window is killed shows the signal is `SIGKILL`.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_server_ends_when_the_window_that_started_it_is_killed() {
@@ -1130,13 +1024,9 @@ fn a_server_ends_when_the_window_that_started_it_is_killed() {
 
     let this_test = "a_server_ends_when_the_window_that_started_it_is_killed";
     if std::env::var_os("YAAR_WINDOW_CHILD").is_some() {
-        // The Window: it starts the server, says who it is and where its scratch is, and
-        // waits to be killed; the end of its input, which a failed test leaves, ends it.
         let scratch = Scratch::new();
         let (root, _) = project(&scratch, "def a\n");
         let mut launch = launch(&scratch, &root, &[]);
-        // The server writes into a named pipe once it ignores the signal, and the Window
-        // reads it, which blocks until the server has: no sleep, no look in between.
         let ignoring = scratch.root.join("ignoring");
         let name = std::ffi::CString::new(ignoring.to_str().expect("a path of text"))
             .expect("a path with no NUL");
@@ -1155,9 +1045,6 @@ fn a_server_ends_when_the_window_that_started_it_is_killed() {
             ),
         ];
         let run = Run::start(launch);
-        // The read blocks until a writer opens the pipe, so it is made on a thread of its
-        // own and waited for with the deadline: a shell that never starts fails the test
-        // with a sentence and does not hang it.
         let (sent, received) = std::sync::mpsc::channel();
         let pipe = ignoring.clone();
         std::thread::spawn(move || {
@@ -1171,6 +1058,8 @@ fn a_server_ends_when_the_window_that_started_it_is_killed() {
             .expect("read the server's word on the pipe");
         assert_eq!(told.trim(), "ignoring");
         println!("SERVER {} {}", run.server.pid(), scratch.root.display());
+        // The child Window waits here to be killed; the end of its input, which a failed test
+        // leaves, ends it.
         let _ = std::io::stdin().read_line(&mut String::new());
         return;
     }
@@ -1186,7 +1075,6 @@ fn a_server_ends_when_the_window_that_started_it_is_killed() {
     let said = BufReader::new(output)
         .lines()
         .map_while(Result::ok)
-        // The test harness has started a line of its own, so the sentence is not first.
         .find_map(|line| line.split_once("SERVER ").map(|(_, said)| said.to_owned()))
         .expect("the Window said which server it started");
     let (pid, scratch) = said.split_once(' ').expect("a process and a folder");
@@ -1203,9 +1091,7 @@ fn a_server_ends_when_the_window_that_started_it_is_killed() {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    // The Window was killed, so its scratch was not removed.
     let _ = std::fs::remove_dir_all(scratch);
 }
 
-/// The time a stop gives a server to end by itself, in tests that expect it to.
 const STOP: Duration = Duration::from_secs(10);

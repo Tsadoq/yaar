@@ -1,12 +1,5 @@
-//! Component tests: the export of an old side, through the Link as a Window speaks it. A
-//! real Keeper runs in this process on a database and a folder of state stores the test
-//! makes, over real repositories; git runs as its user's does, with the environment of this
-//! process, so each test sets that environment as its first statement, and these tests are
-//! run by `cargo nextest`, which gives each test a process of its own.
-//!
-//! The app's cache folder is where `yaar_link::cache_dir()` says in this process, which the
-//! test has pointed into its own scratch folder: the Keeper finds the same folder by the same
-//! rule.
+//! Each test sets the process environment first, so each needs a process of its own (cargo
+//! nextest).
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -23,17 +16,12 @@ use yaar_link::{
     ThreadId, WorkspaceId, handshake, read_message, write_message,
 };
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the cache
-    /// folder: no configuration of the user or of the system, a fixed author, an empty home,
-    /// and a cache folder inside the scratch folder. It has to be the first statement of a
-    /// test.
+    /// Sets the process environment; must be a test's first statement.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -56,17 +44,13 @@ impl Scratch {
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's lists of files go: a folder that goes
-            // with the test.
             std::env::set_var("TMPDIR", root.join("tmp"));
             // The cache folder on Linux; macOS keeps it under the home.
             std::env::set_var("XDG_CACHE_HOME", root.join("cache"));
@@ -88,12 +72,10 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    /// The app's folder of the Keeper of this test.
     fn data(&self) -> PathBuf {
         self.0.join("data")
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -107,7 +89,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -129,8 +110,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name`, empty, on `main`, with an identity of its own:
-    /// git on Linux guesses none.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -151,8 +130,7 @@ fn git_bytes(folder: &Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
         .arg("-C")
         .arg(folder)
-        // What the test reads of the repository must not write it, as a refresh of the
-        // list of files would.
+        // Reading must not write the repository, as a refresh of the file list would.
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(args)
         .stdin(Stdio::null())
@@ -190,15 +168,14 @@ fn make_executable(folder: &Path, name: &str) {
         .expect("make it run");
 }
 
-/// One end of the Link, as a Window holds it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
 }
 
 impl Window {
-    /// Sends a request and gives its reply, passing over the facts that come before it:
-    /// opening a folder and saving a draft are told to every Window.
+    /// Skips the facts that precede the reply: opening a folder and saving a draft are told to
+    /// every Window.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = RequestId(self.next_id);
         self.next_id += 1;
@@ -222,9 +199,6 @@ impl Window {
         workspace
     }
 
-    /// Records a state of the worktree as its files are on disk, by saving the first
-    /// comment of a new thread on line 1 of `a.txt`, and gives the state's id as the
-    /// thread's anchor names it.
     fn record_state(&mut self, workspace: &WorkspaceId, first_line: &str) -> String {
         let reviews = match self.ask(Request::GetReviews {
             workspace: workspace.clone(),
@@ -287,7 +261,6 @@ impl Window {
     }
 }
 
-/// What a folder holds at one path, as an export must reproduce it.
 #[derive(Debug, PartialEq, Eq)]
 enum Entry {
     File { bytes: Vec<u8>, executable: bool },
@@ -312,8 +285,6 @@ fn link(target: &str) -> Entry {
     Entry::Link(PathBuf::from(target))
 }
 
-/// Every file and link below `folder` by its path, read as the file system holds it:
-/// folders are not entries, `.git` would be.
 fn entries(folder: &Path) -> BTreeMap<String, Entry> {
     fn walk(root: &Path, folder: &Path, into: &mut BTreeMap<String, Entry>) {
         for child in std::fs::read_dir(folder).expect("read the folder") {
@@ -355,8 +326,6 @@ fn expected<const N: usize>(wanted: [(&str, Entry); N]) -> BTreeMap<String, Entr
         .collect()
 }
 
-/// What the repository answers to the five questions the row asks, and the bytes of its
-/// list of files: every one is read-only, and none writes the list.
 #[derive(Debug, PartialEq, Eq)]
 struct Snapshot {
     status: String,
@@ -384,16 +353,12 @@ fn snapshot(repo: &Path) -> Snapshot {
     }
 }
 
-/// The repository every test but the filter test uses: a commit C1, a second commit, an
-/// uncommitted change, an untracked file, an ignored file, a stash entry and a second
-/// worktree.
 struct Repo {
     folder: PathBuf,
     c1: String,
     c2: String,
 }
 
-/// The files of C1.
 fn files_of_c1() -> BTreeMap<String, Entry> {
     expected([
         (".gitignore", file("ignored/\n")),
@@ -404,7 +369,6 @@ fn files_of_c1() -> BTreeMap<String, Entry> {
     ])
 }
 
-/// The files of the worktree once the test has changed it: the state recorded then.
 fn files_of_the_state() -> BTreeMap<String, Entry> {
     expected([
         (".gitignore", file("ignored/\n")),
@@ -433,7 +397,6 @@ fn repository_in_every_state(scratch: &Scratch) -> Repo {
     write(&folder, "src/main.rs", "fn main() {}\n");
     let c2 = commit_all(&folder, "two");
 
-    // A stash entry, then the changes the worktree holds when the state is recorded.
     write(&folder, "later.txt", "later, stashed\n");
     git(&folder, &["stash", "push", "--quiet"]);
     write(&folder, "a.txt", "three\n");
@@ -446,7 +409,6 @@ fn repository_in_every_state(scratch: &Scratch) -> Repo {
     Repo { folder, c1, c2 }
 }
 
-/// Where an export goes, in the app's cache folder as the Navigator names it.
 fn old_side(n: u32) -> PathBuf {
     yaar_link::cache_dir().join(format!("navigator/1/old/{n}"))
 }
@@ -457,8 +419,6 @@ fn after_use_of_the_old_side_the_status_the_worktrees_and_the_refs_of_the_reposi
     let scratch = Scratch::new();
     let repo = repository_in_every_state(&scratch);
 
-    // Read before the Keeper starts and before any request is sent. The repository has
-    // each thing the row names, so that the five equal each other for a reason.
     let before = snapshot(&repo.folder);
     assert!(before.status.contains("? untracked.txt"), "{before:?}");
     assert!(before.status.contains("! ignored/"), "{before:?}");
@@ -475,8 +435,6 @@ fn after_use_of_the_old_side_the_status_the_worktrees_and_the_refs_of_the_reposi
     let workspace = window.open(&repo.folder);
     let state = window.record_state(&workspace, "three");
 
-    // Neither folder is there yet, nor is the cache folder: the Keeper makes the folders
-    // above them.
     assert!(!yaar_link::cache_dir().exists());
     assert_eq!(
         window.export(&workspace, &repo.c1, &old_side(1)),
@@ -487,17 +445,13 @@ fn after_use_of_the_old_side_the_status_the_worktrees_and_the_refs_of_the_reposi
         Ok(Reply::Done)
     );
 
-    // Each folder holds that version's files and no `.git`: the second commit's files are
-    // not C1's, and the state's are the worktree's but for what git ignores.
     assert_eq!(entries(&old_side(1)), files_of_c1());
     assert_eq!(entries(&old_side(2)), files_of_the_state());
     assert!(!old_side(1).join(".git").exists());
     assert!(!old_side(2).join(".git").exists());
     assert_ne!(repo.c1, repo.c2);
 
-    // After use of the old side: the five, read again, equal what they were.
     assert_eq!(snapshot(&repo.folder), before);
-    // The worktree's own files are as the test left them.
     assert_eq!(
         std::fs::read_to_string(repo.folder.join("a.txt")).expect("read"),
         "three\n"
@@ -539,7 +493,6 @@ fn an_into_outside_the_cache_folder_is_refused_and_nothing_is_written() {
     let mut window = scratch.window();
     let workspace = window.open(&repo.folder);
 
-    // A folder of the app's cache that is a link to somewhere else leads out of it.
     let elsewhere = scratch.0.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("make the folder");
     std::fs::create_dir_all(yaar_link::cache_dir()).expect("make the cache folder");
@@ -547,8 +500,6 @@ fn an_into_outside_the_cache_folder_is_refused_and_nothing_is_written() {
 
     let cache = yaar_link::cache_dir();
     let refused = [
-        // Outside: a folder beside the cache folder, the cache folder itself, a path that
-        // is not absolute, one that climbs out, and one that goes through the link.
         scratch.0.join("somewhere/old/1"),
         cache.clone(),
         PathBuf::from("old/1"),
@@ -563,7 +514,6 @@ fn an_into_outside_the_cache_folder_is_refused_and_nothing_is_written() {
             "{into:?}: {answer:?}"
         );
     }
-    // Nothing was made by any of them: not the folders above, not a file below.
     assert_eq!(std::fs::read_dir(&elsewhere).expect("read").count(), 0);
     assert!(!scratch.0.join("somewhere").exists());
     assert!(!cache.join("../escaped").exists());
@@ -592,7 +542,6 @@ fn an_into_that_exists_is_refused_and_left_as_it_was() {
         expected([("mine.txt", file("not the Keeper's\n"))])
     );
 
-    // A file or a link where the folder would be is a taken name too.
     let file_there = old_side(2);
     std::fs::write(&file_there, "a file\n").expect("write");
     let answer = window.export(&workspace, &repo.c1, &file_there);
@@ -626,7 +575,6 @@ fn a_version_that_is_no_commit_and_no_state_is_refused_and_nothing_is_made() {
             "{version:?}"
         );
     }
-    // Not even the folders above the one asked for.
     assert!(!yaar_link::cache_dir().exists());
     window.stop(keeper);
 }
@@ -664,7 +612,6 @@ fn a_recorded_state_is_exported_with_the_repository_gone() {
         Ok(Reply::Done)
     );
     assert_eq!(entries(&old_side(1)), files_of_the_state());
-    // A commit the state store never copied cannot be written without the repository.
     assert_eq!(
         window.export(&workspace, &repo.c1, &old_side(2)),
         Err(Refusal::UnknownRevision {
@@ -679,12 +626,12 @@ fn a_recorded_state_is_exported_with_the_repository_gone() {
 fn a_repository_whose_filter_driver_would_fail_exports_the_files_as_git_stores_them() {
     let scratch = Scratch::new();
     let repo = scratch.repository("filtered");
-    // The driver is in the user's own configuration, as a large-file driver is, and in the
-    // repository's too; it fails, as one does when no server answers.
+    // The driver is in the global and the repository config, as a large-file driver is; it fails as
+    // one does when no server answers.
     let global = scratch.0.join("gitconfig");
     let driver = "[filter \"big\"]\n\tclean = cat\n\tsmudge = false\n\trequired = true\n";
     std::fs::write(&global, driver).expect("write the configuration");
-    // SAFETY: as in `Scratch::new`: nothing else runs in this process yet.
+    // SAFETY: no other thread exists yet; nextest runs each test in a process of its own.
     unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &global) };
     git(&repo, &["config", "filter.big.smudge", "false"]);
     git(&repo, &["config", "filter.big.required", "true"]);

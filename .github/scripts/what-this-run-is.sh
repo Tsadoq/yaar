@@ -1,35 +1,7 @@
 #!/bin/sh
-# The body of the step "What this run is" of the job `version`: the one version number, the
-# later version the rehearsal makes, and whether this run publishes. Written by the contract
-# of slice 10 and complete; no builder edits it.
-#
-#   PUBLISH=<true|false> REF_TYPE=<branch|tag> REF_NAME=<name> what-this-run-is.sh
-#
-# Environment:
-#   PUBLISH    THE ONE CONDITION, computed by the workflow: true only for a run the owner
-#              started by hand with the input `publish` on.
-#   REF_TYPE   github.ref_type of the run: "tag" or "branch".
-#   REF_NAME   github.ref_name: the tag's or the branch's short name.
-#   GITHUB_OUTPUT, GITHUB_STEP_SUMMARY   set by the runner; when unset (a run by hand) the
-#              outputs go to standard output only.
-#
-# Outputs (lines `key=value` appended to GITHUB_OUTPUT):
-#   version    packaging/version.sh's number
-#   later      "<version>+rehearsal": the version of the second .deb the rehearsal makes
-#              from the first, to show an upgrade with apt (row PKG-06). It sorts after
-#              <version> for apt and is never published.
-#   publish    "true" or "false"
-#
-# Refusals, each a sentence on standard error and exit 1:
-#   - PUBLISH is true and the run is not on a tag;
-#   - PUBLISH is true and the commit of the tag is not on main: `git merge-base --is-ancestor
-#     HEAD origin/main` fails (the job checks out with fetch-depth 0, so origin/main is
-#     there). A tag on an unmerged branch, whose workflow may have been changed, never
-#     reaches the secrets;
-#   - the run is on a tag (published or rehearsed) and the tag is not v<version>: a tag
-#     that differs from the manifest is refused, so a release always carries the version
-#     its programs print.
-# Exit 0 otherwise.
+# PUBLISH=<true|false> REF_TYPE=<branch|tag> REF_NAME=<name> what-this-run-is.sh
+# Writes version, later (<version>+rehearsal, sorts after it for apt) and publish to GITHUB_OUTPUT.
+# Exit 1: publishing from a non-tag or off main, or a tag other than v<version>.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 VERSION=$("$HERE/../../packaging/version.sh")

@@ -51,4 +51,4 @@ sed -i.bak -E "s|(gpui-pre-apple = \{ path = \"vendor/)gpui-pre-apple-[^\"]+|\1$
 rm -f "$ROOT/Cargo.toml.bak"
 
 echo "vendor/$NAME is the published crate plus the frame-source patch."
-echo "Next: cargo update -p gpui-pre-apple, the tests, and the speed check on the reference Mac."
+echo "Next: cargo update -p gpui-pre-apple, the tests, and the typing check, packaging/checklists/typing.sh, on a Mac."

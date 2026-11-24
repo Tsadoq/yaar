@@ -1,11 +1,4 @@
-//! `yaar-claude-tools`: the server of the app's reply tool, which Claude Code starts from
-//! the app's plugin and speaks MCP with over the program's standard input and output.
-//!
-//! ```text
-//! yaar-claude-tools
-//! ```
-//!
-//! See `yaar_companion_claude::serve`.
+//! Claude Code starts this MCP server (stdio) for the app's reply tool.
 
 use std::process::ExitCode;
 

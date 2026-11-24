@@ -1,5 +1,3 @@
-//! Where the threads of a review sit among the rows of the pane.
-
 use std::path::Path;
 
 use yaar_diff::Side;
@@ -7,7 +5,6 @@ use yaar_link::{ChangedFile, FileStatus, Placed, Review, Side as LinkSide, Threa
 
 use crate::{PaneRow, ShownFile};
 
-/// The Link's name of a side of a diff.
 pub(crate) fn link_side(side: Side) -> LinkSide {
     match side {
         Side::Old => LinkSide::Old,
@@ -15,7 +12,6 @@ pub(crate) fn link_side(side: Side) -> LinkSide {
     }
 }
 
-/// The side of the pane that a thread of the Link is on.
 pub(crate) fn pane_side(side: LinkSide) -> Side {
     match side {
         LinkSide::Old => Side::Old,
@@ -23,8 +19,7 @@ pub(crate) fn pane_side(side: LinkSide) -> Side {
     }
 }
 
-/// The path of a changed file in the version on `side`: where a thread on that side of
-/// the file names it. The old side of a renamed file is the file by its old path.
+/// The old side of a renamed file is the file by its old path.
 pub(crate) fn path_in(file: &ChangedFile, side: Side) -> &Path {
     match (&file.status, side) {
         (FileStatus::Renamed { from }, Side::Old) => from,
@@ -32,16 +27,12 @@ pub(crate) fn path_in(file: &ChangedFile, side: Side) -> &Path {
     }
 }
 
-/// Where a thread sits in the version shown on the new side.
 pub(crate) enum Place<'a> {
-    /// On the lines of its anchor, as it was written.
     Anchor(&'a Thread),
-    /// On the lines the Keeper carried it to.
     Now(&'a Placed),
 }
 
 impl Place<'_> {
-    /// The path, the side and the last line (counted from 1) the thread's row follows.
     pub(crate) fn at(&self) -> (&Path, LinkSide, u32) {
         match self {
             Place::Anchor(thread) => (
@@ -54,14 +45,9 @@ impl Place<'_> {
     }
 }
 
-/// Where `thread` sits when the new side shown is `shown`, a version by its full id, or
-/// none for the files on disk; none when it sits in no line of that version.
-///
-/// A thread with no `now` sits where its anchor says, in any version, as before the
-/// Keeper carried threads. One with a `now` sits there when the new side is `now.tree` or
-/// the files on disk, which the Keeper carries every thread toward; on its anchor when
-/// the new side is the anchor's own version; and nowhere in any other version, so that it
-/// is never drawn on lines of a version it was not carried to.
+/// None when the thread sits in no line of that version. Without a `now` it sits on its anchor;
+/// with one, on `now` when the new side is `now.tree` or the files on disk, on its anchor when
+/// the new side is the anchor's own version, nowhere otherwise.
 pub(crate) fn place_of<'a>(thread: &'a Thread, shown: Option<&str>) -> Option<Place<'a>> {
     let Some(now) = &thread.now else {
         return Some(Place::Anchor(thread));
@@ -76,10 +62,6 @@ pub(crate) fn place_of<'a>(thread: &'a Thread, shown: Option<&str>) -> Option<Pl
     }
 }
 
-/// The rows of one file's diff with the threads that sit on them: each thread follows the
-/// row that shows its last line, as one row for the thread and one for each of its
-/// comments. Gives the rows and the threads it placed. `shown` is the version on the new
-/// side of the diff, none for the files on disk.
 pub(crate) fn with_threads(
     file: &ChangedFile,
     diff: Vec<PaneRow>,
@@ -119,7 +101,6 @@ pub(crate) fn with_threads(
     (rows, placed)
 }
 
-/// The row of a thread and the row of each of its comments.
 pub(crate) fn thread_rows(thread: &Thread) -> impl Iterator<Item = PaneRow> + '_ {
     std::iter::once(PaneRow::Thread {
         thread: thread.id.clone(),
@@ -130,8 +111,6 @@ pub(crate) fn thread_rows(thread: &Thread) -> impl Iterator<Item = PaneRow> + '_
     }))
 }
 
-/// The heading and the rows of the threads that no row of a file shows, after the last
-/// file: a thread is never hidden. Nothing when every thread is placed.
 pub(crate) fn elsewhere(files: &[ShownFile], review: Option<&Review>) -> Vec<PaneRow> {
     let Some(review) = review else {
         return Vec::new();
@@ -150,8 +129,7 @@ pub(crate) fn elsewhere(files: &[ShownFile], review: Option<&Review>) -> Vec<Pan
 }
 
 impl crate::ReviewPane {
-    /// The version on the new side of the files shown, by its full id; none for the files
-    /// on disk, as in the comparison, the uncommitted changes and Flow.
+    /// None for the files on disk, as in the comparison, the uncommitted changes and Flow.
     pub(crate) fn new_side_shown(&self) -> Option<String> {
         match &self.listed {
             Some(crate::tree::Source::Versions { new, .. }) => new.clone(),
@@ -172,8 +150,6 @@ mod tests {
         Lines { first: last, last }
     }
 
-    /// A thread written on line 3 in the version `1`, carried to line 7 in the version `2`
-    /// when `carried`.
     fn thread(carried: bool) -> Thread {
         Thread {
             id: ThreadId::new("7".repeat(32)),

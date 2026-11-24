@@ -1,8 +1,5 @@
-//! Component test: the tree of Changes in the Review pane on GPUI's test platform. Keys,
-//! clicks and the wheel go in; the pane is read back through the model it shows. The test
-//! plays the Keeper on the other end of a socket pair: it sets the history and the
-//! uncommitted changes the Keeper would answer with, and answers the comparisons and the
-//! files the pane asks for.
+//! Component tests: the tree of Changes in the Review pane on GPUI's test platform.
+//! The test plays the Keeper on a socket pair.
 
 mod common;
 
@@ -21,32 +18,26 @@ use common::{
     wait_for_files, wait_until, workspace,
 };
 
-/// The id of a commit or a state that is this digit forty times.
 fn version(digit: char) -> String {
     digit.to_string().repeat(40)
 }
 
-/// Where the history of the tests starts: the commit the changes are counted from.
 fn start() -> String {
     COMMIT.to_owned()
 }
 
-/// The first commit of the history of the tests.
 fn c1() -> String {
     version('1')
 }
 
-/// The second commit of the history of the tests, after the turn.
 fn c2() -> String {
     version('2')
 }
 
-/// The state recorded at the end of the turn of the history of the tests.
 fn s1() -> String {
     version('5')
 }
 
-/// The session that made the turn, and the one change of the uncommitted list.
 fn session() -> SessionId {
     SessionId::new("5".repeat(32))
 }
@@ -59,7 +50,6 @@ fn turn(digit: char, state: Option<String>) -> HistoryEntry {
     }
 }
 
-/// Commits C1 and C2 and, between them, the turn T1.
 fn history() -> History {
     History {
         workspace: id('1'),
@@ -72,7 +62,6 @@ fn history() -> History {
     }
 }
 
-/// What the Keeper lists as uncommitted: a change of the session, and one no agent made.
 fn uncommitted() -> Vec<CreditedFile> {
     vec![
         CreditedFile {
@@ -86,10 +75,8 @@ fn uncommitted() -> Vec<CreditedFile> {
     ]
 }
 
-/// A window with the pane in it that shows the changes of workspace `1` against its
-/// base, with one file, and then learns `history` and `uncommitted`. The history is set
-/// after the changes are answered, since a pane whose changes are not yet here shows the
-/// last recorded turn instead of them.
+/// The history is set after the changes are answered: a pane without its changes yet shows the
+/// last recorded turn instead.
 fn open_with_history(
     history: History,
     uncommitted: Vec<CreditedFile>,
@@ -98,8 +85,6 @@ fn open_with_history(
     open_with_reviews(history, uncommitted, None, review_id(), cx)
 }
 
-/// As [`open_with_history`], for a Keeper that holds these reviews instead of the one
-/// review of no agent, the first of which, `shown`, the pane shows.
 fn open_with_reviews(
     history: History,
     uncommitted: Vec<CreditedFile>,
@@ -147,7 +132,6 @@ fn open_with_reviews(
     (stage, cx)
 }
 
-/// Where the entry `i` of the tree is drawn, or the uncommitted one with `None`.
 fn entry_bounds(entry: Option<usize>, cx: &mut VisualTestContext) -> Option<Bounds<Pixels>> {
     match entry {
         Some(i) => drawn(&format!("review-history-{i}"), cx),
@@ -166,7 +150,6 @@ fn shown(pane: &Entity<ReviewPane>, cx: &mut VisualTestContext) -> ChangeShown {
     pane.read_with(cx, |pane, _| pane.change_shown())
 }
 
-/// Answers the comparison the pane asks for with these files.
 fn compared(
     stage: &mut Stage,
     from: String,
@@ -185,7 +168,6 @@ fn compared(
     stage.keeper.reply(asked, Ok(Reply::Compared(files)));
 }
 
-/// Answers the read of the two versions of a file with these texts.
 fn read_versions(
     stage: &mut Stage,
     request: Request,
@@ -207,7 +189,6 @@ fn versions_of(old: Option<String>, old_path: &str, new: Option<String>, path: &
     }
 }
 
-/// The paths of the files the pane lists, in order.
 fn paths(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<String> {
     rows(pane, cx)
         .into_iter()
@@ -218,7 +199,6 @@ fn paths(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<String> {
         .collect()
 }
 
-/// Waits until the pane lists these files with their lines read.
 fn wait_for_paths(stage: &Stage, wanted: &[&str], cx: &mut VisualTestContext) {
     wait_until(cx, "the files of the change shown", |cx| {
         let held = paths(&stage.pane, cx);
@@ -235,7 +215,6 @@ fn wait_for_paths(stage: &Stage, wanted: &[&str], cx: &mut VisualTestContext) {
     });
 }
 
-/// Puts the focus on the rows of the pane, where the keys of the pane work.
 fn focus_the_rows(stage: &Stage, cx: &mut VisualTestContext) {
     cx.update(|window, cx| stage.focus.focus(window, cx));
 }
@@ -246,8 +225,6 @@ fn changes_shows_the_tree_of_commits_and_turns_the_uncommitted_changes_with_thos
 ) {
     let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
 
-    // The tree of commits and turns of the worktree: its history, drawn in its order,
-    // the uncommitted changes last.
     let held = stage.pane.read_with(&cx, |pane, _| pane.history().cloned());
     assert_eq!(held, Some(history()));
     let places: Vec<Bounds<Pixels>> = (0..3)
@@ -262,7 +239,6 @@ fn changes_shows_the_tree_of_commits_and_turns_the_uncommitted_changes_with_thos
     assert!(places[2].bottom() <= last.top(), "{places:?} {last:?}");
     assert_eq!(entry_bounds(Some(3), &mut cx), None);
 
-    // The uncommitted changes the pane lists are those of the review it shows.
     assert_eq!(stage.keeper.uncommitted_review(), Some(review_id()));
     assert_eq!(no_agent_review().id, review_id());
     let listed = stage
@@ -270,11 +246,8 @@ fn changes_shows_the_tree_of_commits_and_turns_the_uncommitted_changes_with_thos
         .read_with(&cx, |pane, _| pane.uncommitted().map(<[_]>::to_vec));
     assert_eq!(listed, Some(uncommitted()));
 
-    // Until the reviewer selects, the comparison is shown.
     assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
 
-    // The uncommitted entry shows the files of that list, from the commit checked out to
-    // the files on disk, and marks the change no agent made.
     click_entry(None, Modifiers::none(), &mut cx);
     read_versions(
         &mut stage,
@@ -318,8 +291,6 @@ fn changes_shows_the_tree_of_commits_and_turns_the_uncommitted_changes_with_thos
         "the change of the session is marked as no agent's"
     );
 
-    // The files of the selected change: a turn is the change from the version before it
-    // to its state.
     // The turn changed `outside.txt` too, which is also a change no agent made in the
     // uncommitted list: the mark is for the uncommitted entry only.
     click_entry(Some(1), Modifiers::none(), &mut cx);
@@ -427,7 +398,6 @@ fn tab_gives_the_tree_the_focus_with_the_cursor_on_the_first_entry_and_enter_sho
     assert_eq!(cursor(&stage, &mut cx), Some(0));
     cx.simulate_keystrokes("j");
     assert_eq!(cursor(&stage, &mut cx), Some(1));
-    // The keys of the tree do not move the reviewer in the rows.
     let position = stage
         .pane
         .read_with(&cx, |pane, _| pane.position().cloned());
@@ -461,7 +431,6 @@ fn marked_entries_are_shown_as_a_range_from_the_first_to_the_last_and_a_shift_cl
     let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
     focus_the_rows(&stage, &mut cx);
     cx.simulate_keystrokes("tab j");
-    // `k` back to the first entry, mark it, and the turn after it.
     cx.simulate_keystrokes("k space j space");
     let marked = |stage: &Stage, cx: &mut VisualTestContext| {
         stage.pane.read_with(cx, |pane, _| pane.marked_changes())
@@ -489,7 +458,6 @@ fn marked_entries_are_shown_as_a_range_from_the_first_to_the_last_and_a_shift_cl
     );
     assert_eq!(marked(&stage, &mut cx), Vec::<usize>::new());
 
-    // A click on the first commit, then a click with Shift on the second.
     click_entry(Some(0), Modifiers::none(), &mut cx);
     compared(&mut stage, start(), Some(c1()), vec![], &mut cx);
     wait_for_paths(&stage, &[], &mut cx);
@@ -518,7 +486,6 @@ fn marked_entries_are_shown_as_a_range_from_the_first_to_the_last_and_a_shift_cl
         ChangeShown::Entries { first: 0, last: 2 }
     );
 
-    // A click with Shift above the one shown reaches up to it, the other way round.
     click_entry(Some(2), Modifiers::none(), &mut cx);
     compared(&mut stage, s1(), Some(c2()), vec![], &mut cx);
     wait_for_paths(&stage, &[], &mut cx);
@@ -531,8 +498,6 @@ fn marked_entries_are_shown_as_a_range_from_the_first_to_the_last_and_a_shift_cl
     );
 }
 
-/// Selects the turn of the history of the tests with a click, and answers what the pane
-/// asks for it: one file, `turn.txt`, from `before` to `after`.
 fn select_the_turn(stage: &mut Stage, before: &str, after: &str, cx: &mut VisualTestContext) {
     click_entry(Some(1), Modifiers::none(), cx);
     compared(
@@ -567,8 +532,6 @@ fn a_turn_with_no_state_is_drawn_and_cannot_be_selected_or_marked(cx: &mut TestA
         entry_bounds(Some(1), &mut cx).is_some(),
         "the turn is drawn"
     );
-    // The click puts the cursor on the turn and the focus in the tree, where the keys that
-    // mark and show the entry under the cursor have nothing to mark or show.
     click_entry(Some(1), Modifiers::none(), &mut cx);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.history_cursor()),
@@ -580,8 +543,7 @@ fn a_turn_with_no_state_is_drawn_and_cannot_be_selected_or_marked(cx: &mut TestA
         .read_with(&cx, |pane, _| (pane.marked_changes(), pane.change_shown()));
     assert_eq!(held, (Vec::new(), ChangeShown::Comparison));
 
-    // A change that is from the version above the turn, and not from the turn: C2 is
-    // counted from C1, since the turn has no state to count from. The request that
+    // C2 is counted from C1, since the turn has no state to count from. The request that
     // follows is a barrier for the keys and the click above, which asked nothing.
     click_entry(Some(2), Modifiers::none(), &mut cx);
     compared(&mut stage, c1(), Some(c2()), vec![], &mut cx);
@@ -600,7 +562,6 @@ fn the_keys_of_the_tree_do_not_reach_the_rows_and_tab_gives_the_rows_the_focus_b
     focus_the_rows(&stage, &mut cx);
     cx.simulate_keystrokes("tab");
     let layout = stage.pane.read_with(&cx, |pane, _| pane.layout());
-    // `s` switches the layout and `c` opens a comment box, where the rows have the focus.
     cx.simulate_keystrokes("s c y m r");
     let held = stage.pane.read_with(&cx, |pane, _| {
         (pane.layout(), pane.comment_box(), pane.notice())
@@ -614,7 +575,6 @@ fn the_keys_of_the_tree_do_not_reach_the_rows_and_tab_gives_the_rows_the_focus_b
         "the keys of the rows work again"
     );
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
-    // And a key of the tree does nothing where the rows have the focus.
     cx.simulate_keystrokes("space");
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.marked_changes()),
@@ -664,7 +624,6 @@ fn the_cursor_stays_in_the_tree_and_the_wheel_scrolls_a_long_history_in_its_own_
         "the wheel over the tree moved the tree and not the files"
     );
 
-    // The keys take the view along with the cursor.
     focus_the_rows(&stage, &mut cx);
     cx.simulate_keystrokes("tab");
     for _ in 0..13 {
@@ -694,7 +653,6 @@ fn a_selection_stays_when_the_comparison_is_read_again_and_the_uncommitted_chang
     wait_until(&mut cx, "the uncommitted changes asked for again", |_| {
         stage.keeper.uncommitted_asked() > asked
     });
-    // The comparison is read again, and the reviewer's selection stays where it is.
     let changes = since_main(
         vec![commit('b', "Edit the story")],
         vec![file("story.txt", FileStatus::Modified)],
@@ -714,8 +672,6 @@ fn a_selection_stays_when_the_comparison_is_read_again_and_the_uncommitted_chang
         ChangeShown::Entries { first: 1, last: 1 }
     );
     assert_eq!(paths(&stage.pane, &mut cx), ["turn.txt"]);
-    // Nothing was asked for the files of the comparison: another workspace is the next
-    // thing the Window asks about.
     stage
         .keeper
         .tell(Fact::Workspaces(vec![repository(vec![workspace(
@@ -740,8 +696,6 @@ fn the_history_is_asked_for_again_at_workspaces_and_at_a_turn_end_and_the_select
     let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
     select_the_turn(&mut stage, "before\n", "after\n", &mut cx);
 
-    // A commit joins the history: the turn is still entry 1 and what it leads to has not
-    // changed, so nothing is asked again for its files.
     let grown = History {
         entries: {
             let mut entries = history().entries;
@@ -769,7 +723,6 @@ fn the_history_is_asked_for_again_at_workspaces_and_at_a_turn_end_and_the_select
         ChangeShown::Entries { first: 1, last: 1 }
     );
 
-    // A turn that ended asks for the history and for the uncommitted changes.
     let (history_asked, uncommitted_asked) = (
         stage.keeper.history_asked(),
         stage.keeper.uncommitted_asked(),
@@ -778,8 +731,6 @@ fn the_history_is_asked_for_again_at_workspaces_and_at_a_turn_end_and_the_select
         workspace: id('1'),
         session: session(),
         turn: TurnId::new("b".repeat(32)),
-        // No state was recorded, so the turn selects nothing: what a turn end with a state
-        // selects is the test of the row about it.
         state: None,
         since: None,
     });
@@ -792,8 +743,6 @@ fn the_history_is_asked_for_again_at_workspaces_and_at_a_turn_end_and_the_select
         },
     );
 
-    // The turn leaves the history: the selection of it is gone, and the comparison is
-    // back in its place.
     let without = History {
         entries: vec![HistoryEntry::Commit(commit('1', "First"))],
         ..history()
@@ -857,7 +806,8 @@ fn a_change_with_nothing_before_it_says_so_and_asks_for_no_comparison(cx: &mut T
         ChangeShown::Entries { first: 0, last: 0 }
     );
     assert!(stage.pane.read_with(&cx, |pane, _| pane.notice()).is_some());
-    // Nothing was asked: what the Window asks next is the changes of another workspace.
+    // Barrier: the next request is the changes of another workspace, so nothing was asked for
+    // the files of the comparison.
     stage
         .keeper
         .tell(Fact::Workspaces(vec![repository(vec![workspace(
@@ -898,7 +848,7 @@ fn the_answer_to_a_selection_that_another_one_has_replaced_is_not_shown(cx: &mut
             to: Some(c2())
         }
     );
-    // The Keeper answers the second first, then the one that was replaced.
+    // The Keeper answers the second request first, then the one that was replaced.
     stage.keeper.reply(
         second.0,
         Ok(Reply::Compared(vec![file("second.txt", FileStatus::Added)])),
@@ -973,14 +923,10 @@ fn the_tree_is_not_drawn_where_there_is_nothing_in_it_to_select(cx: &mut TestApp
     assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
 }
 
-/// A window that has the history of the tests from its first moment and no answer yet for
-/// its changes. The request for them is the first the Keeper hears; its id is given back,
-/// to be answered when the test wants the changes to come.
 fn open_before_the_changes(cx: &mut TestAppContext) -> (Stage, VisualTestContext, RequestId) {
     open_before_the_changes_of(history(), cx)
 }
 
-/// As `open_before_the_changes`, for a history of the test's own.
 fn open_before_the_changes_of(
     history: History,
     cx: &mut TestAppContext,
@@ -995,7 +941,6 @@ fn open_before_the_changes_of(
     (stage, cx, changes)
 }
 
-/// Answers the question for the changes of the workspace, then for their one file.
 fn answer_the_changes(stage: &mut Stage, asked: RequestId) -> yaar_link::Changes {
     let changes = since_main(
         vec![commit('b', "Edit the story")],
@@ -1012,8 +957,6 @@ fn until_the_changes_come_the_last_recorded_turn_is_shown_and_then_the_compariso
     cx: &mut TestAppContext,
 ) {
     let (mut stage, mut cx, changes_asked) = open_before_the_changes(cx);
-    // Nothing of git has answered, and the last turn of the history is on screen, read
-    // from the states the Keeper keeps.
     compared(
         &mut stage,
         c1(),
@@ -1038,7 +981,6 @@ fn until_the_changes_come_the_last_recorded_turn_is_shown_and_then_the_compariso
         Some(PaneRow::File { .. })
     ));
 
-    // The comparison answers, and takes the turn's place.
     let changes = answer_the_changes(&mut stage, changes_asked);
     read_versions(
         &mut stage,
@@ -1059,8 +1001,6 @@ fn until_the_changes_come_the_last_recorded_turn_is_shown_and_then_the_compariso
 fn the_picture_before_the_changes_come_is_the_newest_turn_that_has_a_state(
     cx: &mut TestAppContext,
 ) {
-    // Two turns with a state, and a turn after them whose state was not recorded: the
-    // picture is the change of the second turn, from the commit before it.
     let (mut stage, mut cx, _changes_asked) = open_before_the_changes_of(
         History {
             workspace: id('1'),
@@ -1135,8 +1075,8 @@ fn what_the_reviewer_selects_before_the_changes_come_is_not_taken_by_them(cx: &m
         ChangeShown::Entries { first: 2, last: 2 }
     );
     assert_eq!(paths(&stage.pane, &mut cx), ["second.txt"]);
-    // No file of the comparison was asked for: another workspace's changes are the next
-    // request the Window makes.
+    // Barrier: the next request is the changes of another workspace, so nothing was asked for
+    // the files of the comparison.
     stage
         .keeper
         .tell(Fact::Workspaces(vec![repository(vec![workspace(
@@ -1161,7 +1101,6 @@ fn the_rows_take_the_focus_back_when_the_tree_it_was_in_is_gone(cx: &mut TestApp
     compared(&mut stage, start(), Some(c1()), Vec::new(), &mut cx);
     cx.update(|window, _| assert!(!stage.focus.is_focused(window), "the tree has the focus"));
 
-    // Every entry leaves the history, and nothing is uncommitted: there is no tree.
     let empty = History {
         entries: Vec::new(),
         ..history()
@@ -1184,7 +1123,6 @@ fn the_rows_take_the_focus_back_when_the_tree_it_was_in_is_gone(cx: &mut TestApp
     cx.update(|window, _| assert!(stage.focus.is_focused(window), "the rows have the focus"));
 }
 
-/// The state recorded at the end of the turns that end in the tests below.
 fn s2() -> String {
     version('6')
 }
@@ -1193,13 +1131,11 @@ fn s3() -> String {
     version('7')
 }
 
-/// The review of the session of the history, which the reviewer last marked reviewed at
-/// the state of the turn T1.
+/// The review of the session of the history, last marked reviewed at the state of turn T1.
 fn review_of_the_session() -> ReviewId {
     ReviewId::new("7".repeat(32))
 }
 
-/// A window whose Keeper holds that review of the session alone, shown by the pane.
 fn open_with_the_review_of_the_session(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
     let review = review_with(review_of_the_session(), Some(session()), Some(s1()));
     open_with_reviews(
@@ -1211,7 +1147,6 @@ fn open_with_the_review_of_the_session(cx: &mut TestAppContext) -> (Stage, Visua
     )
 }
 
-/// What the Keeper tells when a turn of the session ends in workspace `1`.
 fn turn_ended(state: Option<String>, since: Option<String>) -> Fact {
     Fact::TurnEnded {
         workspace: id('1'),
@@ -1222,7 +1157,6 @@ fn turn_ended(state: Option<String>, since: Option<String>) -> Fact {
     }
 }
 
-/// Keeps the app running until the element with this selector is drawn.
 fn wait_drawn(selector: &str, cx: &mut VisualTestContext) {
     let deadline = std::time::Instant::now() + common::DEADLINE;
     while drawn(selector, cx).is_none() {
@@ -1235,8 +1169,6 @@ fn wait_drawn(selector: &str, cx: &mut VisualTestContext) {
     }
 }
 
-/// Answers the comparison a turn's end asks for, which the review of the turn's session
-/// makes: the files of the change, each credited to that session.
 fn compared_for_the_session(
     stage: &mut Stage,
     from: String,
@@ -1265,8 +1197,6 @@ fn compared_for_the_session(
         .reply(asked, Ok(Reply::ComparedForReview(credited)));
 }
 
-/// Answers the comparison of a turn's change that the reviewer selected in the tree, and
-/// the read of its one file.
 fn show_the_turn(
     stage: &mut Stage,
     from: String,
@@ -1284,8 +1214,6 @@ fn show_the_turn(
     read_the_turn(stage, from, to, path, cx);
 }
 
-/// Answers the comparison a turn's end, or the offer it made, asks for, and the read of its
-/// one file.
 fn show_the_end_of_the_turn(
     stage: &mut Stage,
     from: String,
@@ -1303,7 +1231,6 @@ fn show_the_end_of_the_turn(
     read_the_turn(stage, from, to, path, cx);
 }
 
-/// Answers the read of the one file of a turn's change.
 fn read_the_turn(
     stage: &mut Stage,
     from: String,
@@ -1321,8 +1248,7 @@ fn read_the_turn(
     wait_for_paths(stage, &[path], cx);
 }
 
-/// Proves that nothing else was asked since the last request the test read: a click on
-/// the first commit is the next request the Window sends.
+/// Proves that nothing else was asked: a click on the first commit is the next request.
 fn nothing_else_was_asked(stage: &mut Stage, cx: &mut VisualTestContext) {
     click_entry(Some(0), Modifiers::none(), cx);
     compared(stage, start(), Some(c1()), Vec::new(), cx);
@@ -1338,7 +1264,6 @@ fn when_a_turn_ends_changes_selects_what_changed_since_the_last_review(cx: &mut 
     let (mut stage, mut cx) = open_with_the_review_of_the_session(cx);
     assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
 
-    // The review was marked reviewed at S1; the turn ended at S2.
     stage.keeper.tell(turn_ended(Some(s2()), Some(s1())));
     wait_until(&mut cx, "the change since the last review", |cx| {
         stage.pane.read_with(cx, |pane, _| {
@@ -1370,9 +1295,8 @@ fn when_a_turn_ends_changes_selects_what_changed_since_the_last_review(cx: &mut 
     });
     show_the_end_of_the_turn(&mut stage, start(), s3(), "later.txt", &mut cx);
 
-    // A turn whose state was not recorded changes no selection: the Keeper's answers for
-    // the history and the uncommitted changes, which that turn end makes the Window ask
-    // for, are the barrier, and the next request is a click's.
+    // A turn whose state was not recorded changes no selection. Barrier: the history and the
+    // uncommitted changes that turn end makes the Window ask for; the next request is a click's.
     let asked = (
         stage.keeper.history_asked(),
         stage.keeper.uncommitted_asked(),
@@ -1403,7 +1327,7 @@ fn a_turn_that_ends_in_a_workspace_not_on_screen_selects_nothing(cx: &mut TestAp
         state: Some(s2()),
         since: Some(s1()),
     });
-    // The barrier: a turn end of the workspace on screen, which asks for its history.
+    // Barrier: a turn end of the workspace on screen, which asks for its history.
     let asked = stage.keeper.history_asked();
     stage.keeper.tell(turn_ended(None, None));
     wait_until(&mut cx, "the history asked for again", |_| {
@@ -1429,7 +1353,6 @@ fn set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_wha
     cx.simulate_keystrokes("shift-t");
     assert!(keeps(&stage, &mut cx));
 
-    // T1 is selected.
     click_entry(Some(1), Modifiers::none(), &mut cx);
     show_the_turn(&mut stage, c1(), s1(), "turn.txt", &mut cx);
     assert_eq!(
@@ -1437,8 +1360,6 @@ fn set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_wha
         ChangeShown::Entries { first: 1, last: 1 }
     );
 
-    // A turn ends: nothing changes but the offer, which is drawn before anything else is
-    // done.
     stage.keeper.tell(turn_ended(Some(s2()), Some(s1())));
     wait_drawn("review-offer", &mut cx);
     let since = ChangeShown::Since {
@@ -1455,8 +1376,6 @@ fn set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_wha
     );
     assert_eq!(paths(&stage.pane, &mut cx), ["turn.txt"]);
 
-    // The next request of the Window is that of the click that follows: the offer asked
-    // for nothing.
     click_entry(Some(0), Modifiers::none(), &mut cx);
     compared(&mut stage, start(), Some(c1()), Vec::new(), &mut cx);
     wait_until(&mut cx, "the first commit shown", |cx| {
@@ -1464,14 +1383,12 @@ fn set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_wha
             pane.change_shown() == ChangeShown::Entries { first: 0, last: 0 }
         })
     });
-    // Selecting takes the offer away.
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
         None
     );
     assert!(drawn("review-offer", &mut cx).is_none());
 
-    // The offer made again by a second turn end is taken by its key.
     stage.keeper.tell(turn_ended(Some(s3()), Some(s2())));
     wait_drawn("review-offer", &mut cx);
     focus_the_rows(&stage, &mut cx);
@@ -1489,7 +1406,6 @@ fn set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_wha
         None
     );
 
-    // And by a click on its control.
     stage.keeper.tell(turn_ended(Some(s2()), Some(s1())));
     wait_drawn("review-offer-take", &mut cx);
     let at = drawn("review-offer-take", &mut cx)
@@ -1500,7 +1416,6 @@ fn set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_wha
     assert_eq!(shown(&stage.pane, &mut cx), since);
     assert!(drawn("review-offer", &mut cx).is_none());
 
-    // The key sets the pane back to selecting.
     focus_the_rows(&stage, &mut cx);
     cx.simulate_keystrokes("shift-t");
     assert!(!keeps(&stage, &mut cx));
@@ -1531,15 +1446,12 @@ fn the_marks_of_the_reviewer_stay_when_the_history_is_read_again_under_a_selecti
     let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
     click_entry(Some(1), Modifiers::none(), &mut cx);
     show_the_turn(&mut stage, c1(), s1(), "turn.txt", &mut cx);
-    // The cursor is on the turn: up to the first commit, and a mark on it, not shown yet.
     cx.simulate_keystrokes("k space");
     let marked = |stage: &Stage, cx: &mut VisualTestContext| {
         stage.pane.read_with(cx, |pane, _| pane.marked_changes())
     };
     assert_eq!(marked(&stage, &mut cx), [0]);
 
-    // A commit joins the history, which the pane reads again: the entries it shows are as
-    // they were, and so are the marks.
     let mut entries = history().entries;
     entries.push(HistoryEntry::Commit(commit('3', "Third")));
     let grown = History {
@@ -1564,7 +1476,6 @@ fn the_marks_of_the_reviewer_stay_when_the_history_is_read_again_under_a_selecti
     );
 }
 
-/// Whether the pane keeps the selection at a turn end, as it says.
 fn keeps(stage: &Stage, cx: &mut VisualTestContext) -> bool {
     stage.pane.read_with(cx, |pane, _| pane.keeps_selection())
 }
@@ -1580,7 +1491,6 @@ fn what_a_turn_end_selects_follows_the_setting_the_keeper_tells_with_no_key_pres
     let (mut stage, mut cx) = open_with_the_review_of_the_session(cx);
     assert!(!keeps(&stage, &mut cx), "none is set: the turn end selects");
 
-    // Another Window, or the settings screen, set it: the pane keeps the selection.
     stage
         .keeper
         .tell(turn_end_setting(TurnEndSelects::KeepSelection));
@@ -1598,10 +1508,8 @@ fn what_a_turn_end_selects_follows_the_setting_the_keeper_tells_with_no_key_pres
         })
     );
     assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
-    // Nothing was selected, so nothing was asked for: the next request is a click's.
     nothing_else_was_asked(&mut stage, &mut cx);
 
-    // Set back, the next turn end selects what changed.
     stage
         .keeper
         .tell(turn_end_setting(TurnEndSelects::WhatChanged));
@@ -1661,14 +1569,12 @@ fn the_key_that_keeps_the_selection_sets_the_setting_and_flips_what_the_setting_
     };
 
     cx.simulate_keystrokes("shift-t");
-    // At once in the models, and the Keeper keeps it.
     assert_eq!(turn_end(&stage, &mut cx), TurnEndSelects::KeepSelection);
     assert!(keeps(&stage, &mut cx));
     wait_until(&mut cx, "the setting to reach the Keeper", |_| {
         stage.keeper.settings_set() == [Setting::TurnEnd(TurnEndSelects::KeepSelection)]
     });
 
-    // A change told from outside is what the key flips, not what the pane did last.
     stage
         .keeper
         .tell(turn_end_setting(TurnEndSelects::WhatChanged));
@@ -1690,8 +1596,6 @@ fn the_key_that_keeps_the_selection_sets_the_setting_and_flips_what_the_setting_
     });
 }
 
-/// The history of the tests with the turn T1 expired, between the two commits, and a turn
-/// after the second commit whose state is still there.
 fn history_with_an_expired_turn() -> History {
     History {
         workspace: id('1'),
@@ -1714,7 +1618,6 @@ fn a_turn_whose_recording_expired_is_drawn_with_its_words_and_cannot_be_selected
 ) {
     let (mut stage, mut cx) = open_with_history(history_with_an_expired_turn(), uncommitted(), cx);
     assert_eq!(EXPIRED_TURN, "a turn (its recording has expired)");
-    // The words of a row are in the selector of its text.
     let says = |index: &str, words: &str, cx: &mut VisualTestContext| {
         drawn(&format!("review-history-{index}:{words}"), cx).is_some()
     };
@@ -1724,8 +1627,6 @@ fn a_turn_whose_recording_expired_is_drawn_with_its_words_and_cannot_be_selected
     assert!(!says("1", "An agent, a turn", &mut cx));
     assert!(entry_bounds(Some(1), &mut cx).is_some(), "the row is drawn");
 
-    // A click on it selects nothing, and neither does Enter on the cursor that the click
-    // left on it.
     click_entry(Some(1), Modifiers::none(), &mut cx);
     assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
     focus_the_rows(&stage, &mut cx);
@@ -1736,7 +1637,6 @@ fn a_turn_whose_recording_expired_is_drawn_with_its_words_and_cannot_be_selected
     );
     cx.simulate_keystrokes("enter");
     assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
-    // It cannot be marked for a range either: Enter with nothing marked shows nothing.
     cx.simulate_keystrokes("space");
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.marked_changes()),
@@ -1744,14 +1644,11 @@ fn a_turn_whose_recording_expired_is_drawn_with_its_words_and_cannot_be_selected
     );
     cx.simulate_keystrokes("enter");
     assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
-    // Nothing was asked for either: the next request is the click on the first commit's.
+    // The next request is the click on the first commit's.
     nothing_else_was_asked(&mut stage, &mut cx);
 
-    // A turn below it is selected as before, from the commit above it.
     click_entry(Some(3), Modifiers::none(), &mut cx);
     show_the_turn(&mut stage, c2(), s2(), "later.txt", &mut cx);
-    // The commit just below it counts from the nearest version above it, which is the commit
-    // before the expired turn: no recording of the turn is looked for.
     click_entry(Some(2), Modifiers::none(), &mut cx);
     compared(&mut stage, c1(), Some(c2()), Vec::new(), &mut cx);
     wait_until(&mut cx, "the second commit shown", |cx| {
@@ -1779,10 +1676,8 @@ fn the_history_is_asked_again_when_the_states_of_the_workspace_on_screen_were_de
         ..history()
     };
     stage.keeper.set_history(expired.clone());
-    // Another workspace's states went: this pane does not ask. Nothing shows a question
-    // that is not asked, so a fact of another kind that makes a question follows it: the
-    // Keeper answers the questions of one Window in order, so when that question is heard
-    // any question the first fact made was heard before it.
+    // Barrier: the Keeper answers one Window's questions in order, so hearing this question shows
+    // that any question the first fact made was heard before it.
     let uncommitted = stage.keeper.uncommitted_asked();
     stage
         .keeper
@@ -1798,8 +1693,6 @@ fn the_history_is_asked_again_when_the_states_of_the_workspace_on_screen_were_de
         asked,
         "the states of another workspace went: no history was asked for"
     );
-    // The states of the workspace on screen went: the history is asked for again, and the
-    // turn that expired shows.
     stage
         .keeper
         .tell(Fact::StatesDeleted { workspace: id('1') });

@@ -1,18 +1,6 @@
-//! pi's extension, loaded by a stand-in for pi's extension interface under Node: the
-//! extension the Adapter installs, the built reporting program, and a Keeper's end of the
-//! socket that the test plays. This is the one test of the app that needs Node (22.18 or
-//! later, whose type stripping runs the TypeScript extension as it is); on a machine without
-//! it every test here fails and says so.
-//!
-//! The stand-in is `companions/pi/test/harness.ts` (its header holds its protocol) and the
-//! module of pi's that the extension imports is `companions/pi/test/pi-ai.mjs`. Nothing of
-//! pi is installed and nothing under a real home is read: the harness runs with a home and
-//! a temporary folder of the test's own.
-//!
-//! Every handler of the extension awaits its report to the program's exit, and the Keeper's
-//! end hands a report to the test before it answers it. So when the harness has written the
-//! result of an event, the Keeper's end has already heard the report of it, and a report
-//! that is not there then is a report that was not made.
+//! Loads pi's extension in the stand-in `companions/pi/test/harness.ts` under Node 22.18 or later
+//! (it runs the TypeScript as is); without Node every test here fails. A report not at the
+//! Keeper's end once the harness wrote an event's result was not made: handlers await the program.
 
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::fd::OwnedFd;
@@ -40,17 +28,13 @@ use yaar_link::{
     read_message, write_message,
 };
 
-/// How long the test waits for a fact it expects, such as the harness starting up or a
-/// report arriving: a deadline, never a pause.
+/// A deadline for a fact the test expects, never a pause.
 const PATIENCE: Duration = Duration::from_secs(10);
 
-/// The terminal of the app the harness runs in.
 const TERMINAL: &str = "t1";
 
-/// pi's own id of the session the harness plays.
 const SESSION: &str = "s1";
 
-/// The events the extension reports, in the order it registers them.
 const REPORTED: [&str; 7] = [
     "session_start",
     "session_shutdown",
@@ -61,12 +45,10 @@ const REPORTED: [&str; 7] = [
     "agent_settled",
 ];
 
-/// The folder of the repository that holds pi's companion.
 fn companion() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../companions/pi")
 }
 
-/// Fails the test, in a plain sentence, unless Node 22.18 or later is on the search path.
 fn need_node() {
     let found = match Command::new("node").arg("--version").output() {
         Ok(output) if output.status.success() => {
@@ -83,13 +65,10 @@ fn need_node() {
     let (major, minor) = (numbers.next().unwrap_or(0), numbers.next().unwrap_or(0));
     assert!(
         (major, minor) >= (22, 18),
-        "PIX-01 needs Node 22.18 or later on this machine, for the test of pi's extension only: found {found}"
+        "the test of pi's extension needs Node 22.18 or later on this machine (no other test uses Node): found {found}"
     );
 }
 
-/// A folder of the test's own, closed to everybody else, which holds the socket, the home,
-/// the project the harness works in and the Adapter's folder of the app; it is removed
-/// with the test.
 struct Scratch {
     root: PathBuf,
 }
@@ -98,8 +77,8 @@ impl Scratch {
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        // A short path, for a socket to be bound in; `/tmp` is a link on macOS, and the
-        // paths the extension is given are the resolved ones.
+        // A short path, for a socket; `/tmp` is a link on macOS and the extension is given resolved
+        // paths.
         let root = PathBuf::from(format!("/tmp/yaar-pix-{}-{n}", std::process::id()));
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -117,7 +96,6 @@ impl Scratch {
         self.root.join("keeper.sock")
     }
 
-    /// A socket nobody listens at.
     fn missing_socket(&self) -> PathBuf {
         self.root.join("nobody.sock")
     }
@@ -126,23 +104,19 @@ impl Scratch {
         self.root.join("home")
     }
 
-    /// The folder the harness's session works in.
     fn project(&self) -> PathBuf {
         self.root.join("project")
     }
 
-    /// The Adapter's own folder of the app, with a space in its name: the extension is
-    /// loaded from a path that is not made for a shell to read.
+    /// A space in the name: the extension is loaded from a path not made for a shell to read.
     fn app_folder(&self) -> PathBuf {
         self.root.join("app data").join("agents").join("pi")
     }
 
-    /// The session's own file, which pi would have written.
     fn session_file(&self) -> PathBuf {
         self.root.join("sessions").join("s1.jsonl")
     }
 
-    /// The context of every event the test fires: the session pi would hold.
     fn context(&self) -> Value {
         json!({
             "sessionId": SESSION,
@@ -151,7 +125,6 @@ impl Scratch {
         })
     }
 
-    /// Whether a file of this name lies anywhere in the scratch folder.
     fn holds_a_file_named(&self, name: &str) -> bool {
         fn walk(folder: &Path, name: &str) -> bool {
             std::fs::read_dir(folder).is_ok_and(|entries| {
@@ -171,10 +144,6 @@ impl Drop for Scratch {
     }
 }
 
-/// The folder the Adapter installed the extension into, made as pi finds it: the
-/// extension the Adapter wrote, a `package.json` that says its files are modules, and the
-/// stand-in for the one module of pi's that it imports where Node looks for it. Gives the
-/// extension's file and the reporting program the Adapter named for the shells.
 fn install(scratch: &Scratch) -> (PathBuf, PathBuf) {
     let folder = scratch.app_folder();
     let program = Path::new(env!("CARGO_BIN_EXE_yaar-pi-report"));
@@ -207,20 +176,13 @@ fn install(scratch: &Scratch) -> (PathBuf, PathBuf) {
     (folder.join(EXTENSION).join(EXTENSION_FILE), program)
 }
 
-/// What a Keeper's end does with one report.
 enum Answering {
-    /// Answers `Done`: it asks nothing of the extension.
     Done,
-    /// Answers with these bytes.
     Answer(Vec<u8>),
-    /// Holds the answer until the gate is opened, then answers `Done`.
     HoldThenDone(Arc<Gate>),
-    /// Holds the answer until the program that reported has given up and left, which the
-    /// connection shows by ending, then opens the gate and answers `Done` to nobody.
     HoldUntilTheProgramLeaves(Arc<Gate>),
 }
 
-/// A gate the test opens when it wants a held answer to go.
 struct Gate {
     opened: Mutex<bool>,
     changed: Condvar,
@@ -239,12 +201,10 @@ impl Gate {
         self.changed.notify_all();
     }
 
-    /// Waits until the gate is open, or the deadline.
     fn wait(&self) {
         self.wait_up_to(PATIENCE);
     }
 
-    /// Waits until the gate is open, or `limit`, and says whether it is open.
     fn wait_up_to(&self, limit: Duration) -> bool {
         let opened = self.opened.lock().expect("the gate");
         let (opened, _) = self
@@ -255,11 +215,8 @@ impl Gate {
     }
 }
 
-/// How the Keeper's end decides what to answer a report.
 type Policy = Box<dyn FnMut(&AgentReport) -> Answering + Send>;
 
-/// The Keeper's end of the socket: every connection is one report, as the reporting
-/// program makes them. A report is given to the test before it is answered.
 struct Keeper {
     socket: PathBuf,
     heard: Receiver<AgentReport>,
@@ -269,7 +226,6 @@ struct Keeper {
 }
 
 impl Keeper {
-    /// Listens at `socket` and answers every report `Done` until told otherwise.
     fn start(socket: &Path) -> Keeper {
         let listener = UnixListener::bind(socket).expect("bind the Keeper's socket");
         let (tell, heard) = mpsc::channel();
@@ -284,7 +240,6 @@ impl Keeper {
                     }
                     let Ok(stream) = stream else { return };
                     let (policy, tell) = (policy.clone(), tell.clone());
-                    // One thread for each connection, so that a held answer holds no other.
                     thread::spawn(move || serve(stream, &policy, &tell));
                 }
             })
@@ -298,12 +253,10 @@ impl Keeper {
         }
     }
 
-    /// From now on, `policy` decides what each report is answered.
     fn answer_with(&self, policy: impl FnMut(&AgentReport) -> Answering + Send + 'static) {
         *self.policy.lock().expect("the policy") = Box::new(policy);
     }
 
-    /// The next report the Keeper's end heard, in the order it heard them.
     fn next_report(&self) -> AgentReport {
         match self.heard.recv_timeout(PATIENCE) {
             Ok(report) => report,
@@ -311,7 +264,6 @@ impl Keeper {
         }
     }
 
-    /// Whether no report is waiting to be read.
     fn hears_nothing(&self) -> bool {
         matches!(self.heard.try_recv(), Err(TryRecvError::Empty))
     }
@@ -320,7 +272,6 @@ impl Keeper {
 impl Drop for Keeper {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::SeqCst);
-        // A connection wakes the thread that waits to accept one.
         let _ = UnixStream::connect(&self.socket);
         if let Some(accepting) = self.accepting.take() {
             let _ = accepting.join();
@@ -328,11 +279,9 @@ impl Drop for Keeper {
     }
 }
 
-/// Serves one connection of the reporting program: the hello, the one report, and its
-/// answer.
 fn serve(mut stream: UnixStream, policy: &Mutex<Policy>, tell: &mpsc::Sender<AgentReport>) {
-    // Set now, while the program is surely there: a socket whose other end has gone
-    // refuses an option on macOS.
+    // Set while the program is surely there: macOS refuses an option on a socket whose other end
+    // has gone.
     let _ = stream.set_read_timeout(Some(PATIENCE));
     let Ok(Message::Hello(_)) = read_message(&mut stream) else {
         return;
@@ -356,8 +305,6 @@ fn serve(mut stream: UnixStream, policy: &Mutex<Policy>, tell: &mpsc::Sender<Age
         }
     };
     let answering = (policy.lock().expect("the policy"))(&report);
-    // Told before the answer: a report that reached the harness's handler is known to the
-    // test by the time the handler returns.
     let _ = tell.send(report);
     let bytes = match answering {
         Answering::Done => None,
@@ -367,8 +314,6 @@ fn serve(mut stream: UnixStream, policy: &Mutex<Policy>, tell: &mpsc::Sender<Age
             None
         }
         Answering::HoldUntilTheProgramLeaves(gone) => {
-            // The program sends nothing more: the read ends when it closes its end, or at
-            // the deadline of this thread's own.
             while read_message(&mut stream).is_ok() {}
             gone.open();
             None
@@ -387,40 +332,27 @@ fn serve(mut stream: UnixStream, policy: &Mutex<Policy>, tell: &mpsc::Sender<Age
     );
 }
 
-/// The stand-in for pi's extension interface, started on the installed extension.
 struct Harness {
     child: Child,
     stdin: Option<ChildStdin>,
-    /// The harness's standard output, one end of a socket pair, read by the test's own
-    /// thread, so that "no line yet" is a read that would block and nothing else.
     output: BufReader<UnixStream>,
     stderr: Option<JoinHandle<Vec<u8>>>,
-    /// What the harness said it had registered.
     registered: Value,
 }
 
-/// What a harness left behind once it ended.
 struct Finished {
     status: ExitStatus,
-    /// Every line of its standard output after the ones the test read.
     unread: Vec<String>,
     stderr: Vec<u8>,
 }
 
 impl Harness {
-    /// Starts Node on the harness and the extension, with an environment of the test's own,
-    /// `report` being what `YAAR_PI_REPORT` is, none for a variable that is not set, and
-    /// waits for the line that says what the extension registered.
     fn start(scratch: &Scratch, extension: &Path, report: Option<&Path>) -> Harness {
         let (ours, theirs) = UnixStream::pair().expect("a socket pair for the harness's output");
-        // Set now, while the harness's end is surely open: a socket whose other end has
-        // gone refuses an option on macOS.
         ours.set_read_timeout(Some(PATIENCE))
             .expect("a deadline for the harness's output");
         let mut command = Command::new("node");
         command
-            // The warning that type stripping is experimental, on the Node versions that
-            // still print it, is Node's, not the extension's.
             .arg("--disable-warning=ExperimentalWarning")
             .arg(companion().join("test/harness.ts"))
             .arg(extension)
@@ -438,9 +370,6 @@ impl Harness {
             command.env(REPORT_VARIABLE, report);
         }
         let mut child = command.spawn().expect("start node");
-        // The command holds the harness's end of the socket pair: with it dropped, the
-        // harness's own is the only one left, and the test's end reads to the end when
-        // the harness ends.
         drop(command);
         let stdin = child.stdin.take();
         let mut stderr = child.stderr.take().expect("the harness's standard error");
@@ -469,7 +398,6 @@ impl Harness {
         self.child.id()
     }
 
-    /// Writes one line to the harness.
     fn send(&mut self, line: &Value) {
         let stdin = self.stdin.as_mut().expect("the harness's standard input");
         let mut text = line.to_string();
@@ -480,7 +408,6 @@ impl Harness {
             .expect("write to the harness");
     }
 
-    /// The next line the harness wrote, as JSON.
     fn line(&mut self) -> Value {
         let mut text = String::new();
         match self.output.read_line(&mut text) {
@@ -490,8 +417,6 @@ impl Harness {
         }
     }
 
-    /// The next line, if the harness has written one already: a read of its output that
-    /// does not wait, by the test's own thread.
     fn line_ready(&mut self) -> Option<Value> {
         self.output
             .get_ref()
@@ -510,7 +435,6 @@ impl Harness {
         ready.then(|| self.line())
     }
 
-    /// The next line, if the harness writes one before `by`: a time ahead of the clock.
     fn line_before(&mut self, by: Instant) -> Option<Value> {
         loop {
             if let Some(line) = self.line_ready() {
@@ -523,7 +447,6 @@ impl Harness {
         }
     }
 
-    /// Plays one event to the handlers and gives what each returned.
     fn fire(&mut self, event: &str, body: Value, context: &Value) -> Vec<Value> {
         self.send_fire(event, body, context);
         let said = self.line();
@@ -533,27 +456,22 @@ impl Harness {
             .clone()
     }
 
-    /// Plays one event and does not wait for the harness to say what became of it.
     fn send_fire(&mut self, event: &str, body: Value, context: &Value) {
         let mut body = body;
         body["type"] = json!(event);
         self.send(&json!({"fire": event, "event": body, "ctx": context}));
     }
 
-    /// Calls the reply tool as pi calls it and gives what the harness said: `{"result"}`
-    /// or `{"error"}`.
     fn call(&mut self, params: &Value, context: &Value) -> Value {
         self.send(&json!({"call": REPLY_TOOL, "params": params, "ctx": context}));
         self.line()
     }
 
-    /// Sets, or with none takes away, variables of the harness's own environment.
     fn set_env(&mut self, variables: Value) {
         self.send(&json!({"env": variables}));
         assert_eq!(self.line(), json!({"env": "set"}));
     }
 
-    /// Closes the harness's input, which ends it, and gives what it left.
     fn finish(&mut self) -> Finished {
         drop(self.stdin.take());
         let mut unread = Vec::new();
@@ -581,13 +499,11 @@ impl Harness {
 
 impl Drop for Harness {
     fn drop(&mut self) {
-        // A test that failed leaves no node running.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
-/// The scratch folder, the Keeper's end, and the harness on the installed extension.
 struct World {
     harness: Harness,
     keeper: Keeper,
@@ -596,8 +512,6 @@ struct World {
 }
 
 impl World {
-    /// The extension installed, a Keeper's end listening, and the harness started with the
-    /// reporting program named, as inside the app.
     fn new() -> World {
         need_node();
         let scratch = Scratch::new();
@@ -612,7 +526,6 @@ impl World {
         }
     }
 
-    /// The same, with no reporting program named, as outside the app.
     fn outside_the_app() -> World {
         need_node();
         let scratch = Scratch::new();
@@ -631,19 +544,16 @@ impl World {
         self.scratch.context()
     }
 
-    /// Plays one event of the session.
     fn fire(&mut self, event: &str, body: Value) -> Vec<Value> {
         let context = self.context();
         self.harness.fire(event, body, &context)
     }
 }
 
-/// The payload of a report, as the JSON object it is.
 fn payload(report: &AgentReport) -> Value {
     serde_json::from_slice(&report.payload).expect("the payload is JSON")
 }
 
-/// The `event` a report names.
 fn event_of(report: &AgentReport) -> String {
     payload(report)["event"]
         .as_str()
@@ -651,7 +561,6 @@ fn event_of(report: &AgentReport) -> String {
         .to_owned()
 }
 
-/// What the Adapter makes of a report, as the Keeper hands it over.
 fn as_handed(report: &AgentReport) -> Report<'_> {
     Report {
         terminal: report.terminal.as_ref().map(|terminal| terminal.as_str()),
@@ -660,7 +569,6 @@ fn as_handed(report: &AgentReport) -> Report<'_> {
     }
 }
 
-/// The event as the Adapter tells it for the harness's session.
 fn told(world: &World, event: Event) -> Reported {
     Reported {
         session: CliSession(SESSION.to_owned()),
@@ -672,7 +580,6 @@ fn told(world: &World, event: Event) -> Reported {
     }
 }
 
-/// A user's message, as pi's `input` event holds it.
 fn message(text: &str, streaming: Value) -> Value {
     json!({
         "text": text,
@@ -713,7 +620,6 @@ fn the_extension_registers_the_seven_events_and_the_one_reply_tool_and_nothing_f
     assert!(tool["description"].as_str().is_some_and(|d| !d.is_empty()));
     let parameters = &tool["parameters"];
     assert_eq!(parameters["type"], "object");
-    // The tool has no way to resolve a thread: the three arguments are all it takes.
     let properties = parameters["properties"].as_object().expect("properties");
     let mut names: Vec<_> = properties.keys().map(String::as_str).collect();
     names.sort_unstable();
@@ -814,7 +720,6 @@ fn each_event_of_a_turn_is_reported_in_pi_s_order_and_is_read_as_the_event_of_th
         );
     }
 
-    // The events of the crate doc's table, given to an Adapter in the order they came.
     let mut adapter = Pi::new();
     let told_by_the_adapter: Vec<Reported> = heard
         .iter()
@@ -881,12 +786,12 @@ fn a_tool_that_failed_is_reported_as_failed_and_is_no_file_read_or_written() {
         "--- a/src/calc.py\n+++ b/src/calc.py\n@@ -1 +1,2 @@\n a\n+b\n@@ -9 +10,2 @@\n c\n+d\n";
     let failed = |tool: &str, id: &str, input: Value, details: Value| json!({"toolName": tool, "toolCallId": id, "input": input, "content": [], "details": details, "isError": true});
     let worked = |tool: &str, id: &str, input: Value, details: Value| json!({"toolName": tool, "toolCallId": id, "input": input, "content": [], "details": details, "isError": false});
+    // Each failure is followed by a success of the same tool, so the test also shows the
+    // Adapter reads these reports at all.
     let read = json!({"path": "src/missing.py"});
     let edit = json!({"path": "src/calc.py", "edits": []});
     let write = json!({"path": "src/new.py", "content": "x"});
 
-    // Each failed result is followed by the same tool's result that worked, so that what
-    // the Adapter tells for the second shows that it read the reports at all.
     world.fire(
         "tool_result",
         failed("read", "c1", read.clone(), Value::Null),
@@ -980,8 +885,8 @@ fn a_handler_returns_only_after_the_app_answered_its_report() {
         json!({"toolName": "bash", "toolCallId": "c1", "input": {"command": "true"}}),
         &context,
     );
-    // The report is at the Keeper's end, which holds its answer: a handler that had not
-    // waited for it would have returned long before the program was started.
+    // The report is at the Keeper's end, which holds its answer: a handler that had not waited
+    // would have returned long before the program started.
     let report = world.keeper.next_report();
     assert_eq!(event_of(&report), "tool_call");
     assert!(
@@ -996,25 +901,20 @@ fn a_handler_returns_only_after_the_app_answered_its_report() {
 #[test]
 fn reports_that_are_made_together_reach_the_app_one_at_a_time_in_order() {
     let mut world = World::new();
-    // Opened when the program of the first report has left: the connection of the first
-    // report has ended.
     let first_has_left = Gate::new();
     let first = first_has_left.clone();
-    // Whether the first report's program had left when the second report arrived.
     let seen_leaving = Arc::new(AtomicBool::new(false));
     let seen = seen_leaving.clone();
-    world.keeper.answer_with(move |report| {
-        match event_of(report).as_str() {
+    world
+        .keeper
+        .answer_with(move |report| match event_of(report).as_str() {
             "session_start" => Answering::HoldUntilTheProgramLeaves(first.clone()),
             "agent_start" => {
-                // The program leaves before the next one starts, so the look is at a fact
-                // that is already true; the short wait is for this thread's own lag.
                 seen.store(first.wait_up_to(Duration::from_secs(1)), Ordering::SeqCst);
                 Answering::Done
             }
             _ => Answering::Done,
-        }
-    });
+        });
     let context = world.context();
     let started = json!({"fire": "session_start", "event": {"type": "session_start", "reason": "startup"}, "ctx": context});
     let begun = json!({"fire": "agent_start", "event": {"type": "agent_start"}, "ctx": context});
@@ -1022,10 +922,8 @@ fn reports_that_are_made_together_reach_the_app_one_at_a_time_in_order() {
         .harness
         .send(&json!({"fireTogether": [started, begun]}));
 
-    // The first is held, and its program gives up by itself at its short deadline. The
-    // second report is not started until it has: when it arrives, the first's connection
-    // has ended. Reports run at the same time would have the second here within moments
-    // of the first, while the first's connection was still open.
+    // The first is held and its program gives up at its short deadline; the second is not started
+    // until it has. Concurrent reports would show the second within moments of the first.
     assert_eq!(event_of(&world.keeper.next_report()), "session_start");
     assert_eq!(event_of(&world.keeper.next_report()), "agent_start");
     assert!(
@@ -1045,14 +943,12 @@ fn an_ordinary_report_is_given_up_after_the_short_deadline_and_only_the_reply_to
         .keeper
         .answer_with(move |_| Answering::HoldThenDone(held.clone()));
     let context = world.context();
-    // Well short of the long deadline, well past the short one, and ahead of the clock.
     let by = Instant::now() + TOOL_DEADLINE / 2;
 
     world.harness.send_fire("agent_start", json!({}), &context);
 
     assert_eq!(event_of(&world.keeper.next_report()), "agent_start");
     let said = world.harness.line_before(by);
-    // The app has still not answered when pi is let go: the program gave up by itself.
     gate.open();
     assert_eq!(
         said,
@@ -1061,9 +957,6 @@ fn an_ordinary_report_is_given_up_after_the_short_deadline_and_only_the_reply_to
     );
 }
 
-/// A text of the characters a review holds, after the instruction and a blank line: some
-/// of two and of three bytes, some outside the basic plane, quotes, backslashes, line
-/// breaks and a control.
 fn review(characters: usize) -> String {
     let filler = "## Thread t1\n\nComment: \"naïve\" `x` \\ → 𝒳 😀 日本語\u{1}\t\r\n";
     let mut text = String::from(INSTRUCTION);
@@ -1072,8 +965,6 @@ fn review(characters: usize) -> String {
     text
 }
 
-/// The bytes the Adapter answers an `input` report with when a review is attached: what
-/// the Keeper's end gives back for that report.
 fn handing_out(report: &AgentReport, folder: &Path, review: &str) -> Vec<u8> {
     let adapter = Pi::new();
     let asked = adapter
@@ -1162,7 +1053,6 @@ fn the_report_of_a_message_asks_for_a_review_whether_pi_is_idle_or_queues_the_me
     world.fire("session_start", json!({"reason": "startup"}));
     world.fire("input", message("idle", json!(null)));
     world.fire("agent_settled", json!({"aborted": false}));
-    // A run is open from here: the next two are what the user types while pi works.
     world.fire("agent_start", json!({}));
     world.fire("input", message("steered", json!("steer")));
     world.fire("input", message("followed up", json!("followUp")));
@@ -1218,7 +1108,6 @@ fn a_review_reaches_the_message_pi_queues_as_it_does_the_one_of_an_idle_pi() {
     world.fire("session_start", json!({"reason": "startup"}));
     let idle = world.fire("input", message("idle", json!(null)));
     world.fire("agent_start", json!({}));
-    // A run is open from here: the next two are what the user types while pi works.
     let steered = world.fire("input", message("steered", json!("steer")));
     let followed = world.fire("input", message("followed up", json!("followUp")));
 
@@ -1291,16 +1180,13 @@ fn a_session_pi_brings_back_and_a_run_the_user_interrupted_are_reported_as_such(
             Event::TurnEnded {
                 how: TurnEnd::Interrupted
             },
-            // A reload is the same session, whose start and shutdown are told to nobody.
             Event::SessionEnded,
         ]
     );
 }
 
-/// A body of a reply that a shell, a quoting or a line-based format would not survive.
 const HOSTILE: &str = "it \"works\", `id` $(touch PWNED) 'x'\nsecond line, \u{1f600} \\";
 
-/// What the Keeper's end answers a call of the reply tool as the Adapter does: kept.
 fn replied(report: &AgentReport, folder: &Path) -> Answering {
     let adapter = Pi::new();
     let asked = adapter
@@ -1375,7 +1261,6 @@ fn the_reply_tool_reaches_the_app_as_it_was_called_and_gives_the_agent_what_the_
         "no shell read the body"
     );
 
-    // A reply that does not say it addressed the thread is an open one.
     let said = world
         .harness
         .call(&json!({"thread": "T2", "body": "no"}), &context);
@@ -1397,12 +1282,10 @@ fn a_reply_the_app_did_not_keep_or_could_not_hear_is_a_failure_of_the_tool() {
     let context = world.context();
     let params = json!({"thread": "T1", "body": "x", "addressed": false});
 
-    // The app answers nothing: it did not keep the reply.
     let said = world.harness.call(&params, &context);
     world.keeper.next_report();
     assert_eq!(said, json!({"error": "the app did not keep the reply"}));
 
-    // The app refuses it, and says why.
     world.keeper.answer_with(|_| {
         let adapter = Pi::new();
         Answering::Answer(adapter.answer(
@@ -1421,7 +1304,6 @@ fn a_reply_the_app_did_not_keep_or_could_not_hear_is_a_failure_of_the_tool() {
     world.keeper.next_report();
     assert_eq!(said, json!({"error": "the review holds no thread T9"}));
 
-    // No app to hear it.
     let missing = world.scratch.missing_socket();
     world.harness.set_env(json!({ SOCKET_VARIABLE: missing }));
     let said = world.harness.call(&params, &context);
@@ -1438,7 +1320,6 @@ fn loaded_with_no_reporting_program_named_the_extension_registers_nothing_and_pr
         json!({"events": [], "tools": []}),
         "no handler and no tool"
     );
-    // pi plays its events to nobody.
     assert_eq!(
         world.fire("input", message("hi", json!(null))),
         Vec::<Value>::new()
@@ -1447,6 +1328,8 @@ fn loaded_with_no_reporting_program_named_the_extension_registers_nothing_and_pr
         world.fire("session_start", json!({"reason": "startup"})),
         Vec::<Value>::new()
     );
+    // The harness is ended first: its handlers await their reports, so every report it made has
+    // reached the Keeper's end and `hears_nothing` below is sound.
     let finished = world.harness.finish();
 
     assert_eq!(finished.status.code(), Some(0));
@@ -1460,7 +1343,6 @@ fn loaded_with_no_reporting_program_named_the_extension_registers_nothing_and_pr
         "nothing on the standard error: {}",
         String::from_utf8_lossy(&finished.stderr)
     );
-    // The harness has ended: whatever it was going to report has reached the Keeper's end.
     assert!(
         world.keeper.hears_nothing(),
         "the extension reported nothing"
@@ -1474,7 +1356,6 @@ fn the_reporting_program_is_looked_for_again_at_each_report() {
     let program = world.program.clone();
     let context = world.context();
 
-    // Taken away after the extension loaded: it reports nothing and the message goes on.
     world.harness.set_env(json!({ REPORT_VARIABLE: null }));
     let results = world.fire("input", message("hi", json!(null)));
     assert_eq!(results, [json!({"action": "continue"})]);
@@ -1483,11 +1364,9 @@ fn the_reporting_program_is_looked_for_again_at_each_report() {
         .call(&json!({"thread": "T1", "body": "x"}), &context);
     assert_eq!(said, json!({"error": "the app is not running"}));
 
-    // Named again, in the same process and the same chain of reports.
     world.harness.set_env(json!({ REPORT_VARIABLE: program }));
     world.fire("agent_start", json!({}));
 
-    // The first report the Keeper's end ever hears is this one: the two before made none.
     assert_eq!(event_of(&world.keeper.next_report()), "agent_start");
     assert!(world.keeper.hears_nothing());
 }
@@ -1499,7 +1378,6 @@ fn a_report_that_cannot_be_made_never_makes_a_handler_throw() {
     let context = world.context();
     let params = json!({"thread": "T1", "body": "x"});
 
-    // A program that is not there.
     let gone = world.scratch.root.join("no-such-program");
     world.harness.set_env(json!({ REPORT_VARIABLE: gone }));
     assert_eq!(
@@ -1515,7 +1393,6 @@ fn a_report_that_cannot_be_made_never_makes_a_handler_throw() {
         json!({"error": "the app is not running"})
     );
 
-    // A program that finds no Keeper.
     let nobody = world.scratch.missing_socket();
     world
         .harness
@@ -1529,6 +1406,8 @@ fn a_report_that_cannot_be_made_never_makes_a_handler_throw() {
         [Value::Null]
     );
 
+    // The harness is ended first: its handlers await their reports, so every report it made has
+    // reached the Keeper's end and `hears_nothing` below is sound.
     let finished = world.harness.finish();
     assert_eq!(finished.status.code(), Some(0));
     assert!(

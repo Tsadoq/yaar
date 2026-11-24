@@ -1,20 +1,7 @@
 #!/bin/sh
-# Prints the one version number of the app, the `version` of `[workspace.package]` in the
-# Cargo.toml at the root of the repository, and nothing else.
-#
-#   packaging/version.sh
-#
-# Everything else follows from it: the tag of a release is `v<version>`; the .deb's
-# Version, the bundle's CFBundleShortVersionString and CFBundleVersion, and the name of
-# every release file carry it as it is; `yaar-review --version` prints it, since every
-# crate takes the workspace's version.
-#
-# A release version is three numbers, `X.Y.Z`, each without a leading zero: what the two
-# version strings of a Mac bundle may hold, and what apt orders as a user expects. Anything
-# else is refused, a pre-release such as `0.2.0-rc.1` among them.
-#
-# Exit codes: 0 the version printed; 1 none found, or not X.Y.Z (a sentence on standard
-# error says which).
+# Prints the app version: `version` under [workspace.package] in the root Cargo.toml.
+# Only X.Y.Z without leading zeros is accepted (no 0.2.0-rc.1): bundles and apt need it. Exit 1:
+# none or invalid.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 VERSION=$(awk '
@@ -31,7 +18,6 @@ case $VERSION in
     echo "version.sh: a release version is three numbers X.Y.Z, not '$VERSION'" >&2
     exit 1 ;;
 esac
-# Exactly two dots.
 rest=${VERSION#*.}; rest=${rest#*.}
 case $rest in
   *.* | "") echo "version.sh: a release version is three numbers X.Y.Z, not '$VERSION'" >&2; exit 1 ;;

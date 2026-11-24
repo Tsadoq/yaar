@@ -1,47 +1,8 @@
 #!/bin/bash
-# Row PKG-08 on macOS: the installed app starts from the Dock with no terminal, as an
-# application. Runs on GitHub's Mac only: it opens a window, which no agent may do on the
-# owner's Mac.
-#
-#   .github/scripts/macos-launch.sh
-#
-# After the install line put the app in /Applications:
-#   1. `open -a /Applications/YAAR.app`, which asks LaunchServices to start it, as a click in
-#      the Dock or the Finder does; `open` itself returns at once.
-#   2. Waits up to 30 s for a process whose command is
-#      /Applications/YAAR.app/Contents/MacOS/yaar-review, and one whose command is
-#      /Applications/YAAR.app/Contents/Helpers/yaar-keeper.
-#   3. Asserts: the Window's parent is launchd (`ps -o ppid=` is 1); it has no controlling
-#      terminal (`ps -o tty=` is "??"); the entry of `lsappinfo list` for the bundle
-#      io.github.tsadoq.yaar says type="Foreground" (an app with a Dock icon, not a
-#      background agent);
-#      `/Applications/YAAR.app/Contents/MacOS/yaar-review --keeper-status` says
-#      started=false and names the Keeper's pid above; `codesign --verify` of the running
-#      Keeper's pid passes.
-#   4. Ends the app with SIGTERM to the Window and waits for both processes to be gone (the
-#      Keeper lingers 5 s; waits 20 s).
-# On failure prints the processes of the user, their parents and terminals, and the last 50
-# lines of `log show --last 2m --predicate 'process == "yaar-review"'`.
-#
-# Exit codes: 0 holds; 1 does not; 2 usage error.
-#
-# What the header leaves, decided here: (1) the step refuses (exit 2) unless GITHUB_ACTIONS
-# is "true", because it opens a window, which no agent may do on the owner's Mac; (2) it
-# fails, before it opens anything, when a Window or a Keeper of the bundle runs already, so
-# that the process it asserts about is the one `open` started; (3) the entry of
-# `lsappinfo list` is read as the block that starts at a line "<n>) "<name>" ASN:..." and
-# holds bundleID="io.github.tsadoq.yaar" (the quotes keep the Keeper's own identifier from
-# matching), and LaunchServices registers an app a moment after its process starts, so the
-# step polls the entry's type="..." up to 30 s; (4) the Window's and the Keeper's processes
-# are the user's processes whose full program path is the bundle's, from
-# `ps -axo uid=,pid=,ppid=,comm=`; (5) the Keeper's own terminal is recorded, not asserted;
-# (6) the app is ended by the trap too, by the pids found, when a step fails half way; (7) a
-# command that stops the script without a sentence of its own is named in one, and the exit
-# code is 1; (8) `--keeper-status` runs in the background under nohup, standard input from
-# /dev/null and its output in a file, and the step waits up to 30 s for it to end, so that a
-# Window that never answers fails the step in a sentence and not at the job's own timeout.
+# The installed app starts from the Dock with no terminal; GitHub's Mac only (exit 2 otherwise).
+# .github/scripts/macos-launch.sh  Refuses to start when a Window or Keeper of the bundle runs.
+# --keeper-status runs in the background so a silent Window fails in a sentence, not at timeout.
 set -euo pipefail
-# -E: the ERR trap below also runs inside functions and command substitutions.
 set -E
 
 PROGRAM=macos-launch.sh
@@ -50,9 +11,6 @@ WINDOW="$APP/Contents/MacOS/yaar-review"
 KEEPER="$APP/Contents/Helpers/yaar-keeper"
 BUNDLE_ID=io.github.tsadoq.yaar
 
-# What the step was doing when a command that nobody guarded failed: set -e ends the step
-# with that command's own status and words, and the exit trap puts one sentence of the
-# step's own in front of them and exits 1, the code the header names.
 said=no
 last_command=""
 trap 'last_command=$BASH_COMMAND' ERR
@@ -63,8 +21,6 @@ fail() {
     exit 1
 }
 
-# Set by usage: only it may leave with status 2, so any other command that fails with 2
-# (grep, cmp or diff on an error) is still named in a sentence and ends the step with 1.
 usage_said=no
 usage() {
     usage_said=yes
@@ -84,16 +40,12 @@ done
 [ -x "$KEEPER" ] || fail "$KEEPER is not there: the app holds no Keeper"
 uid=$(id -u)
 
-# The pids of the Window and of the Keeper this step found, which the trap ends.
 window_pid=""
 keeper_pid=""
-# The folder of the status query's output, and the query's pid while it runs.
 status_dir=$(mktemp -d) || fail "no scratch folder could be made"
 status_pid_of_query=""
-# What the last look at the system saw, for the sentence of a wait that ran out.
 seen=""
 
-# The processes of this user whose program is the file $1, as "<pid> <parent pid>" lines.
 processes_of() {
     ps -axo uid=,pid=,ppid=,comm= | awk -v uid="$uid" -v want="$1" '
         $1 == uid {
@@ -103,13 +55,12 @@ processes_of() {
         }'
 }
 
-# Whether the process $1 is gone.
 is_gone() {
     ! kill -0 "$1" 2> /dev/null
 }
 
-# Waits up to $1 seconds until the function $3 succeeds. The function leaves what it saw in
-# $seen; without success the step fails with the sentence $2 and that.
+# wait_until <seconds> <sentence> <function>: runs the function every 0.2 s until it succeeds,
+# else fails with the sentence and what the function left in $seen.
 wait_until() {
     local limit=$((SECONDS + $1))
     while :; do
@@ -121,17 +72,12 @@ wait_until() {
     done
 }
 
-# The type of the application whose bundle identifier is $1, as `lsappinfo list` prints it
-# (Foreground for an app with a Dock icon, UIElement or BackgroundOnly for an agent), or
-# nothing when no entry of that bundle is listed. An entry starts at a line `<n>) "<name>"
-# ASN:<asn>:`, names its bundle on a line bundleID="<id>" and its type on the line of its
-# pid, type="<type>".
+# lsappinfo type of bundle id $1: Foreground (Dock icon), UIElement or BackgroundOnly, or nothing.
 app_type() {
     local list
     list=$(lsappinfo list) || return 1
-    # awk reads the whole list and prints the first type found at the end: a reader that
-    # stopped at the first match would leave the writer with a closed pipe and SIGPIPE,
-    # which pipefail turns into a failure of the step although the type is there.
+    # awk reads the whole list: stopping at the first match would leave the writer a closed pipe and
+    # SIGPIPE, which pipefail turns into a failure.
     printf '%s\n' "$list" | awk -v id="$1" '
         /^ *[0-9]+\) / { hit = 0 }
         index($0, "bundleID=\"" id "\"") { hit = 1 }
@@ -141,8 +87,6 @@ app_type() {
         END { if (found != "") print found }'
 }
 
-# What explains a failure: the processes of the user with their parents and terminals, and
-# the last lines the Window logged.
 diagnose() {
     {
         echo "---- the processes of uid $uid: pid, parent, terminal, command"
@@ -153,8 +97,6 @@ diagnose() {
     } >&2
 }
 
-# Ends what the step started, on success and on failure alike, and says what failed when no
-# sentence was said.
 cleanup() {
     local status=$? pid limit
     trap - EXIT ERR
@@ -180,26 +122,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# A Window or a Keeper that runs already would be the one asserted about, and not the one
-# `open` starts.
+# A Window or Keeper already running would be the one asserted about, not the one `open` starts.
 for program in "$WINDOW" "$KEEPER"; do
     before=$(processes_of "$program") || fail "the processes of uid $uid could not be listed"
     [ -z "$before" ] || fail "$program runs before the step opened the app (pid, parent: $(printf '%s' "$before" | tr '\n' ';')): an earlier step left it"
 done
 
-# --- 1. LaunchServices starts the app, as a click in the Dock or the Finder does.
 open -a "$APP" || fail "open -a $APP failed: the system did not start the app"
 echo "step 1: open -a $APP"
 
-# --- 2. The Window and its Keeper run.
 windows=""
 keepers=""
 both_run() {
     local listed
     listed=$(processes_of "$WINDOW") || fail "the processes of uid $uid could not be listed"
     windows=$(printf '%s' "$listed" | tr '\n' ';')
-    # The pid is kept as soon as it is seen, so that the trap ends a Window that came up
-    # alone when the wait for the Keeper runs out.
+    # The pid is kept as soon as seen so the trap ends a Window that came up alone.
     [ -z "$listed" ] || window_pid=${listed%% *}
     listed=$(processes_of "$KEEPER") || fail "the processes of uid $uid could not be listed"
     keepers=$(printf '%s' "$listed" | tr '\n' ';')
@@ -215,7 +153,6 @@ window_parent=$(processes_of "$WINDOW" | cut -d' ' -f2)
 keeper_pid=$(processes_of "$KEEPER" | cut -d' ' -f1)
 echo "step 2: the Window $window_pid and the Keeper $keeper_pid run"
 
-# --- 3. An application, started by the system, with no terminal.
 [ "$window_parent" = 1 ] || fail "the Window $window_pid was started by process $window_parent and not by launchd (1)"
 window_tty=$(ps -o tty= -p "$window_pid") || fail "ps could not read the terminal of the Window $window_pid"
 window_tty=$(printf '%s' "$window_tty" | tr -d ' ')
@@ -228,10 +165,7 @@ foreground() {
     [ "$type_seen" = Foreground ]
 }
 wait_until 30 "LaunchServices did not list $BUNDLE_ID as a Foreground application" foreground
-# The status query runs in the background, detached (nohup: macOS has no setsid; it execs the
-# program, so $! is the query's own pid) with its output in a file, and the step waits for it
-# up to 30 s: a Window that never answers would hold the step to the job's own timeout with no
-# sentence.
+# Detached with nohup (macOS has no setsid; it execs the program, so $! is the query's own pid).
 nohup "$WINDOW" --keeper-status > "$status_dir/out" 2>&1 < /dev/null &
 status_pid_of_query=$!
 query_ended() {
@@ -253,7 +187,6 @@ status_pid=$(printf '%s\n' "$status_line" | tr ' ' '\n' | sed -n 's/^pid=//p')
 codesign --verify --verbose=1 "$keeper_pid" || fail "codesign --verify does not pass on the running Keeper, pid $keeper_pid"
 echo "step 3: the Window's parent is launchd, its terminal is none (??), $BUNDLE_ID is a $type_seen application, --keeper-status names the Keeper $keeper_pid with started=false, the running Keeper's signature verifies; the Keeper's terminal is '${keeper_tty:-unknown}'"
 
-# --- 4. The end: SIGTERM to the Window, then both are gone.
 kill -TERM "$window_pid" || fail "the Window $window_pid was gone before the step ended it"
 both_gone() {
     seen=""

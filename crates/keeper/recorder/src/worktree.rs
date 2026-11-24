@@ -1,6 +1,3 @@
-//! One worktree, read through git.
-
-// A new worktree, made by the user's own git.
 mod adding;
 
 pub use adding::{AddError, Added};
@@ -18,17 +15,14 @@ use crate::contents::{Contents, Read, asked, read_kept, stop_kept};
 use crate::git::{Answer, Git, GitError, Place, finish, finish_with, unreadable};
 use crate::index::{IndexBackup, IndexCopy};
 
-/// Names one commit: its full id, in lowercase hexadecimal digits.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CommitId(String);
 
 impl CommitId {
-    /// The id with these digits.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
-    /// The digits of the id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -40,123 +34,78 @@ impl fmt::Display for CommitId {
     }
 }
 
-/// What is checked out in a worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Head {
-    /// A branch, by its short name. `commit` is none while the branch has no commit yet,
-    /// as in a repository that was just made.
     Branch {
-        /// The short name of the branch: `main`, `feature/login`.
         name: String,
-        /// The commit the branch points at.
         commit: Option<CommitId>,
     },
-    /// No branch: a commit.
     Detached(CommitId),
 }
 
-/// One commit, as a list shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Commit {
-    /// Its id.
     pub id: CommitId,
-    /// The first line of its message.
     pub summary: String,
 }
 
-/// A worktree as its repository lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
-    /// The folder of the worktree.
     pub path: PathBuf,
-    /// What is checked out in it.
     pub head: Head,
-    /// Whether it is the main worktree, the one the repository was made with.
     pub main: bool,
-    /// The git folder of this worktree alone, as [`Worktree::git_dir`] gives it.
     pub git_dir: PathBuf,
 }
 
-/// A local branch, seen from what is checked out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalBranch {
-    /// Its short name: `main`.
     pub name: String,
-    /// How many commits the checked-out commit has that this branch does not: the
-    /// distance from the point where the two part to what is checked out.
+    /// How many commits the checked-out commit has that this branch does not.
     pub ahead: u32,
-    /// The branch it follows, by its short name: `origin/main`. None also when the
-    /// branch it was set to follow is no longer there.
+    /// None also when the branch it was set to follow is no longer there.
     pub upstream: Option<String>,
 }
 
-/// A branch of a remote as the repository last saw it, seen from what is checked out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteBranch {
-    /// Its short name, the remote first: `origin/main`.
     pub name: String,
-    /// The remote it belongs to: `origin`.
     pub remote: String,
-    /// How many commits the checked-out commit has that this branch does not.
     pub ahead: u32,
 }
 
-/// The branches around a worktree: everything the rule that finds the base needs, read
-/// from the repository as it is, with no call to any server.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Refs {
-    /// The names of the remotes.
     pub remotes: Vec<String>,
-    /// The default branch each remote recorded, by its short name, `origin/main`, in the
-    /// order of `remotes`. Listed as recorded, whether or not that branch still exists.
+    /// The default branch each remote recorded, in the order of `remotes`, whether or not it still
+    /// exists.
     pub remote_defaults: Vec<String>,
-    /// Every local branch, in git's order.
     pub local: Vec<LocalBranch>,
-    /// Every branch of every remote, in git's order.
     pub remote: Vec<RemoteBranch>,
 }
 
-/// What happened to a path between a commit and the files on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
-    /// The file is new. A file git does not track yet, and does not ignore, is new.
     Added,
-    /// The content or the kind of the file changed.
     Modified,
-    /// The file is gone.
     Deleted,
-    /// git pairs the file with one that is gone, by its own rule for renames.
-    Renamed {
-        /// The path of the file that is gone.
-        from: PathBuf,
-    },
+    Renamed { from: PathBuf },
 }
 
-/// One path that differs between a commit and the files on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangedPath {
-    /// The path now, relative to the folder of the worktree.
     pub path: PathBuf,
-    /// What happened to it.
     pub change: Change,
 }
 
-/// Names one branch as a branch, by its short name as [`Refs`] lists it.
-///
-/// git reads a short name as a tag before it reads it as a branch. Asked through this,
-/// it is asked for the branch and for nothing else: a tag that happens to have the name
-/// is not looked at.
+/// Names one branch as a branch, by its short name as [`Refs`] lists it. git reads a short name as
+/// a tag before a branch; asked through this, it is asked for the branch only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Branch<'a> {
-    /// A local branch: `main`.
     Local(&'a str),
-    /// A branch of a remote, the remote first: `origin/main`.
     Remote(&'a str),
 }
 
 impl Branch<'_> {
-    /// The name git has for the branch in full. A name given in full is taken as it is,
-    /// before any shorter reading of it.
     fn full_name(self) -> String {
         match self {
             Branch::Local(name) => format!("refs/heads/{name}"),
@@ -165,38 +114,25 @@ impl Branch<'_> {
     }
 }
 
-/// Which commits to list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Commits<'a> {
-    /// Those reachable from what is checked out and not from this commit.
     Since(&'a CommitId),
-    /// Those reachable from what is checked out and not from this branch.
     NotOn(Branch<'a>),
-    /// Those reachable from what is checked out and from no branch of any remote, as the
-    /// repository last saw the remotes.
     OnNoRemoteBranch,
 }
 
-/// Why the commit control made no commit.
 #[derive(Debug)]
 pub enum CommitError {
-    /// Nothing is uncommitted: there is nothing to commit.
     NothingToCommit,
-    /// git ended with an error: a hook rejected the commit, no identity is set, or the
-    /// message was empty. Nothing was committed.
     Refused {
-        /// What git wrote to its standard error, as it wrote it; when it wrote nothing
-        /// there, what it wrote to its standard output, as git says some refusals, such
-        /// as that there are no changes added to commit, only there.
+        /// What git wrote to its standard error; when it wrote nothing there, its standard output,
+        /// where some refusals (no changes added to commit) appear.
         stderr: String,
     },
-    /// git could not be run.
     Git(GitError),
 }
 
 impl CommitError {
-    /// The refusal for a git that ended with an error: its error stream, or its output
-    /// stream when the error stream says nothing.
     fn refused_by(answer: Answer) -> Self {
         let stderr = if answer.stderr.trim().is_empty() {
             String::from_utf8_lossy(&answer.stdout).into_owned()
@@ -225,16 +161,11 @@ impl From<GitError> for CommitError {
     }
 }
 
-/// Why a folder could not be opened as a worktree.
 #[derive(Debug)]
 pub enum OpenError {
-    /// There is no folder at this path, or it cannot be read.
     NoSuchFolder,
-    /// The folder lies in no git repository and no worktree.
     NotARepository,
-    /// The folder is a repository with no files checked out.
     Bare,
-    /// git could not say.
     Git(GitError),
 }
 
@@ -257,44 +188,24 @@ impl From<GitError> for OpenError {
     }
 }
 
-/// One worktree, read through git.
-///
-/// It holds no answer of git: every call asks again, so it always tells what is there
-/// now. It may be used from several threads at once.
-///
-/// What it does keep is one running git process that hands out the contents of files in
-/// commits, started at the first [`Worktree::content_at`] and asked again at each later
-/// one, so that reading many files starts git once. The process ends, and is waited for,
-/// when the `Worktree` is dropped. Whoever reads files of a worktree again and again
-/// keeps its `Worktree`.
-///
-/// It also keeps which hooks the configuration defined when it was opened, to turn each
-/// off by name in every run. [`Worktree::changed_paths`], the one call during which git
-/// does what a hook can wait for, asks for them again, so that a hook defined since is
-/// turned off too.
+/// One worktree, read through git: every call asks again. Keeps one running `git cat-file` for file
+/// contents, started at the first [`Worktree::content_at`] and ended on drop.
 #[derive(Debug)]
 pub struct Worktree {
     git: Git,
     root: PathBuf,
     git_dir: PathBuf,
     common_dir: PathBuf,
-    // The setting that turns off each hook the configuration defined when this was
-    // opened.
     hooks_off: Vec<OsString>,
-    // The running process that hands out file contents, once one was asked for.
     contents: Mutex<Option<Contents>>,
 }
 
 impl Worktree {
-    /// Opens the worktree that `folder` lies in: the folder itself or any folder above
-    /// it, as git finds it. A folder inside the git folder of a repository lies in no
-    /// worktree.
+    /// A folder inside the git folder of a repository lies in no worktree.
     pub fn open(git: &Git, folder: &Path) -> Result<Worktree, OpenError> {
         if !folder.is_dir() {
             return Err(OpenError::NoSuchFolder);
         }
-        // git prints the answers in the order asked and stops at the first it cannot
-        // give: where there is no worktree, that is the last one.
         let answer = git.run(
             Place::Folder(folder),
             &[],
@@ -343,25 +254,18 @@ impl Worktree {
         })
     }
 
-    /// The folder of the worktree, with every link in its path resolved.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// The git folder of this worktree alone, with every link resolved: `.git` for the
-    /// main worktree, a folder inside it for any other. git lists nothing that is put
-    /// here, and moves the folder with the worktree.
     pub fn git_dir(&self) -> &Path {
         &self.git_dir
     }
 
-    /// The git folder all worktrees of the repository share, with every link resolved.
-    /// Two worktrees belong to one repository when this is the same.
     pub fn common_dir(&self) -> &Path {
         &self.common_dir
     }
 
-    /// What is checked out.
     pub fn head(&self) -> Result<Head, GitError> {
         let symbolic = self.run(["symbolic-ref", "-q", "HEAD"])?;
         let commit = self.head_commit()?;
@@ -374,7 +278,6 @@ impl Worktree {
                     commit,
                 })
             }
-            // With `-q` git says by its exit code alone that no branch is checked out.
             Some(1) => match commit {
                 Some(commit) => Ok(Head::Detached(commit)),
                 None => Err(symbolic.unreadable("neither a branch nor a commit is checked out")),
@@ -383,17 +286,11 @@ impl Worktree {
         }
     }
 
-    /// Every worktree of the repository that has its files on disk, this one included:
-    /// the main one first, then in git's order. A repository with no files checked out
-    /// is not a worktree and is not listed; nor is a worktree whose folder is gone.
     pub fn list(&self) -> Result<Vec<Listed>, GitError> {
         let printed = list_printed(&self.git, |args| self.run(args))?;
         Ok(listed(&printed, &self.common_dir))
     }
 
-    /// Every worktree of the repository whose shared git folder is `common_dir`, as
-    /// [`Worktree::list`] gives them from inside one of them. None when there is no
-    /// repository at that place any more.
     pub fn list_of(git: &Git, common_dir: &Path) -> Result<Vec<Listed>, GitError> {
         let Ok(common_dir) = fs::canonicalize(common_dir) else {
             return Ok(Vec::new());
@@ -412,8 +309,6 @@ impl Worktree {
         Ok(listed(&printed, &common_dir))
     }
 
-    /// The branches around this worktree, each with its distance from what is checked
-    /// out.
     pub fn refs(&self) -> Result<Refs, GitError> {
         let remotes: Vec<String> = text(&self.run(["remote"])?.printed()?)
             .lines()
@@ -430,14 +325,11 @@ impl Worktree {
                     let short = target.strip_prefix("refs/remotes/").unwrap_or(&target);
                     remote_defaults.push(short.to_owned());
                 }
-                // The remote recorded no default branch.
                 Some(1) => {}
                 _ => return Err(answer.failed()),
             }
         }
 
-        // The distance is counted from what is checked out, so it can only be asked
-        // for where something is committed.
         let has_newer_forms = self.git.has_newer_forms();
         const WITH_DISTANCE: &str = "--format=%(refname)%00%(upstream)%00%(ahead-behind:HEAD)";
         const WITHOUT: &str = "--format=%(refname)%00%(upstream)%00";
@@ -468,8 +360,7 @@ impl Worktree {
                 return Err(unreadable(format!("the line {line:?}")));
             };
             let ahead = if has_newer_forms {
-                // git prints the side of the branch first and that of what is checked out
-                // second: the second number is how far ahead the checked-out commit is.
+                // git prints the side of the branch first and that of what is checked out second.
                 match distance.split_once(' ') {
                     Some((_, ahead)) => ahead
                         .parse::<u32>()
@@ -481,8 +372,6 @@ impl Worktree {
             } else if let Some(ahead) = counted.get(distance) {
                 *ahead
             } else {
-                // Here `distance` is the commit of the branch: what `HEAD` reaches and it
-                // does not is the second number of the atom.
                 let range = format!("{distance}..HEAD");
                 let answer = self.run(["rev-list", "--count", "--end-of-options", &range])?;
                 let printed = text(&answer.printed()?);
@@ -502,7 +391,6 @@ impl Worktree {
         };
         for &(name, upstream, ahead) in &rows {
             if let Some(short) = name.strip_prefix("refs/heads/") {
-                // A branch can be set to follow one that is no longer there.
                 let upstream = rows
                     .iter()
                     .any(|(other, _, _)| !upstream.is_empty() && *other == upstream)
@@ -538,17 +426,12 @@ impl Worktree {
         Ok(refs)
     }
 
-    /// The commit a branch points at; none when there is no such branch.
     pub fn commit_of(&self, branch: Branch<'_>) -> Result<Option<CommitId>, GitError> {
         self.resolve(&branch.full_name())
     }
 
-    /// The commit a branch, a tag or a commit id names, as the user would write it to
-    /// git; none when git knows nothing by that name. Where a tag and a branch have the
-    /// name, that is the tag, as it is for the user: [`Worktree::commit_of`] asks for a
-    /// branch.
+    /// Where a tag and a branch have the name, the tag wins, as for the user.
     pub fn resolve(&self, revision: &str) -> Result<Option<CommitId>, GitError> {
-        // No argument of a program can hold a zero byte, and no name git knows does.
         if revision.contains('\0') {
             return Ok(None);
         }
@@ -561,8 +444,6 @@ impl Worktree {
         }
     }
 
-    /// The point where what is checked out left `base`: the newest commit both have.
-    /// None when the two share no commit, or when nothing is committed yet.
     pub fn fork_point(&self, base: &CommitId) -> Result<Option<CommitId>, GitError> {
         let answer = self.run(["merge-base", "--end-of-options", "HEAD", base.as_str()])?;
         match answer.code {
@@ -573,10 +454,7 @@ impl Worktree {
         }
     }
 
-    /// The commits asked for, newest first.
     pub fn commits(&self, which: Commits<'_>) -> Result<Vec<Commit>, GitError> {
-        // `^name` leaves out what `name` reaches, and cannot be taken for an option
-        // whatever the name is.
         let leave_out = match which {
             Commits::Since(commit) => format!("^{commit}"),
             Commits::NotOn(branch) => format!("^{}", branch.full_name()),
@@ -617,24 +495,13 @@ impl Worktree {
             .collect()
     }
 
-    /// Every path that differs between `since` and the files on disk, ordered by path
-    /// as git orders paths, byte by byte: what was committed after `since`, what is
-    /// changed and not committed, staged or not, and the files git does not track and
-    /// does not ignore. With `since` none, as in a repository with no commit, every file
-    /// on disk that git does not ignore is new.
-    ///
-    /// The paths and their pairing into renames are those of git's own diff between the
-    /// commit and the worktree; the untracked files are those `git status` lists one by
-    /// one. A repository inside the worktree is one path, the folder that holds it, and
-    /// is not looked into.
-    ///
-    /// git works on a copy of its list of the files, made for this call: when it
-    /// brings the list up to date, as its diff does, the user's own is neither written
-    /// nor locked.
+    /// Ordered by path, byte by byte as git orders paths. With `since` none, every file on disk
+    /// that git does not ignore is new. git works on a copy of its index; the user's own is not
+    /// written.
     pub fn changed_paths(&self, since: Option<&CommitId>) -> Result<Vec<ChangedPath>, GitError> {
         let index = IndexCopy::of(&self.git_dir.join("index"))?;
-        // git writes the copy when it has brought it up to date, and a hook can wait
-        // for that: the hooks are those defined now, not those of when this was opened.
+        // git writes the copy when it has brought it up to date, and a hook can wait for that: the
+        // hooks are those defined now, not those of when this was opened.
         let hooks_off = hooks_off(&self.git, Place::Folder(&self.root))?;
         let run = |args: &[&str]| {
             let mut command = self.git.command(Place::Folder(&self.root), &hooks_off);
@@ -642,7 +509,6 @@ impl Worktree {
             finish(command)
         };
 
-        // Keyed by the bytes of the path, which is the order git lists paths in.
         let mut changes = BTreeMap::new();
         if let Some(since) = since {
             let answer = run(&[
@@ -659,8 +525,6 @@ impl Worktree {
             changes = name_status(&command, &answer.printed()?)?;
         }
 
-        // With a commit to count from, the files of git's list are in its diff already;
-        // with none, they are new like the untracked ones.
         let others = if since.is_some() {
             run(&["ls-files", "--others", "--exclude-standard", "-z"])?
         } else {
@@ -673,14 +537,12 @@ impl Worktree {
             ])?
         };
         for path in others.printed()?.split(|byte| *byte == 0) {
-            // A repository inside the worktree is listed as its folder, with a slash.
             let path = path.strip_suffix(b"/").unwrap_or(path);
             if path.is_empty() {
                 continue;
             }
             let path = os_string(path);
             if since.is_none() && fs::symlink_metadata(self.root.join(&path)).is_err() {
-                // In git's list and no longer on disk: not a file on disk.
                 continue;
             }
             changes
@@ -701,14 +563,9 @@ impl Worktree {
             .collect())
     }
 
-    /// The content of the file at `path` in `commit`; none when the commit has no file
-    /// there, and also when git knows no such commit, which [`Worktree::resolve`] tells
-    /// apart. A link is given as the path it points at, as git stores it. `commit` is a
-    /// full id, as [`CommitId`] says: any other way to name a commit is a commit git
-    /// does not know.
-    ///
-    /// Answered by the one process this worktree keeps for contents; a process that has
-    /// died is started again once.
+    /// None when `commit` has no file at `path`, and also when git knows no such commit, which
+    /// [`Worktree::resolve`] tells apart. `commit` is a full id: any other way to name a commit
+    /// is one git does not know.
     pub fn content_at(&self, commit: &CommitId, path: &Path) -> Result<Option<Vec<u8>>, GitError> {
         let (Some(path), true) = (inside(path), is_full_id(commit.as_str())) else {
             return Ok(None);
@@ -727,16 +584,10 @@ impl Worktree {
         }
     }
 
-    /// The content of the file at `path` on disk; none when there is no file there. A
-    /// link is given as the path it points at, and is not followed. `path` is relative to
-    /// the folder of the worktree and must not lead out of it: where it does, by its
-    /// words or through a link on its way, there is no file.
     pub fn content_on_disk(&self, path: &Path) -> Result<Option<Vec<u8>>, GitError> {
         let Some(path) = inside(path) else {
             return Ok(None);
         };
-        // A folder on the way that is a link leads somewhere else, perhaps out of the
-        // worktree. git sees a link there, not the files behind it.
         let mut folder = self.root.clone();
         if let Some(above) = path.parent() {
             for name in above.components() {
@@ -758,7 +609,6 @@ impl Worktree {
         } else if found.is_file() {
             fs::read(&file)
         } else {
-            // A folder, which is a repository of its own, or something that is no file.
             return Ok(None);
         };
         match read {
@@ -767,23 +617,10 @@ impl Worktree {
         }
     }
 
-    /// Makes an ordinary git commit of every uncommitted change of the worktree, with
-    /// `message`, on what is checked out, and gives its id: what `git add --all` and then
-    /// `git commit` with that message make when the user types them.
-    ///
-    /// This is the user's own command, made through the app, and so it is not run the way
-    /// the app reads and records: it runs with the user's hooks, identity and signing, as
-    /// their git would, and it writes their list of the files. Only the variables that
-    /// name another repository than this worktree's are left out, as for every run.
-    ///
-    /// Refused with [`CommitError::NothingToCommit`] when nothing is uncommitted, and
-    /// with [`CommitError::Refused`] and git's own words when git ends with an error, as
-    /// when a hook rejects the commit or no identity is set. A refused commit leaves the
-    /// worktree's list of files as it was before the call, byte for byte, so that what the
-    /// user had staged is still staged and nothing else is.
+    /// Makes an ordinary commit of every uncommitted change, as `git add --all` and then `git
+    /// commit` with `message` would, with the user's hooks, identity and signing. A refusal leaves
+    /// the index byte for byte as before.
     pub fn commit_all(&self, message: &str) -> Result<CommitId, CommitError> {
-        // Asked as reading asks: on a copy of the list of files, so that the question
-        // neither writes nor locks the user's own.
         let uncommitted = {
             let index = IndexCopy::of(&self.git_dir.join("index")).map_err(GitError::from)?;
             let hooks_off = hooks_off(&self.git, Place::Folder(&self.root))?;
@@ -800,22 +637,18 @@ impl Worktree {
             return Err(CommitError::NothingToCommit);
         }
 
-        // `git add --all` rewrites the user's list of files, and a commit that is then
-        // refused would leave everything staged: the bytes are taken first.
         let backup = IndexBackup::take(&self.git_dir.join("index")).map_err(GitError::from)?;
         let mut add = self.git.plain(&self.root);
-        // `--no-ignore-errors` because the user's `add.ignoreErrors` would make git stage
-        // what it can, write the list and only then exit in error.
+        // `--no-ignore-errors`: the user's `add.ignoreErrors` would make git stage what it can,
+        // write the index and only then exit in error.
         add.args(["add", "--all", "--no-ignore-errors"]);
-        // A git that ends in error here has written nothing: it writes the list last,
-        // through the lock, and dies before it when a file cannot be added or the lock is
-        // held. Putting the bytes back would overwrite what another git wrote after that
-        // failure, so nothing is put back.
+        // A `git add` that fails, as when a file cannot be added or the lock is held, has written
+        // nothing: it writes the index last. Putting the bytes back would overwrite what another
+        // git wrote since, so nothing is put back.
         let answer = finish(add)?;
         if answer.code != Some(0) {
             return Err(CommitError::refused_by(answer));
         }
-        // The message goes in on the standard input: it may hold any character.
         let mut commit = self.git.plain(&self.root);
         commit.args(["commit", "--file=-"]);
         let answer = match finish_with(commit, message.as_bytes()) {
@@ -836,7 +669,6 @@ impl Worktree {
         }
     }
 
-    /// One run of git in this worktree.
     fn run<I, S>(&self, args: I) -> Result<Answer, GitError>
     where
         I: IntoIterator<Item = S>,
@@ -846,7 +678,6 @@ impl Worktree {
             .run(Place::Folder(&self.root), &self.hooks_off, args)
     }
 
-    /// The commit that is checked out; none where nothing is committed yet.
     pub(crate) fn head_commit(&self) -> Result<Option<CommitId>, GitError> {
         let answer = self.run(["rev-parse", "-q", "--verify", "HEAD^{commit}"])?;
         match answer.code {
@@ -863,9 +694,6 @@ impl Drop for Worktree {
     }
 }
 
-/// The refusal for a run of git that ended with an error, after the user's list of files
-/// is put back as it was before the control ran. A list that cannot be put back is said
-/// so in the words of the refusal, since the user's next step depends on it.
 fn refused_and_put_back(answer: Answer, backup: IndexBackup) -> CommitError {
     let refusal = CommitError::refused_by(answer);
     match (backup.restore(), refusal) {
@@ -876,8 +704,6 @@ fn refused_and_put_back(answer: Answer, backup: IndexBackup) -> CommitError {
     }
 }
 
-/// Reads what `git diff --name-status -z` printed, the paths keyed by their bytes, which
-/// is the order git lists paths in. `command` is the run, for the words of a failure.
 pub(crate) fn name_status(
     command: &str,
     printed: &[u8],
@@ -894,8 +720,6 @@ pub(crate) fn name_status(
         let (path, change) = match status[0] {
             b'A' => (path()?, Change::Added),
             b'D' => (path()?, Change::Deleted),
-            // A file whose kind changed, or that a merge left undecided, is a changed
-            // file.
             b'M' | b'T' | b'U' => (path()?, Change::Modified),
             b'R' => {
                 let from = PathBuf::from(path()?);
@@ -918,8 +742,8 @@ pub(crate) fn name_status(
     Ok(changes)
 }
 
-/// The setting that turns off each hook the configuration defines, one by one: turning
-/// off the hooks folder does not reach them.
+/// The `hook.<name>.enabled` key of each hook the configuration defines, to turn it off:
+/// turning off the hooks folder does not reach such hooks.
 pub(crate) fn hooks_off(git: &Git, place: Place<'_>) -> Result<Vec<OsString>, GitError> {
     let answer = git.run(
         place,
@@ -943,15 +767,11 @@ pub(crate) fn hooks_off(git: &Git, place: Place<'_>) -> Result<Vec<OsString>, Gi
                 OsString::from_vec(key)
             })
             .collect()),
-        // git says by its exit code that no key matched.
         Some(1) => Ok(Vec::new()),
         _ => Err(answer.failed()),
     }
 }
 
-/// What `git worktree list --porcelain -z` prints, for a git that has `-z` or has not: a
-/// git without it prints each field on a line and a blank line after each record, and
-/// [`zero_ended`] makes the one of the other.
 fn list_printed(
     git: &Git,
     run: impl FnOnce(&[&str]) -> Result<Answer, GitError>,
@@ -965,14 +785,9 @@ fn list_printed(
     }
 }
 
-/// The list of an older git, `--porcelain` without `-z`, in the form `-z` gives. Such a git
-/// prints a path as it is, with no quoting, so a line that starts with no field's name is
-/// the rest of the field before it: a path or a reason that holds a line feed. What it
-/// cannot tell is a path whose second line looks like a field, or two line feeds in a row.
-/// Such a folder is read as a shorter path: where that is no worktree of the repository,
-/// [`listed`] leaves it out; where it is one (a folder named as another worktree, a line
-/// feed and a field's name), that worktree is listed a second time or hidden. Only a git
-/// older than 2.43 and a folder named so meet it; with `-z` there is no such limit.
+/// The list of an older git (`--porcelain` without `-z`) in the form `-z` gives. Such a git prints
+/// paths unquoted, so a line with no field's name continues the field before it; a path whose
+/// second line looks like a field is misread.
 fn zero_ended(printed: &[u8]) -> Vec<u8> {
     const NAMES: [&[u8]; 7] = [
         b"worktree",
@@ -1011,8 +826,6 @@ fn zero_ended(printed: &[u8]) -> Vec<u8> {
     zero_ended
 }
 
-/// Reads git's list of worktrees: records that end with an empty field, each a run of
-/// fields that end with a zero byte.
 fn listed(printed: &[u8], common_dir: &Path) -> Vec<Listed> {
     let mut all = Vec::new();
     let mut first = true;
@@ -1034,8 +847,6 @@ fn listed(printed: &[u8], common_dir: &Path) -> Vec<Listed> {
                     None => None,
                 })
         };
-        // A repository with no files checked out, and a worktree git would forget
-        // because its folder is gone, are not worktrees to read.
         if field(b"bare").is_some() || field(b"prunable").is_some() {
             continue;
         }
@@ -1045,8 +856,8 @@ fn listed(printed: &[u8], common_dir: &Path) -> Vec<Listed> {
         let Ok(path) = fs::canonicalize(OsStr::from_bytes(path)) else {
             continue;
         };
-        // The folder may hold something else by now, or a worktree of another
-        // repository: a worktree of this one keeps its git folder in the shared one.
+        // The folder may hold something else by now, or a worktree of another repository: one of
+        // this repository keeps its git folder in the shared one.
         let Some(git_dir) = git_dir_of(&path) else {
             continue;
         };
@@ -1083,8 +894,6 @@ fn listed(printed: &[u8], common_dir: &Path) -> Vec<Listed> {
     all
 }
 
-/// The git folder of the worktree at `folder`, read from the worktree itself: its
-/// `.git` is that folder, or a file that names it.
 fn git_dir_of(folder: &Path) -> Option<PathBuf> {
     let dot_git = folder.join(".git");
     if dot_git.is_dir() {
@@ -1093,12 +902,9 @@ fn git_dir_of(folder: &Path) -> Option<PathBuf> {
     let named = fs::read(&dot_git).ok()?;
     let named = named.strip_prefix(b"gitdir: ")?;
     let named = named.strip_suffix(b"\n").unwrap_or(named);
-    // A path that is not a full one is counted from the worktree.
     fs::canonicalize(folder.join(OsStr::from_bytes(named))).ok()
 }
 
-/// `path` as a path inside a worktree, or none when it is not one: when it is a full
-/// path, is empty, or climbs with `..`.
 pub(crate) fn inside(path: &Path) -> Option<PathBuf> {
     let mut inside = PathBuf::new();
     for part in path.components() {
@@ -1111,12 +917,10 @@ pub(crate) fn inside(path: &Path) -> Option<PathBuf> {
     (!inside.as_os_str().is_empty()).then_some(inside)
 }
 
-/// Whether this is the full id of a commit, in either of git's two lengths.
 pub(crate) fn is_full_id(id: &str) -> bool {
     matches!(id.len(), 40 | 64) && id.bytes().all(|digit| digit.is_ascii_hexdigit())
 }
 
-/// A failure to read that means there is no file, as none; any other as itself.
 fn nothing_there(e: io::Error) -> Result<Option<Vec<u8>>, GitError> {
     match e.kind() {
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory | io::ErrorKind::IsADirectory => {
@@ -1126,7 +930,6 @@ fn nothing_there(e: io::Error) -> Result<Option<Vec<u8>>, GitError> {
     }
 }
 
-/// What git printed on one line, without the line feed.
 fn text(printed: &[u8]) -> String {
     String::from_utf8_lossy(printed).trim_end().to_owned()
 }
@@ -1135,7 +938,6 @@ pub(crate) fn os_string(bytes: &[u8]) -> OsString {
     OsString::from_vec(bytes.to_vec())
 }
 
-/// The short name of a branch, from its full one.
 fn short_name(full: &str) -> &str {
     full.strip_prefix("refs/heads/")
         .or_else(|| full.strip_prefix("refs/remotes/"))

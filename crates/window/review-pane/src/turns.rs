@@ -1,6 +1,6 @@
 //! What the pane does when a turn ends in the workspace on screen: it selects what changed
 //! since the reviewer's last review and shows the review of the turn's session, or, set to
-//! keep the selection, offers that change and leaves everything as it is.
+//! keep the selection, only offers that change.
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
@@ -10,19 +10,14 @@ use crate::draw::ROW_HEIGHT;
 use crate::tree::ListedFor;
 use crate::{ChangeShown, ReviewPane, TakeOffer, ToggleKeepSelection};
 
-/// What a turn end offered while the pane kept the selection.
 pub(crate) struct Offer {
-    /// What changed since the reviewer's last review: always [`ChangeShown::Since`].
     pub(crate) change: ChangeShown,
-    /// The review of the turn's session, which taking the offer shows; none when the pane
-    /// holds no review of it.
+    /// The review of the turn's session, which taking the offer shows; none when the pane holds no
+    /// review of it.
     pub(crate) review: Option<ReviewId>,
 }
 
 impl ReviewPane {
-    /// What [`ToggleKeepSelection`] does: sets the other of the two things a turn end
-    /// selects, flipping what the setting says now, whoever set it last, and asks the
-    /// Keeper to keep it. The pane follows the setting (`turn_end_setting`).
     pub(crate) fn toggle_keep_selection(
         &mut self,
         _: &ToggleKeepSelection,
@@ -39,8 +34,6 @@ impl ReviewPane {
             .update(cx, |settings, cx| settings.set(Setting::TurnEnd(next), cx));
     }
 
-    /// The settings model changed, and when the pane is built: a turn end keeps the
-    /// selection as the setting says. What an offer already made does is left as it is.
     pub(crate) fn turn_end_setting(&mut self, cx: &mut Context<Self>) {
         let keep = self.models.settings.read(cx).turn_end() == TurnEndSelects::KeepSelection;
         if keep != self.keep {
@@ -49,13 +42,9 @@ impl ReviewPane {
         }
     }
 
-    /// A turn of `session` ended in the workspace on screen and its state `state` was
-    /// recorded. The change it leaves is counted from the state the reviewer last marked
-    /// reviewed, `since`, or from the history's start before the first mark. It is
-    /// selected, with the review of the session; or, while the pane keeps the selection,
-    /// only offered.
-    ///
-    /// The uncommitted changes of the review shown are for the caller to ask for again.
+    /// The change is counted from `since`, the state the reviewer last marked reviewed, else from
+    /// the history's start, else from where the comparison counts. The caller asks again for the
+    /// uncommitted changes of the review shown.
     pub(crate) fn turn_ended(
         &mut self,
         session: &SessionId,
@@ -88,8 +77,6 @@ impl ReviewPane {
         }
     }
 
-    /// The review of `session`: the one the agents model gives it, else the one the pane
-    /// holds whose agent it is.
     fn review_of(&self, session: &SessionId, cx: &App) -> Option<ReviewId> {
         self.models
             .agents
@@ -106,9 +93,8 @@ impl ReviewPane {
             })
     }
 
-    /// Shows the change of an offer and the review it came with, the change listed for that
-    /// review (`shared.rs`). A reviewer's action gives the window, which lets it leave the
-    /// comment box of the review it moves away from.
+    /// A reviewer's action gives the window, which lets it leave the comment box of the review it
+    /// moves away from.
     fn show_offer(&mut self, offer: Offer, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if let Some(review) = offer.review.clone() {
             self.choose_review(review, window, cx);
@@ -120,8 +106,6 @@ impl ReviewPane {
         self.select_since_for(from, to, listed_for, cx);
     }
 
-    /// What [`TakeOffer`] does: shows what a turn end offered, and the review of its
-    /// session.
     pub(crate) fn take_offer(
         &mut self,
         _: &TakeOffer,
@@ -136,8 +120,6 @@ impl ReviewPane {
         self.take(window, cx);
     }
 
-    /// Shows what a turn end offered, if it offered anything. Also how Flow's offer is
-    /// taken while the pane keeps the selection (`take_flow_offer`).
     pub(crate) fn take(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(offer) = self.tree.offer.take() else {
             return self.say("No turn has ended since the selection was kept", cx);
@@ -147,9 +129,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// The lines above the tree that tell the reviewer the pane keeps the selection and
-    /// what a turn end offered, under `review-keeps-selection`, `review-offer` and, the
-    /// control that takes the offer, `review-offer-take`; none while neither is true.
     pub(crate) fn offer_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
         if !self.keep && self.tree.offer.is_none() {
             return None;

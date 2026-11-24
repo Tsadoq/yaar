@@ -1,69 +1,5 @@
-//! The environment of the user's login shell, taken once: what a terminal of the app has, for
-//! a program the system started with its own short search path.
-//!
-//! A program started from the Finder or the Dock on macOS, or from a desktop's menu on Linux,
-//! has the system's environment: on macOS a search path of `/usr/bin:/bin:/usr/sbin:/sbin` and
-//! few variables. The Dock's terminals start the user's login shell and so have what the
-//! user's start-up files set; a program of the app that runs the user's own programs without a
-//! terminal takes the same by running that shell once ([`take`]) and reading the environment
-//! it prints. Two programs do: the Window, for its language servers (the Navigator, which says
-//! when it takes it), and the Keeper, for the user's git it runs and the hooks that git runs.
-//!
-//! # How
-//!
-//! [`LoginShell::program`] is run with the arguments `-l`, `-i`, `-c` and [`COMMAND`], as the
-//! Dock's launchers run it: a login shell that is interactive, so that it reads the start-up
-//! files a terminal of the app reads. It runs
-//! - in the environment `base` the caller hands, and the folder `HOME` names there, or `/`
-//!   when it names none or names no folder;
-//! - in a session of its own (`setsid` before `exec`), with its standard input from
-//!   `/dev/null` and its standard error thrown away, so that it can neither take a terminal
-//!   nor wait for a key;
-//! - for at most [`LoginShell::deadline`] of real time, counted from its start: past it, its
-//!   whole process group is killed (`kill(-pid, SIGKILL)`) and reaped, and the take has
-//!   failed with [`ShellError::Deadline`];
-//! - never for longer than its caller wants: [`ShellGroup::end`] kills the group of a shell
-//!   still running, and on Linux the kernel kills the shell when the thread that started it
-//!   ends (`PR_SET_PDEATHSIG`, with the parent checked with `getppid` after the request, so
-//!   that a parent already gone ends the child at once).
-//!
-//! Two threads read what the shell leaves: one reads its standard output to the end, and one
-//! waits for the shell and reaps it, while the caller waits on that thread's channel for what
-//! is left of the deadline. Once the shell has exited, its whole process group is killed at
-//! once (an error of "no such process" being none): a job a start-up file left in the
-//! background would otherwise hold the pipe open, and the read would wait for it. The rest of
-//! the output is then awaited only within what is left of the deadline; past it the take fails
-//! with the deadline.
-//!
-//! [`COMMAND`] prints [`MARKER`] and then has `env -0` print every variable, each `NAME=value`
-//! and a NUL. Whatever a start-up file printed before is noise and is dropped: the variables
-//! are what follows the last [`MARKER`] of the standard output. Each is split at its first `=`;
-//! one with no `=` or an empty name is dropped.
-//!
-//! # What the caller gets
-//!
-//! `base` first: a variable `base` has keeps `base`'s value, so that a program started from a
-//! shell of a project's own setup (a `nix develop`, a `direnv` folder, a Python virtual
-//! environment) keeps that setup. Every variable the shell printed that `base` lacks is added;
-//! but `PWD`, `OLDPWD`, `SHLVL` and `_`, which describe the shell's run and not the user's
-//! setup, are never taken from the shell. `PATH` is the one merged: `base`'s entries, in their
-//! order, then each entry of the shell's `PATH` that `base`'s does not hold, in the shell's
-//! order. A program started from the Finder or the Dock has the system's short path and few
-//! variables, and so gains the folders and the variables of the user's start-up files.
-//!
-//! # When it fails
-//!
-//! A shell that cannot be started, ends with a status other than 0, prints no [`MARKER`], or
-//! outlives its deadline gives a [`ShellError`]; the caller keeps its own environment and says
-//! why in one line of its standard error. Nobody tries again.
-//!
-//! A test hands a shell of its own making (a script that records its arguments, prints what
-//! the test wants and then runs the command it was given with `/bin/sh -c`), never the user's,
-//! and a `HOME` in its scratch folder.
-//!
-//! This module is the Navigator's `shell.rs` of slice 9 moved here, so that the Keeper takes
-//! the same environment by the same rules; the Navigator keeps its names by re-exporting
-//! these.
+//! The user's login shell, run once for its environment, for a program the system started with its
+//! own short search path (Finder, Dock, desktop menu).
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -77,47 +13,32 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-/// How long the user's login shell may take to print its environment: ten seconds, a slow
-/// start-up file's time and more.
 pub const SHELL_DEADLINE: Duration = Duration::from_secs(10);
 
-/// What the shell prints before the variables, so that what its start-up files printed
-/// before can be told from them.
+/// Printed before the variables: start-up files may print too, only what follows the last marker
+/// counts.
 pub const MARKER: &str = "yaar-environment-follows";
 
-/// The command the shell is told to run.
 pub const COMMAND: &str = "printf '%s' 'yaar-environment-follows'; exec env -0";
 
-/// The variables that describe the shell's own run, not the user's setup: never taken from
-/// the shell.
+/// Variables that describe the shell's own run, not the user's setup: never taken from the shell.
 const NOT_TAKEN: [&str; 4] = ["PWD", "OLDPWD", "SHLVL", "_"];
 
-/// The user's login shell, run once for its environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginShell {
-    /// The shell: [`crate::user_shell`] for the programs, a script of its own for a test.
     pub program: PathBuf,
-    /// How long it may take: [`SHELL_DEADLINE`] for the programs.
     pub deadline: Duration,
 }
 
-/// Why the shell gave no environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellError {
-    /// It could not be started.
     Start(String),
-    /// It ended with this status, or by a signal (none).
     Status(Option<i32>),
-    /// Its output held no [`MARKER`].
     NoMarker,
-    /// It ran past its deadline and was killed.
     Deadline(Duration),
 }
 
 impl fmt::Display for ShellError {
-    /// One sentence a program writes after its own name: "it could not be started: …", "it
-    /// ended with status 3", "it was ended by a signal", "it printed no environment", "it
-    /// took longer than 10 s".
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Start(why) => write!(f, "it could not be started: {why}"),
@@ -129,19 +50,16 @@ impl fmt::Display for ShellError {
     }
 }
 
-/// The process group of a shell [`take_in`] runs, while it runs: what its caller kills when
-/// it ends first. Cheap to clone; every clone names the same shell.
+/// The process group of a shell [`take_in`] runs: what the caller kills when it ends first.
+/// Clones name the same shell.
 #[derive(Debug, Clone, Default)]
 pub struct ShellGroup(Arc<AtomicI32>);
 
 impl ShellGroup {
-    /// No shell yet.
     const NONE: i32 = 0;
     /// The caller ended: a shell started after this is killed as it starts.
     const ENDED: i32 = -1;
 
-    /// Notes that the shell's group is `group`; kills it at once when the caller has
-    /// ended already.
     fn started(&self, group: libc::pid_t) {
         if self
             .0
@@ -161,9 +79,6 @@ impl ShellGroup {
             });
     }
 
-    /// Kills the whole process group of the shell that runs now, and makes a shell that
-    /// [`take_in`] starts after this call be killed at its start. Does nothing more when no
-    /// shell runs.
     pub fn end(&self) {
         let held = self.0.swap(Self::ENDED, Ordering::SeqCst);
         if held > Self::NONE {
@@ -172,8 +87,9 @@ impl ShellGroup {
     }
 }
 
-/// Runs `shell` once, as the module doc says, in the environment `base`, and gives `base`
-/// with what the shell printed merged in, as the module doc says.
+/// `base`'s values win, so a project's own setup (nix, direnv, a virtual environment) stays. `PATH`
+/// is `base`'s entries, then the shell's entries it lacks. An error leaves the caller its own
+/// environment; nobody retries.
 pub fn take(
     shell: &LoginShell,
     base: &[(OsString, OsString)],
@@ -181,7 +97,6 @@ pub fn take(
     take_in(shell, base, &ShellGroup::default())
 }
 
-/// [`take`], noting the shell's process group in `group` while it runs.
 pub fn take_in(
     shell: &LoginShell,
     base: &[(OsString, OsString)],
@@ -213,16 +128,16 @@ pub fn take_in(
             if libc::setsid() == -1 {
                 return Err(std::io::Error::last_os_error());
             }
-            // On Linux the kernel kills the shell when the thread that started it ends, so
-            // that a program that dies leaves no shell behind. The thread outlives the
-            // shell: it returns once the shell is reaped.
+            // On Linux the kernel kills the shell when the thread that started it ends, so a
+            // program that dies leaves no shell behind; that thread returns only once the shell is
+            // reaped.
             #[cfg(target_os = "linux")]
             {
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                // The parent may have ended before the request took effect: its signal
-                // would never come.
+                // The parent may have ended before the request took effect: its signal would never
+                // come.
                 if libc::getppid() != parent {
                     libc::_exit(1);
                 }
@@ -266,9 +181,8 @@ pub fn take_in(
     let ended = match status.recv_timeout(left(Instant::now())) {
         Ok(ended) => ended,
         Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
-            // Past its deadline: the whole group goes, and the wait returns once it is
-            // reaped. The reading thread ends by itself when every holder of the pipe is
-            // gone.
+            // Past the deadline the whole group goes; the reading thread ends once every holder of
+            // the pipe is gone.
             kill_group(id);
             let _ = status.recv();
             group.reaped();
@@ -282,8 +196,8 @@ pub fn take_in(
     if !ended.success() {
         return Err(ShellError::Status(ended.code()));
     }
-    // A process that left the group (a session of its own) may still hold the pipe: the
-    // deadline bounds the wait for the rest of the output.
+    // A process that left the group (a session of its own) may still hold the pipe: the deadline
+    // bounds the wait for the rest of the output.
     let bytes = match output.recv_timeout(left(Instant::now())) {
         Ok(bytes) => bytes,
         Err(_) => return Err(ShellError::Deadline(shell.deadline)),
@@ -292,16 +206,12 @@ pub fn take_in(
     Ok(merge(base, &printed))
 }
 
-/// Kills every process of the process group `group`. A group that is gone is no error.
 fn kill_group(group: libc::pid_t) {
     // SAFETY: a signal to the group of a process this function's caller started; a group
     // that no longer exists answers `ESRCH`, which is no fault.
     let _ = unsafe { libc::kill(-group, libc::SIGKILL) };
 }
 
-/// The variables the shell printed: what follows the last [`MARKER`] of `output`, each
-/// `NAME=value` ended by a NUL, split at the first `=`. An entry with no `=` or with an
-/// empty name is dropped. None when `output` holds no marker.
 fn printed_after_marker(output: &[u8]) -> Option<Vec<(OsString, OsString)>> {
     let marker = MARKER.as_bytes();
     let at = output
@@ -327,8 +237,6 @@ fn printed_after_marker(output: &[u8]) -> Option<Vec<(OsString, OsString)>> {
     )
 }
 
-/// `base` with the variables of `printed` it lacks added, but the ones of [`NOT_TAKEN`],
-/// and its `PATH` followed by the entries of the printed one it does not hold.
 fn merge(
     base: &[(OsString, OsString)],
     printed: &[(OsString, OsString)],
@@ -357,8 +265,6 @@ fn merge(
     merged
 }
 
-/// The search path of an environment: its `PATH`, split as `std::env::split_paths` splits it;
-/// none where it has no `PATH`.
 pub fn search_path(environment: &[(OsString, OsString)]) -> Vec<PathBuf> {
     environment
         .iter()
@@ -403,7 +309,6 @@ mod tests {
             ]),
         );
         assert_eq!(merged, variables(&[("A", "1"), ("B", "2")]));
-        // The base's own value of one of them stays.
         let merged = merge(
             &variables(&[("PWD", "/mine")]),
             &variables(&[("PWD", "/p")]),
@@ -437,7 +342,6 @@ mod tests {
         let mut output = b"noise\n".to_vec();
         output.extend_from_slice(MARKER.as_bytes());
         output.extend_from_slice(b"stale=1\0");
-        // A start-up file that printed the marker too: only what follows the last counts.
         output.extend_from_slice(MARKER.as_bytes());
         output.extend_from_slice(b"A=1\0NOEQUALS\0=x\0B=two=parts\0C=\0multi=line\nvalue\0");
         let printed = printed_after_marker(&output).expect("a marker");

@@ -1,27 +1,17 @@
-//! The shared model of the questions for leave: an Adapter that writes into the user's own
-//! settings of its CLI only with the user's yes, and how that stands.
-//!
-//! The Keeper tells a Window `Fact::ConsentsChanged` when the Window first asks it something,
-//! before it answers that request, if a question waits for an answer or an Adapter could
-//! not change its CLI's settings, and every Window after each answer. The model asks nothing when the link connects: a Window told nothing has
-//! nothing to ask, but for the settings screen, which asks the whole list when it opens
-//! ([`ConsentList::refresh`]). The terminal pane draws the questions and sends the user's answers
-//! through it; it names no CLI, and shows each question in the Adapter's own words.
+//! The questions for leave: an Adapter writes into its CLI's own settings only with the user's yes.
+//! Nothing is asked at connect; the settings screen asks the whole list when it opens (`refresh`).
 
 use gpui_kit::*;
 use yaar_link::{Consent, ConsentAnswer, Fact, Reply, Request};
 
 use crate::link_model::{AskError, KeeperLink};
 
-/// The Adapters that need the user's leave, as the Keeper last told or answered them.
 pub struct ConsentList {
     link: Entity<KeeperLink>,
-    /// What the Keeper last told or answered, in the order of its Adapters.
     consents: Vec<Consent>,
 }
 
 impl ConsentList {
-    /// The list of one window, fed by `link`: empty until the Keeper tells it one.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
         cx.subscribe(&link, |list, _, fact: &Fact, cx| {
             if let Fact::ConsentsChanged(consents) = fact {
@@ -35,7 +25,6 @@ impl ConsentList {
         }
     }
 
-    /// Takes what the Keeper told or answered: it replaces the whole list.
     fn take(&mut self, consents: Vec<Consent>, cx: &mut Context<Self>) {
         if consents != self.consents {
             self.consents = consents;
@@ -43,8 +32,6 @@ impl ConsentList {
         }
     }
 
-    /// The questions to show: each consent not answered, or whose CLI's settings could not
-    /// be changed, in the order of the Adapters. Empty when nothing waits.
     pub fn asked(&self) -> Vec<Consent> {
         self.consents
             .iter()
@@ -55,13 +42,8 @@ impl ConsentList {
             .collect()
     }
 
-    /// Asks the Keeper for the whole list, answered or not, and takes what it answers: the
-    /// settings screen asks it at each opening, since the Keeper tells a Window an Adapter
-    /// only while a question waits or something went wrong, so that an answer given long ago
-    /// is in no Window that started since. The task resolves once the list is taken, or to
-    /// the Keeper's refusal or the loss of the connection, and the list stays as it was. The
-    /// task is the caller's to keep: a dropped one stops waiting, though the request stays
-    /// sent.
+    /// The Keeper tells a Window an Adapter only while a question waits or something went wrong, so
+    /// this asks the whole list. A dropped task stops waiting, though the request stays sent.
     pub fn refresh(&mut self, cx: &mut Context<Self>) -> Task<Result<(), AskError>> {
         let listed = self
             .link
@@ -75,18 +57,10 @@ impl ConsentList {
         })
     }
 
-    /// Every Adapter the Keeper last told or answered, answered or not, in the order of its
-    /// Adapters: what the settings screen lists, so that an answer given once can be changed.
-    /// Empty until the Keeper tells a list, which it does when a question waits or after an
-    /// answer, or until [`ConsentList::refresh`] asks for it.
     pub fn all(&self) -> &[Consent] {
         &self.consents
     }
 
-    /// Sends `answer` for the Adapter named `agent` alone, whatever it was before, and takes
-    /// the list the Keeper answers with. The task resolves once the list is taken, or to the
-    /// Keeper's refusal or the loss of the connection. The task is the caller's to keep: a
-    /// dropped one stops waiting, though the request stays sent.
     pub fn answer(
         &mut self,
         agent: String,
@@ -96,21 +70,9 @@ impl ConsentList {
         self.send_answer(agent, answer, cx)
     }
 
-    /// Sends `answer` for every Adapter that needs leave: for those [`ConsentList::asked`]
-    /// shows while it shows any, else for every Adapter the Keeper lists, asked with
-    /// `Request::ListConsents` first, so that the answer can be changed once the question
-    /// is gone. Each `Request::AnswerConsent` is answered with the list, which replaces this
-    /// one.
-    ///
-    /// The requests for the questions shown are handed to the link before this returns, in
-    /// the order of the Adapters; the question for the list too. The task resolves to
-    /// whether an answer was sent: false, with nothing sent but the question for the list,
-    /// when the Keeper lists no Adapter that needs leave, which the caller says. It resolves
-    /// to the first refusal the Keeper gave or the loss of the connection. For the questions
-    /// shown every answer is still awaited, so that the list each one brings is taken; after
-    /// the question for the list, a failure ends it and no more is sent. The task is the
-    /// caller's to keep: a dropped one stops asking, though what was handed to the link stays
-    /// sent.
+    /// Answers the Adapters `asked` shows, or when none show, every one the Keeper lists, so an
+    /// answer can be changed later; true when an answer was sent. Shown ones are all sent and the
+    /// first refusal returned; for listed ones the first failure stops the rest.
     pub fn answer_all(
         &mut self,
         answer: ConsentAnswer,
@@ -129,7 +91,6 @@ impl ConsentList {
                 list.update(cx, |list, cx| list.take(consents, cx)).ok();
                 let mut sent = false;
                 for agent in agents {
-                    // A list that is gone has no one left to answer for.
                     let Ok(asked) = list.update(cx, |list, cx| list.send_answer(agent, answer, cx))
                     else {
                         return Err(AskError::NotLinked);
@@ -145,8 +106,8 @@ impl ConsentList {
             .map(|consent| self.send_answer(consent.agent, answer, cx))
             .collect();
         cx.spawn(async move |_, _| {
-            // Every answer is awaited, so that the list each one brings is taken, and the
-            // first refusal is the one given back.
+            // Every answer is awaited so that the list each brings is taken; the first refusal is
+            // returned.
             let mut refused = None;
             for asked in asked {
                 if let Err(error) = asked.await {
@@ -157,8 +118,6 @@ impl ConsentList {
         })
     }
 
-    /// Hands the link the answer to one Adapter's question. The task takes the list the
-    /// Keeper answers with, and resolves once it is taken.
     fn send_answer(
         &mut self,
         agent: String,

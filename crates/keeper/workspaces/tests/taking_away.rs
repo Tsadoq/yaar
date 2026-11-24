@@ -1,8 +1,3 @@
-//! Component tests: a worktree the app made is taken away again, by the calls the Keeper
-//! makes, in real repositories the tests make and with a real database. What the Workspaces
-//! hold of a worktree (its watcher, the git it keeps) is let go only once the worktree is
-//! gone, and a take-away that fails after a failed opening is noted and not dropped.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -11,8 +6,6 @@ use std::process::Command;
 use support::{Heard, Scratch, commit_all, git, init, program, workspaces, write};
 use yaar_workspaces::{Created, RepositoryId, WorkspaceError, Workspaces};
 
-/// A repository `lair/repo` with `main` at one commit, opened, in a scratch folder whose
-/// database is the Keeper's.
 struct World {
     scratch: Scratch,
     repo: PathBuf,
@@ -41,8 +34,8 @@ fn world() -> World {
     }
 }
 
-/// A `post-checkout` hook, run by git once a worktree is made, that locks the worktree it
-/// runs in: git then refuses to remove it, as it does for a user's own lock.
+/// A `post-checkout` hook that locks the worktree it runs in: git then refuses to remove it, as for
+/// a user's own lock.
 fn lock_what_is_made(world: &World) {
     program(
         &world.repo.join(".git/hooks/post-checkout"),
@@ -51,7 +44,6 @@ fn lock_what_is_made(world: &World) {
 }
 
 impl World {
-    /// `plan_worktree`, `add` and `open_added`, as the Keeper calls them.
     fn create(&self, branch: &str) -> Created {
         let planned = self
             .workspaces
@@ -61,7 +53,6 @@ impl World {
         self.workspaces.open_added(&planned, added).expect("open")
     }
 
-    /// Lifts the lock the hook put on the worktree, so that it can be taken away.
     fn unlock(&self, created: &Created) {
         git(
             &self.repo,
@@ -78,9 +69,8 @@ impl World {
     }
 }
 
-/// What taking a worktree away must leave as it found it: the seven reads of the
-/// repository, its objects with their sizes, and every name below the scratch folder but
-/// the database and the home.
+/// What taking a worktree away must leave as it found it: the seven reads of the repository, its
+/// objects with their sizes, and every name below the scratch folder but the database and the home.
 #[derive(Debug, PartialEq, Eq)]
 struct Snapshot {
     reads: Vec<Vec<u8>>,
@@ -88,8 +78,8 @@ struct Snapshot {
     listing: Vec<(PathBuf, char)>,
 }
 
-/// What a read of git prints, with its exit code, and no optional lock: a read never
-/// rewrites the index of a repository committed to in the same second.
+/// / What a read of git prints, with its exit code. No optional lock: a read never rewrites the
+/// / index of a repository committed to in the same second.
 fn read_git(repo: &Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
         .arg("-C")
@@ -104,8 +94,8 @@ fn read_git(repo: &Path, args: &[&str]) -> Vec<u8> {
     all
 }
 
-/// Every name below `folder`, with a letter for its kind (`l` link, `d` folder, `f` file),
-/// relative to `below`; the names of the top level in `skipping` are left out.
+/// / Every name below `folder`, relative to `below`, with a letter for its kind (`l` link,
+/// / `d` folder, `f` file); top-level names in `skipping` are left out.
 fn walk(folder: &Path, below: &Path, skipping: &[&str], found: &mut Vec<(PathBuf, char)>) {
     for entry in std::fs::read_dir(folder).expect("read the folder") {
         let path = entry.expect("an entry").path();
@@ -178,7 +168,6 @@ fn snapshot(scratch: &Scratch, repo: &Path) -> Snapshot {
     }
 }
 
-/// The ids of the workspaces the repository lists now, by the Workspaces' own listing.
 fn listed_folders(world: &World) -> Vec<PathBuf> {
     world
         .workspaces
@@ -232,15 +221,12 @@ fn a_worktree_that_cannot_be_taken_away_stays_watched_and_listed_until_it_is_tak
         .watch(&created.workspace, heard.told())
         .expect("watch");
 
-    // The worktree the Workspaces keep for the workspace, with the git process that goes
-    // with it.
     let kept = world
         .workspaces
         .worktree(&created.workspace)
         .expect("read the worktree")
         .expect("a worktree that is there");
 
-    // The user's own lock stops git: the worktree is there, so it is not forgotten.
     let refused = world.workspaces.remove_created(&created);
     assert!(
         matches!(refused, Err(WorkspaceError::Git(_))),
@@ -272,7 +258,6 @@ fn a_worktree_that_cannot_be_taken_away_stays_watched_and_listed_until_it_is_tak
         "and its changes can still be read"
     );
 
-    // Once the lock is lifted the same call takes it away and lets go of what it held.
     world.unlock(&created);
     world
         .workspaces
@@ -283,19 +268,14 @@ fn a_worktree_that_cannot_be_taken_away_stays_watched_and_listed_until_it_is_tak
     assert_eq!(world.snapshot(), before);
 }
 
-/// The test that runs in the child process, which is this program run again for one test.
 const CHILD: &str = "YAAR_TAKING_AWAY_IN_THE_CHILD";
 
-/// What the child does: the opening of a worktree fails because the branch it was made
-/// from is gone, and the take-away that follows fails too, because the user's hook locked
-/// the worktree it made.
 fn opening_fails_and_so_does_the_take_away() {
     let world = world();
     lock_what_is_made(&world);
-    // The test deletes branches below, and git 2.43 leaves a `packed-refs` with only its
-    // header in a repository where a branch that was never packed is deleted, which newer
-    // git does not. A branch made and deleted here has the file there before the snapshot
-    // whichever git runs, so the snapshot shows what the creation and the take-away did.
+    // git 2.43 leaves a `packed-refs` with only its header when a never-packed branch is deleted,
+    // newer git does not. Making and deleting a branch here puts the file there before the
+    // snapshot, whichever git runs.
     git(&world.repo, &["branch", "spare"]);
     git(&world.repo, &["branch", "-D", "spare"]);
     git(&world.repo, &["branch", "side"]);
@@ -307,7 +287,6 @@ fn opening_fails_and_so_does_the_take_away() {
     let added = planned.add().expect("add");
     git(&world.repo, &["branch", "-D", "side"]);
 
-    // The failure that led here is what the caller is given.
     let outcome = world.workspaces.open_added(&planned, added);
     assert!(
         matches!(
@@ -317,7 +296,6 @@ fn opening_fails_and_so_does_the_take_away() {
         ),
         "{outcome:?}"
     );
-    // The take-away failed, so the worktree stays.
     assert!(planned.folder().is_dir());
     assert!(
         listed_folders(&world).contains(&planned.folder().to_owned()),
@@ -325,15 +303,11 @@ fn opening_fails_and_so_does_the_take_away() {
         listed_folders(&world)
     );
 
-    // The scratch is left as it was found: the lock lifted, the worktree and its branch
-    // taken away.
     let folder = planned.folder().to_str().expect("a path of text");
     git(&world.repo, &["worktree", "unlock", folder]);
     git(&world.repo, &["worktree", "remove", "--force", folder]);
     git(&world.repo, &["branch", "-D", "task"]);
     git(&world.repo, &["branch", "side"]);
-    // The folder the add made for the worktree is the creation's to take away, and it
-    // could not be.
     std::fs::remove_dir(planned.folder().parent().expect("the folder above"))
         .expect("the folder the add made");
     assert_eq!(world.snapshot(), before);
@@ -345,8 +319,8 @@ fn a_take_away_that_fails_after_a_failed_opening_is_noted_on_the_error_output() 
         opening_fails_and_so_does_the_take_away();
         return;
     }
-    // The error output of a program is what the note is written to, so this test is run
-    // again as a program of its own and its error output is read.
+    // The error output of a program is what the note is written to, so this test is run again as a
+    // program of its own and its error output is read.
     let ran = Command::new(std::env::current_exe().expect("this program"))
         .args([
             "--exact",

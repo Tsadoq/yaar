@@ -1,6 +1,3 @@
-//! Component tests: the changed paths and the contents of files, read through the surface
-//! the rest of the Keeper uses, in real repositories the tests make.
-
 mod support;
 
 use std::os::unix::ffi::OsStrExt;
@@ -32,7 +29,6 @@ fn renamed(path: &str, from: &str) -> ChangedPath {
     )
 }
 
-/// The fields of an answer git ends with zero bytes.
 fn fields(answer: &[u8]) -> Vec<&[u8]> {
     answer
         .split(|byte| *byte == 0)
@@ -44,9 +40,8 @@ fn path_of(bytes: &[u8]) -> PathBuf {
     PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
 }
 
-/// What git itself says differs between `since` and the worktree: its diff of the
-/// commit against the files, with its pairing of renames, and the files it lists as
-/// untracked. Read by the test's own run of git, ordered as git orders paths.
+/// Git's own diff of the commit against the files, with its rename pairing, plus the files it lists
+/// as untracked, ordered as git orders paths.
 fn gits_own_changes(repo: &Path, since: &str) -> Vec<ChangedPath> {
     let mut all = Vec::new();
     let diff = git_bytes(repo, &["diff", "--name-status", "-z", "-M", since]);
@@ -86,7 +81,6 @@ fn gits_own_changes(repo: &Path, since: &str) -> Vec<ChangedPath> {
     all
 }
 
-/// The id git gives the content of each side of each path its diff lists: old then new.
 /// The new id is all zeros where the file on disk is not what the index holds.
 fn gits_own_blobs(repo: &Path, since: &str) -> Vec<(PathBuf, String, String)> {
     let raw = git_bytes(repo, &["diff", "--raw", "-z", "--no-abbrev", "-M", since]);
@@ -105,15 +99,13 @@ fn gits_own_blobs(repo: &Path, since: &str) -> Vec<(PathBuf, String, String)> {
     blobs
 }
 
-/// The id git would give this content.
 fn blob_id(repo: &Path, content: &[u8]) -> String {
     git_with_input(repo, &["hash-object", "--stdin"], content)
 }
 
-// WS-01. The test repository has no `autocrlf` and no clean filter. With either, the app
-// shows differences git's own diff would not: the new side of a file is its bytes on
-// disk, read as they are, because running the filters would run programs the
-// configuration names.
+// The repository has no `autocrlf` and no clean filter. With either, the app differs from
+// git's diff: the new side is the bytes on disk as they are, since running the filters
+// would run programs the configuration names.
 #[test]
 fn the_changes_since_the_fork_point_are_those_of_gits_own_diff_with_what_is_uncommitted_and_untracked()
  {
@@ -139,16 +131,14 @@ fn the_changes_since_the_fork_point_are_those_of_gits_own_diff_with_what_is_unco
     write(&repo, "added.txt", "new on the branch\n");
     commit_all(&repo, "work on the branch");
 
-    // The base moves on after the branch left it: counted from its tip, `kept.txt`
-    // would show as changed and `main-only.txt` as deleted.
+    // The base moves on after the branch left it: counted from its tip, `kept.txt` would show as
+    // changed and `main-only.txt` as deleted.
     git(&repo, &["switch", "--quiet", "main"]);
     write(&repo, "kept.txt", "kept, and changed on main\n");
     write(&repo, "main-only.txt", "never on the branch\n");
     let main = commit_all(&repo, "main moves on");
     git(&repo, &["switch", "--quiet", "feat"]);
 
-    // Not committed: an edit that is not staged, a new file that is, two files git does
-    // not track, and one it ignores.
     write(&repo, "notes.txt", "a note, edited\n");
     write(&repo, "staged.txt", "staged\n");
     git(&repo, &["add", "staged.txt"]);
@@ -166,7 +156,6 @@ fn the_changes_since_the_fork_point_are_those_of_gits_own_diff_with_what_is_unco
     assert_eq!(fork.as_str(), git(&repo, &["merge-base", "HEAD", "main"]));
     assert_ne!(fork, base, "the base moved on after the branch left it");
 
-    // The paths: written out by hand, and the same as git's own.
     let paths = worktree.changed_paths(Some(&fork)).expect("changed paths");
     assert_eq!(
         paths,
@@ -175,7 +164,7 @@ fn the_changes_since_the_fork_point_are_those_of_gits_own_diff_with_what_is_unco
             changed("edited.txt", Change::Modified),
             changed("gone.txt", Change::Deleted),
             renamed("new-name.txt", "old-name.txt"),
-            // Ordered as git orders paths, byte by byte: `.` comes before `/`.
+            // Byte order: `.` comes before `/`.
             changed("notes.txt", Change::Modified),
             changed("notes/todo.md", Change::Added),
             changed("staged.txt", Change::Added),
@@ -184,8 +173,6 @@ fn the_changes_since_the_fork_point_are_those_of_gits_own_diff_with_what_is_unco
     );
     assert_eq!(paths, gits_own_changes(&repo, fork.as_str()));
 
-    // The contents. The old side is the file in the fork point, under the path it had
-    // there; the new side is the file on disk.
     let blobs = gits_own_blobs(&repo, fork.as_str());
     for entry in &paths {
         let old_path = match &entry.change {
@@ -202,11 +189,8 @@ fn the_changes_since_the_fork_point_are_those_of_gits_own_diff_with_what_is_unco
             assert_eq!(new, &on_disk, "{entry:?}");
         }
 
-        // The same contents as git's own diff has: it names each side by the id of its
-        // content.
         let listed = blobs.iter().find(|(path, _, _)| path == &entry.path);
         let Some((_, old_id, new_id)) = listed else {
-            // git's diff does not hold what it does not track.
             assert!(["untracked.txt", "notes/todo.md"].contains(&entry.path.to_str().unwrap()));
             continue;
         };
@@ -223,7 +207,6 @@ fn the_changes_since_the_fork_point_are_those_of_gits_own_diff_with_what_is_unco
         }
     }
 
-    // And the old sides say what was written above, not only what git agrees with.
     let old = |path: &str| {
         worktree
             .content_at(&fork, Path::new(path))
@@ -277,8 +260,7 @@ fn a_file_that_was_only_touched_is_no_change_and_gits_list_of_the_files_is_left_
     assert_eq!(worktree.changed_paths(Some(&head)).expect("paths"), vec![]);
     assert_eq!(std::fs::read(&index).expect("read the index"), before);
 
-    // The same question, asked as the user's git asks it, does rewrite the list: that
-    // is what the call above must not do.
+    // The user's own git does rewrite the list: that is what the call above must not do.
     assert_eq!(git(&repo, &["diff", "--name-status", head.as_str()]), "");
     assert_ne!(std::fs::read(&index).expect("read the index"), before);
 }
@@ -294,10 +276,9 @@ fn no_hook_and_no_monitor_of_the_user_runs_when_the_changes_are_read() {
     // Opened before the user defines any of them, as a Keeper that runs for days has.
     let worktree = open(&repo);
 
-    // Three programs of the user that git starts when it reads the files and brings its
-    // list of them up to date: a hook in the hooks folder, a hook the configuration
-    // defines (git 2.54 and later; an older git knows no such hook), and a monitor of
-    // the file system. Each writes its name down when it runs.
+    // Programs git starts when it reads the files and refreshes its list: a hook in the hooks
+    // folder, a configured hook (git 2.54 and later), and a file-system monitor. Each writes its
+    // name when it runs.
     let ran = scratch.join("ran");
     let note = |name: &str| format!("echo {name} >> '{}'", ran.display());
     program(&repo.join(".git/hooks/post-index-change"), &note("hook"));
@@ -325,7 +306,7 @@ fn no_hook_and_no_monitor_of_the_user_runs_when_the_changes_are_read() {
     assert_eq!(worktree.changed_paths(None).expect("paths").len(), 1);
     assert!(!ran.exists(), "ran: {:?}", std::fs::read_to_string(&ran));
 
-    // The same reading by the user's own git starts them: they were there to be run.
+    // The user's own git starts them: they were there to be run.
     git(&repo, &["diff", "--name-status", head.as_str()]);
     let ran = std::fs::read_to_string(&ran).expect("the programs ran");
     assert!(
@@ -368,7 +349,6 @@ fn a_link_is_read_as_the_path_it_points_at_and_is_not_followed() {
         Some(b"target.txt".to_vec())
     );
 
-    // Pointed at a file outside the worktree, it is still its own words.
     write(
         scratch.path(),
         "outside/secret.txt",
@@ -424,7 +404,6 @@ fn a_path_that_leads_out_of_the_worktree_holds_no_file() {
             "{path:?}"
         );
     }
-    // A way of writing the path that stays inside is the path.
     assert_eq!(
         worktree
             .content_on_disk(Path::new("./inside.txt"))
@@ -456,7 +435,6 @@ fn a_repository_inside_the_worktree_is_one_path_and_is_not_looked_into() {
         worktree.changed_paths(Some(&head)).expect("paths"),
         vec![changed("vendor/inner", Change::Added)]
     );
-    // The path is a folder: there is no file to read on either side.
     assert_eq!(
         worktree
             .content_on_disk(Path::new("vendor/inner"))
@@ -469,7 +447,6 @@ fn a_repository_inside_the_worktree_is_one_path_and_is_not_looked_into() {
             .expect("old"),
         None
     );
-    // A folder of the commit is no file either.
     write(&repo, "folder/b.txt", "b\n");
     git(&repo, &["add", "folder"]);
     let head = CommitId::new(commit_all(&repo, "a folder"));
@@ -518,7 +495,6 @@ fn a_path_with_a_space_a_quote_and_a_line_feed_is_read_as_it_is_with(scratch: &S
         worktree.content_on_disk(Path::new(odd)).expect("new"),
         Some(b"after\n".to_vec())
     );
-    // A name with a line feed that the commit lacks is told apart from one it has.
     assert_eq!(
         worktree
             .content_at(&head, Path::new("also new\n.txt"))
@@ -563,7 +539,6 @@ fn a_path_that_ends_in_a_carriage_return_is_read_as_it_is_with(scratch: &Scratch
             .expect("without"),
         Some(b"without\n".to_vec())
     );
-    // A name that is not there is told apart from the one that is, with the return too.
     assert_eq!(
         worktree
             .content_at(&head, Path::new("nothing\r"))
@@ -606,15 +581,14 @@ fn a_commit_git_does_not_know_and_a_path_the_commit_lacks_both_give_no_content_w
             .expect("old"),
         None
     );
-    // `resolve` tells the two apart.
     assert_eq!(
         worktree.resolve(head.as_str()).expect("resolve"),
         Some(head.clone())
     );
     assert_eq!(worktree.resolve(unknown.as_str()).expect("resolve"), None);
 
-    // A commit is named by its full id here: any other name is a commit git does not
-    // know, even one git would understand.
+    // To `content_at` only a full commit id names a commit: any other name gives nothing, even
+    // one git would understand.
     assert_eq!(
         worktree
             .content_at(&CommitId::new("HEAD"), Path::new("a.txt"))
@@ -627,7 +601,6 @@ fn a_commit_git_does_not_know_and_a_path_the_commit_lacks_both_give_no_content_w
     );
 }
 
-/// The lines of the list that are starts of the process that hands out contents.
 fn content_processes(list: &Path) -> Vec<String> {
     std::fs::read_to_string(list)
         .unwrap_or_default()

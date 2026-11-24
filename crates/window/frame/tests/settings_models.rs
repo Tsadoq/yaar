@@ -1,15 +1,3 @@
-//! Component test: the Frame's models of slice 9, through what the panes and the settings
-//! screen use of them: the settings of each kind with its default, the folder for the
-//! worktrees of a repository and the Keeper's answer to a set, the stop time the model tells
-//! the Navigator, the one chosen agent CLI, the sizes of the recorded states, and a
-//! workspace put on screen before the list holds it.
-//!
-//! The test plays the Keeper on a socket pair and the Navigator at the model's port, with
-//! data: it answers what the models ask, tells facts, reads the asks the model really makes,
-//! and computes nothing either computes. A negative clause ("asks nothing", "tells nothing")
-//! is read after a barrier: a question or an ask the test causes next, which arrives after
-//! everything the model sent before it, through the one channel each of them leaves by.
-
 mod common;
 
 use std::cell::Cell;
@@ -61,7 +49,6 @@ fn cli(name: &str) -> AgentCli {
     }
 }
 
-/// Two worktrees of one repository.
 fn listed() -> Vec<Repository> {
     vec![repository(
         'a',
@@ -69,10 +56,8 @@ fn listed() -> Vec<Repository> {
     )]
 }
 
-/// The models of a window whose Keeper the test plays: `settings` and `clis` are what the
-/// Keeper holds when the Window reaches it. Every model has taken its answer, and the
-/// question for the changes of the workspace on screen, which the Frame asks by itself, is
-/// read and left unanswered.
+/// `settings` and `clis` are what the Keeper holds when the Window reaches it. The question for the
+/// changes of the workspace on screen is read and left unanswered.
 fn window(
     settings: Vec<Setting>,
     clis: Vec<AgentCli>,
@@ -99,9 +84,8 @@ fn window(
     (models, keeper)
 }
 
-/// A barrier: asks the Keeper for the list of workspaces again and gives every request
-/// the Window made up to that question, which is answered. What a model asked before it is
-/// among them, and nothing it asked after it is.
+/// A barrier: asks the Keeper for the list again and returns every request made before that
+/// question.
 fn barrier(models: &Models, keeper: &mut KeeperEnd, cx: &mut TestAppContext) -> Vec<Request> {
     models.workspaces.update(cx, |list, cx| list.refresh(cx));
     let mut before = Vec::new();
@@ -127,8 +111,6 @@ fn sizes(workspaces: &[(char, u64)], total: u64) -> StateSizes {
         total,
     }
 }
-
-// The settings of each kind.
 
 #[gpui_kit::test]
 fn each_reader_gives_its_default_while_nothing_is_set(cx: &mut TestAppContext) {
@@ -279,7 +261,6 @@ fn a_folder_set_and_answered_is_held_at_once_sent_and_given_ok_on_done(cx: &mut 
 
     assert_eq!(answer(task, cx), Ok(()));
     assert_eq!(keeper.settings_set(), [setting]);
-    // A kept setting is no reason to ask the list again.
     barrier(&models, &mut keeper, cx);
     assert_eq!(keeper.settings_asked(), 1);
 }
@@ -342,8 +323,6 @@ fn a_set_with_no_keeper_to_reach_gives_the_sentence_that_it_was_not_kept(cx: &mu
 fn an_answer_that_is_no_answer_to_a_set_gives_the_sentence_that_it_was_not_kept(
     cx: &mut TestAppContext,
 ) {
-    // A Keeper that answers every request but the question for the settings with a list of
-    // workspaces.
     cx.executor().allow_parking();
     let (ours, theirs) = UnixStream::pair().expect("a socket pair");
     let mut reading = ours.try_clone().expect("a second handle");
@@ -384,18 +363,12 @@ fn an_answer_that_is_no_answer_to_a_set_gives_the_sentence_that_it_was_not_kept(
     assert_eq!(answer(task, cx), Err(NOT_KEPT.to_owned()));
 }
 
-// The stop time told to the Navigator.
-
-/// The Navigator, played by the test at the other end of the model's port.
 struct Navigator {
-    /// The asks, moved by a thread of this end's own from the port onto a channel the test
-    /// waits on while the app runs.
     asks: Receiver<Ask>,
     _told: async_channel::Sender<Told>,
 }
 
 impl Navigator {
-    /// Connects a new port to the model and keeps the Navigator's end.
     fn connect(models: &Models, cx: &mut TestAppContext) -> Navigator {
         // The asks are read by a real thread, which the test executor cannot see.
         cx.executor().allow_parking();
@@ -419,7 +392,6 @@ impl Navigator {
         }
     }
 
-    /// The next ask of the model, waited for with the app running.
     fn ask(&mut self, cx: &mut TestAppContext) -> Ask {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -435,13 +407,10 @@ impl Navigator {
         }
     }
 
-    /// The next ask, which has to be this one.
     fn expect(&mut self, wanted: Ask, cx: &mut TestAppContext) {
         assert_eq!(self.ask(cx), wanted);
     }
 
-    /// The first telling of a model: the workspaces, the one on screen and the answers on
-    /// repositories, which are given.
     fn first_telling(
         &mut self,
         on_screen: char,
@@ -459,8 +428,8 @@ impl Navigator {
     }
 }
 
-/// Puts the other workspace on screen: a barrier for the Navigator's asks, since the model
-/// tells it as its next ask and after everything it told before.
+/// Puts the other workspace on screen, a barrier for the Navigator's asks: the model tells the
+/// Navigator of it after everything it told before.
 fn move_on_screen(models: &Models, navigator: &mut Navigator, cx: &mut TestAppContext) {
     models
         .workspaces
@@ -490,13 +459,11 @@ fn a_value_the_list_holds_already_tells_the_navigator_nothing(cx: &mut TestAppCo
     let mut navigator = Navigator::connect(&models, cx);
     navigator.first_telling('1', cx);
 
-    // The Window's own set takes at once, and the Keeper's echo of it comes after.
     models
         .settings
         .update(cx, |list, cx| list.set(seconds(30), cx));
     navigator.expect(stop_after(30), cx);
     keeper.tell(Fact::SettingChanged(seconds(30)));
-    // Another kind of setting, then the same stop time again.
     keeper.tell(Fact::SettingChanged(Setting::Theme(ThemeChoice::System)));
     keeper.tell(Fact::SettingChanged(seconds(30)));
     keeper.tell(Fact::SettingChanged(Setting::KeepStates { days: 3 }));
@@ -506,8 +473,6 @@ fn a_value_the_list_holds_already_tells_the_navigator_nothing(cx: &mut TestAppCo
             .read_with(cx, |list, _| list.keep_states() == 3)
     });
 
-    // Everything above reached the model before the screen is moved, and its ask comes
-    // after every ask the model made before it.
     move_on_screen(&models, &mut navigator, cx);
 }
 
@@ -547,7 +512,6 @@ fn a_navigator_connected_with_a_stop_time_set_is_told_it_after_the_consents_each
     navigator.expect(stop_after(45), cx);
     move_on_screen(&models, &mut navigator, cx);
 
-    // A Navigator that replaces it is owed the time as well, which it was not told.
     let mut next = Navigator::connect(&models, cx);
     next.first_telling('2', cx);
     next.expect(stop_after(45), cx);
@@ -566,12 +530,8 @@ fn a_stop_time_the_keeper_refuses_is_followed_by_the_time_it_keeps(cx: &mut Test
         .settings
         .update(cx, |list, cx| list.set(seconds(90), cx));
     navigator.expect(stop_after(90), cx);
-    // The list is asked again, shows what the Keeper keeps, which is no stop time, and the
-    // Navigator runs on the default again.
     navigator.expect(stop_after(600), cx);
 }
-
-// The chosen agent CLI.
 
 #[gpui_kit::test]
 fn the_chosen_cli_is_the_first_until_moved_then_the_next_and_wraps(cx: &mut TestAppContext) {
@@ -641,9 +601,8 @@ fn the_choice_is_kept_by_name_across_a_new_list_and_falls_back_to_the_first_with
         .agents
         .update(cx, |list, cx| list.choose_next_cli(cx));
 
-    // The Keeper reached again names the CLIs in another order: the choice follows the name,
-    // which is neither the first nor where it stood before (index 1), so a choice kept by
-    // position, or one fallen back to the first, would give another CLI.
+    // The CLIs come in another order: a choice kept by position or reset to the first gives another
+    // CLI.
     let link = models.link.clone();
     let mut again = KeeperEnd::attach_staged(hello(), &link, cx, |keeper| {
         keeper.set_clis(vec![cli("other"), cli("claude"), cli("pi")]);
@@ -658,7 +617,6 @@ fn the_choice_is_kept_by_name_across_a_new_list_and_falls_back_to_the_first_with
         assert_eq!(list.chosen_cli(), Some(&cli("pi")), "kept by name");
     });
 
-    // Then one without it.
     let mut last = KeeperEnd::attach_staged(hello(), &link, cx, |keeper| {
         keeper.set_clis(vec![cli("claude"), cli("other")]);
     });
@@ -673,9 +631,6 @@ fn the_choice_is_kept_by_name_across_a_new_list_and_falls_back_to_the_first_with
     });
 }
 
-// The recorded states.
-
-/// How many of these requests ask for the sizes or for a clean-up.
 fn asked_for_sizes(requests: &[Request]) -> usize {
     requests
         .iter()
@@ -706,8 +661,6 @@ fn the_states_ask_nothing_by_themselves_and_a_deletion_before_the_first_question
     let (models, mut keeper) = window(Vec::new(), Vec::new(), cx);
     keeper.tell(Fact::StatesDeleted { workspace: id('1') });
 
-    // A fact told after it, which the Window takes after the deletion, since a Keeper's facts
-    // come in the order they were told: once it is taken, the deletion was.
     keeper.tell(Fact::SettingChanged(Setting::KeepStates { days: 3 }));
     wait_until(cx, "the fact told after the deletion", |cx| {
         models
@@ -748,8 +701,6 @@ fn of_two_questions_for_the_sizes_only_the_answer_to_the_last_counts(cx: &mut Te
     wait_until(cx, "the later answer", |cx| {
         states_sizes(&models, cx).is_some()
     });
-    // A problem the older answer would leave is read after a barrier: the Keeper's answer
-    // to it follows the older answer, on the one connection.
     keeper.reply(first, Ok(Reply::StateSizes(old)));
     barrier(&models, &mut keeper, cx);
     assert_eq!(states_sizes(&models, cx), Some(new));
@@ -793,7 +744,6 @@ fn a_clean_up_is_sent_while_it_waits_it_is_cleaning_and_its_sizes_are_taken(
     assert_eq!(states_sizes(&models, cx), Some(after));
     assert_eq!(problem(&models, cx), None);
 
-    // The sizes it left are kept in step with what is deleted next.
     keeper.tell(Fact::StatesDeleted { workspace: id('1') });
     keeper.expect(Request::GetStateSizes, cx);
 }
@@ -838,7 +788,6 @@ fn a_refusal_keeps_the_sizes_and_gives_its_sentence_until_the_next_answer(cx: &m
     );
     assert_eq!(states_sizes(&models, cx), Some(held), "the sizes kept");
 
-    // A clean-up that is refused ends its wait and says why.
     let refusal = Refusal::UnknownRevision {
         revision: "x".to_owned(),
     };
@@ -848,7 +797,6 @@ fn a_refusal_keeps_the_sizes_and_gives_its_sentence_until_the_next_answer(cx: &m
     wait_until(cx, "the clean-up's end", |cx| !cleaning(&models, cx));
     assert_eq!(problem(&models, cx), Some(refusal.to_string()));
 
-    // The next answer takes the sentence away.
     models.states.update(cx, |states, cx| states.refresh(cx));
     let asked = keeper.expect(Request::GetStateSizes, cx);
     keeper.reply(asked, Ok(Reply::StateSizes(sizes(&[], 0))));
@@ -880,8 +828,6 @@ fn a_deletion_told_while_a_clean_up_waits_has_the_later_question_count(cx: &mut 
     keeper.tell(Fact::StatesDeleted { workspace: id('1') });
     let asked_again = keeper.expect(Request::GetStateSizes, cx);
 
-    // The clean-up's answer comes after the question asked later: it ends the wait, and
-    // its sizes are not the last question's.
     let stale = sizes(&[('1', 1)], 1);
     keeper.reply(cleaned, Ok(Reply::StateSizes(stale.clone())));
     wait_until(cx, "the clean-up's end", |cx| !cleaning(&models, cx));
@@ -892,8 +838,6 @@ fn a_deletion_told_while_a_clean_up_waits_has_the_later_question_count(cx: &mut 
         states_sizes(&models, cx) == Some(last.clone())
     });
 }
-
-// A workspace put on screen.
 
 fn on_screen(models: &Models, cx: &mut TestAppContext) -> Option<WorkspaceId> {
     models

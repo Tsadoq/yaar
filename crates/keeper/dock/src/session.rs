@@ -1,19 +1,10 @@
-//! Which processes belong to the session a terminal's program leads.
-
 use libc::pid_t;
 
-/// When a process started, as the system tells it: two numbers that are the same for one
-/// process as long as it lives, and differ between two processes that had the same id one
-/// after the other.
+/// Start time of a process; differs between two processes that had the same id in turn.
 type Started = (u64, u64);
 
-/// A session that still held a process when it was noted, and which processes those were.
-///
-/// A session's id is its leader's id. While a process is in the session the system gives
-/// that id to no other, but once the last one is gone it may, and any process that then
-/// starts a session of its own leads one with the same id. A process's start time tells
-/// the two apart: the session is the old one only while one of the processes noted for it
-/// lives.
+/// A session's id is its leader's and may go to a new session once it empties, so a session is
+/// the old one only while a noted process (same id, same start time) lives.
 #[derive(Clone, Debug)]
 pub(crate) struct Remembered {
     session: pid_t,
@@ -21,15 +12,11 @@ pub(crate) struct Remembered {
 }
 
 impl Remembered {
-    /// The session of a program that has been collected, if a process of it is left.
     pub(crate) fn of(session: pid_t) -> Option<Remembered> {
         let members = noted(session);
         (!members.is_empty()).then_some(Remembered { session, members })
     }
 
-    /// What the system would show of this session after it emptied and its id went to a
-    /// process that began a session of its own: the id is the same and so are the
-    /// members' ids, but those processes started at another time.
     #[cfg(test)]
     pub(crate) fn begun_at_another_time(mut self) -> Remembered {
         for (_, started) in &mut self.members {
@@ -38,14 +25,11 @@ impl Remembered {
         self
     }
 
-    /// The session's id.
     pub(crate) fn session(&self) -> pid_t {
         self.session
     }
 
-    /// The same session as it is now, when it is still the one noted: a process noted
-    /// for it is still alive. `None` when it is empty, or only another session by the
-    /// same id.
+    /// `None` when it is empty or only another session by the same id.
     pub(crate) fn renewed(&self) -> Option<Remembered> {
         let members = noted(self.session);
         members
@@ -58,7 +42,6 @@ impl Remembered {
     }
 }
 
-/// The live processes of one session with their start times.
 fn noted(session: pid_t) -> Vec<(pid_t, Started)> {
     members(&[session])
         .into_iter()
@@ -66,10 +49,8 @@ fn noted(session: pid_t) -> Vec<(pid_t, Started)> {
         .collect()
 }
 
-/// Every live process whose session is one of `sessions`: a program that was started
-/// with `setsid` is the leader, and its id is the session's. A process that is only
-/// waiting to be collected is not live. A process that started a session of its own is
-/// not in the list.
+/// Every live process whose session is one of `sessions`; a process waiting to be collected
+/// is not live.
 pub(crate) fn members(sessions: &[pid_t]) -> Vec<pid_t> {
     if sessions.is_empty() {
         return Vec::new();
@@ -77,16 +58,14 @@ pub(crate) fn members(sessions: &[pid_t]) -> Vec<pid_t> {
     all_processes()
         .into_iter()
         .filter(|&pid| pid > 0)
-        // SAFETY: `getsid` only reads; a process that is gone answers with an error,
-        // which is not a session of ours.
+        // SAFETY: `getsid` only reads; a process that is gone answers with an error, not our
+        // session.
         .filter(|&pid| sessions.contains(&unsafe { libc::getsid(pid) }))
         .filter(|&pid| probe(pid).is_some_and(|probe| !probe.zombie))
         .collect()
 }
 
-/// What the system says of one process.
 struct Probe {
-    /// It has ended and waits to be collected.
     zombie: bool,
     started: Started,
 }
@@ -102,16 +81,14 @@ fn all_processes() -> Vec<pid_t> {
         .collect()
 }
 
-/// `None` when the process is gone. The state is the character after the name, which is in
-/// brackets and may hold any character itself; the start time is the 22nd field of the
-/// line, counting the pid as the first.
+/// The state is the character after the `)` that closes the name, which may hold any character;
+/// the start time is field 22.
 #[cfg(not(target_os = "macos"))]
 fn probe(pid: pid_t) -> Option<Probe> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let (_, rest) = stat.rsplit_once(')')?;
     let mut fields = rest.split_whitespace();
     let zombie = fields.next()?.starts_with('Z');
-    // The state is the 3rd field and the start time the 22nd.
     let started = fields.nth(18)?.parse().ok()?;
     Some(Probe {
         zombie,
@@ -135,11 +112,9 @@ fn all_processes() -> Vec<pid_t> {
     pids
 }
 
-/// `None` when the process is gone.
 #[cfg(target_os = "macos")]
 fn probe(pid: pid_t) -> Option<Probe> {
-    // SAFETY: an all-zero value is a valid `proc_bsdinfo`, and the call fills it up to
-    // the size given.
+    // SAFETY: an all-zero `proc_bsdinfo` is valid, and the call fills it up to the size given.
     unsafe {
         let mut info: libc::proc_bsdinfo = std::mem::zeroed();
         let size = size_of::<libc::proc_bsdinfo>() as libc::c_int;
@@ -165,7 +140,6 @@ mod tests {
 
     use super::*;
 
-    /// A session leader that is killed and collected when the test ends, however it ends.
     struct Leader(Child);
 
     impl Drop for Leader {
@@ -175,7 +149,6 @@ mod tests {
         }
     }
 
-    /// A process that leads a session of its own.
     fn leader() -> Leader {
         let mut command = Command::new("sleep");
         command.arg("300");

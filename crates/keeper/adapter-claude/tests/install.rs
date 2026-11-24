@@ -1,5 +1,3 @@
-//! The plugin folder the Adapter writes, and the command Claude Code runs from it.
-
 mod support;
 
 use std::collections::BTreeSet;
@@ -16,7 +14,6 @@ use yaar_agent::{Adapter, ShellEntry};
 
 use support::Scratch;
 
-/// Every file under `folder`, as a path relative to it.
 fn files_under(folder: &Path) -> BTreeSet<PathBuf> {
     fn walk(folder: &Path, root: &Path, found: &mut BTreeSet<PathBuf>) {
         for entry in std::fs::read_dir(folder).expect("read the folder") {
@@ -38,7 +35,6 @@ fn json_at(path: &Path) -> Value {
     serde_json::from_str(&text).expect("the file is JSON")
 }
 
-/// Installs into a folder of a scratch, with the companions in `companions`.
 fn install(scratch: &Scratch, companions: &Path) -> (PathBuf, Vec<ShellEntry>) {
     let folder = scratch.path().join("agents").join("claude");
     let entries = ClaudeCode::new()

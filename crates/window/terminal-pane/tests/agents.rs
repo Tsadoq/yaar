@@ -1,10 +1,5 @@
-//! Component test: the terminal pane with the agents the Keeper tells of, on GPUI's test
-//! platform with no window on any screen. The test plays the Keeper on the other end of a
-//! socket pair: it tells which sessions run in which terminals and what they do, and the
-//! pane is read back through the model it shows and the elements it draws.
-//!
-//! A negative clause is read after a barrier: something the test causes after it, through
-//! the same path, whose arrival shows that everything before it has arrived.
+//! Negative clauses are read after a barrier: a later event through the same path, whose arrival
+//! shows that everything before it has arrived.
 
 mod common;
 
@@ -19,8 +14,6 @@ use common::{
     two_workspaces, wait_until, workspace_id,
 };
 
-/// Keeps the app running until `holds` says yes: [`wait_until`] for what is read from the
-/// window as drawn. Fails at the deadline, naming `what`.
 fn wait_drawn(
     cx: &mut VisualTestContext,
     what: &str,
@@ -37,7 +30,6 @@ fn wait_drawn(
     }
 }
 
-/// A session of Claude Code in `workspace`, in `terminal` when there is one.
 fn session(
     name: char,
     workspace: &WorkspaceId,
@@ -59,7 +51,6 @@ fn session(
     }
 }
 
-/// Tells the Window the sessions of one workspace, as the Keeper does when they change.
 fn tell_agents(panes: &Panes, workspace: &WorkspaceId, sessions: Vec<Session>) {
     let shown = sessions.iter().map(|session| session.state).min();
     panes.keeper.tell(Fact::AgentsChanged(WorkspaceAgents {
@@ -73,7 +64,6 @@ fn waiting(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) -> bool {
     panes.pane.read_with(cx, |pane, cx| pane.waiting(id, cx))
 }
 
-/// Waits until the Window holds the agents of `workspace`: what was told before is read.
 fn barrier(panes: &Panes, workspace: &WorkspaceId, cx: &mut VisualTestContext) {
     let (models, workspace) = (panes.models.clone(), workspace.clone());
     wait_until(cx, "the agents of the workspace", move |cx| {
@@ -94,7 +84,6 @@ fn the_terminal_of_an_agent_that_waits_at_a_permission_prompt_carries_the_waitin
     assert!(!waiting(&panes, &t1, &mut cx));
     assert!(drawn("terminal-waiting-0", &mut cx).is_none());
 
-    // The agent in the terminal waits for permission: the terminal carries the mark.
     tell_agents(
         &panes,
         &one,
@@ -110,8 +99,6 @@ fn the_terminal_of_an_agent_that_waits_at_a_permission_prompt_carries_the_waitin
     });
     assert!(waiting(&panes, &t1, &mut cx));
 
-    // A second terminal, with no session, carries none; the first is in the second slot
-    // of the split view and its mark is drawn there.
     panes.open_terminal(&t2, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert_eq!(
@@ -124,7 +111,6 @@ fn the_terminal_of_an_agent_that_waits_at_a_permission_prompt_carries_the_waitin
     assert!(!waiting(&panes, &t2, &mut cx));
     assert!(drawn("terminal-waiting-0", &mut cx).is_none());
 
-    // The state is works again: the mark goes.
     tell_agents(
         &panes,
         &one,
@@ -136,9 +122,6 @@ fn the_terminal_of_an_agent_that_waits_at_a_permission_prompt_carries_the_waitin
     assert!(!waiting(&panes, &t1, &mut cx));
     assert!(!waiting(&panes, &t2, &mut cx));
 
-    // Nothing was sent to the program for it: a key typed into the terminal is the first
-    // input the Keeper receives, and it is the only one. What the pane drew is not on the
-    // program's screen either.
     panes.click_slot(1, &mut cx);
     cx.simulate_input("k");
     assert_eq!(panes.keeper.input(&mut cx), (t1.clone(), b"k".to_vec()));
@@ -160,8 +143,7 @@ fn a_session_that_reports_from_no_terminal_marks_none(cx: &mut TestAppContext) {
     let (t1, t2) = (terminal('a'), terminal('b'));
     panes.open_terminal(&t1, &mut cx);
 
-    // The session of an agent that runs outside the app's terminals waits: no terminal
-    // is marked. The agents of another workspace, told after, are the barrier.
+    // The agents of another workspace, told after, are the barrier.
     tell_agents(
         &panes,
         &one,

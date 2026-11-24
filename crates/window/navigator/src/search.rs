@@ -1,17 +1,5 @@
-//! Which servers a row finds, in which order they are tried, and what is shown when none
-//! is found (FR-057, FR-060, FR-062, FR-073).
-//!
-//! The order is FR-060's and the row's ([`order`]): the server the user registered, then
-//! the project's own, then one installed on the machine, then one the app downloaded, each
-//! kind in the order the row names its servers (ADR-015 point 5). [`order`] is a pure function of
-//! what [`look`] found, so that the rule is shown with no file and no process (NAV-07).
-//!
-//! What "the project's own" is, each server of a row says (`project`: paths under the
-//! worktree's root, as `node_modules/@typescript/typescript-{platform}/lib/tsc` or
-//! `.venv/bin/ty`, or absolute paths outside it, which a variable `{env:NAME}` of the servers'
-//! environment names: the Rust row names rustup's proxy in the cargo folder, which runs the
-//! rust-analyzer of the toolchain the project pins). An entry whose variable is not set is
-//! passed over.
+//! Which servers a row finds, in the order tried: registered, project, machine, downloaded.
+//! A `project` entry is under the worktree root, or absolute through `{env:NAME}`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -20,58 +8,35 @@ use crate::download::installed;
 use crate::port::{Offer, State};
 use crate::registry::{Platform, Row, Vars, expand};
 
-/// Where a candidate comes from, in the order they are tried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CandidateKind {
-    /// A command the user registered in their own file.
     Registered,
-    /// A path of a server's `project` under the worktree's root, or an absolute path outside
-    /// it, once its variables are put in.
     Project,
-    /// A name of a server's `machine` found in the search path.
     Machine,
-    /// A server the app downloaded.
     Downloaded,
 }
 
-/// One copy of a server a row may run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
-    /// Where it comes from.
     pub kind: CandidateKind,
-    /// Which server of the row it is a copy of, by its place in `Row::servers`: its `args`,
-    /// `trial`, `ready` and settings are that server's.
+    /// By its place in `Row::servers`: its `args`, `trial`, `ready` and settings are that server's.
     pub server: usize,
-    /// Its program, by its absolute path.
     pub program: PathBuf,
-    /// The arguments it is started with: a registered command's own, else its server's
-    /// `args`, not yet expanded.
     pub args: Vec<String>,
 }
 
-/// What [`look`] found of a row's servers, each kind in the order of the row's servers and,
-/// within one server, in the order of its paths or of the search path.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Found {
-    /// The registered commands, their programs resolved: an absolute path as it is, a bare
-    /// name looked for in the search path, a relative path joined to the worktree's root;
-    /// one whose program is not there is left out.
+    /// The user's commands, their programs resolved: an absolute path as is, a bare name in the
+    /// search path, a relative path against the worktree root; a program not found is left out.
     pub registered: Vec<Candidate>,
-    /// Each path of a server's `project` that is an executable file.
     pub project: Vec<Candidate>,
-    /// Each file named by a server's `machine` that is an executable file of a folder of the
-    /// search path: every such folder, in the path's order.
     pub machine: Vec<Candidate>,
-    /// The program of the version the app downloaded and uses, for each server that has
-    /// one.
     pub downloaded: Vec<Candidate>,
 }
 
-/// The candidates of `row`, in the order they are tried (FR-060): every registered one,
-/// then every project's own, then every one installed on the machine, then every one the
-/// app downloaded, each kind in [`Found`]'s order. A program found twice is tried once, at
-/// its first place. A user's row has no downloaded candidate, whatever `found` holds: it
-/// replaces the built-in row whole and is never downloaded (FR-073).
+/// A program found twice is tried once. A user's row has no downloaded candidate: it replaces
+/// the built-in row whole and is never downloaded.
 pub fn order(row: &Row, found: &Found) -> Vec<Candidate> {
     let mut tried: Vec<Candidate> = Vec::new();
     let kinds = [
@@ -81,7 +46,6 @@ pub fn order(row: &Row, found: &Found) -> Vec<Candidate> {
         &found.downloaded,
     ];
     for (n, kind) in kinds.into_iter().enumerate() {
-        // The user's row replaces the built-in row whole, downloads included.
         if row.registered && n == 3 {
             continue;
         }
@@ -97,12 +61,6 @@ pub fn order(row: &Row, found: &Found) -> Vec<Candidate> {
     tried
 }
 
-/// Looks for the candidates of `row`: the registered commands, each server's `project`
-/// paths under `root` (or outside it, where one is absolute once expanded) with `{platform}`
-/// and `{env:NAME}` expanded against `environment`, its `machine` names in each folder of
-/// `search_path`, and what `servers` holds for it (`crate::download::installed` of the
-/// server's name). An entry that names a variable `environment` does not hold is passed over.
-/// Reads the file system; runs nothing.
 pub fn look(
     row: &Row,
     root: &Path,
@@ -127,10 +85,8 @@ pub fn look(
             args: args.to_vec(),
         };
         if let Some((program, args)) = server.command.as_ref().and_then(|c| c.split_first()) {
-            // A variable in the program (`{root}/tools/ls`) is put in here, as the program
-            // is what is looked for; the arguments are expanded when the server starts. A
-            // program that cannot be put in is no candidate, and the server's other paths
-            // are still looked at.
+            // Only the program is expanded here, as it is what is looked for; arguments are
+            // expanded when the server starts. A program that cannot be expanded is no candidate.
             let program = expand(program, &vars).ok().and_then(|program| {
                 if Path::new(&program).components().count() > 1 || Path::new(&program).is_absolute()
                 {
@@ -150,9 +106,9 @@ pub fn look(
             }
         }
         for path in &server.project {
-            // An entry that names a variable that is not set is passed over. One that is
-            // absolute once expanded names a file outside the worktree, which is not joined to
-            // it: rustup's proxy in the user's cargo folder is no part of the repository.
+            // An entry naming an unset variable is passed over. One absolute once expanded is not
+            // joined to the worktree: rustup's proxy in the cargo folder lies outside the
+            // repository.
             let Ok(path) = expand(path, &vars) else {
                 continue;
             };
@@ -180,7 +136,6 @@ pub fn look(
                 }
             }
         }
-        // Only a server with a download can have one installed; a user's row has none.
         if !server.downloads.is_empty()
             && let Some(installed) = installed(servers, &server.name)
         {
@@ -194,9 +149,6 @@ pub fn look(
     found
 }
 
-/// The offer to download `row`'s server on `platform`: the first server of the row with a
-/// download for that platform (`Row::download`); none for a registered row, for a row with
-/// no download for that platform, and where the platform is none.
 pub fn offer(row: &Row, platform: Option<Platform>) -> Option<Offer> {
     let (server, download) = row.download(platform?)?;
     Some(Offer {
@@ -206,16 +158,12 @@ pub fn offer(row: &Row, platform: Option<Platform>) -> Option<Offer> {
     })
 }
 
-/// The state shown when no candidate of `row` is left (NAV-06): missing, with
-/// [`offer`]'s offer.
 pub fn when_none(row: &Row, platform: Option<Platform>) -> State {
     State::Missing {
         offer: offer(row, platform),
     }
 }
 
-/// Whether `program`, its links resolved, lies inside one of `worktrees`, the folders of
-/// the worktrees of one repository, theirs resolved too (FR-062).
 pub fn inside(program: &Path, worktrees: &[&Path]) -> bool {
     let program = resolved(program);
     worktrees
@@ -223,13 +171,10 @@ pub fn inside(program: &Path, worktrees: &[&Path]) -> bool {
         .any(|worktree| program.starts_with(resolved(worktree)))
 }
 
-/// `path` with its links resolved; as it is where it cannot be (a program that is not there
-/// is placed by the path it was given).
 fn resolved(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Whether `path` is a file, after links, that anyone may execute.
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
@@ -246,13 +191,9 @@ mod tests {
         registry
     }
 
-    // NAV-06
-
     #[test]
     fn a_built_in_row_with_no_server_found_is_missing_with_the_offer_of_its_first_download() {
         let registry = builtin();
-        // The server each row offers is the first of its servers that has a download: the
-        // third of Python's four, with two before it that have none.
         let first_with_a_download = [
             ("typescript", "tsgo"),
             ("python", "ty"),
@@ -296,8 +237,6 @@ mod tests {
                  program = \"x\"\nsize = {size}\n"
             )
         };
-        // The first server has none for linux-x64, the second has; the third has one too and
-        // is not the offer.
         let text = format!(
             "[lang]\nextensions = {{ l = \"l\" }}\n\
              [[lang.server]]\nname = \"none\"\n\
@@ -373,9 +312,7 @@ mod tests {
 
     #[test]
     fn a_row_flagged_as_the_users_is_offered_no_download_even_when_a_server_of_it_has_one() {
-        // The reader never lets a user's file carry a download, so a row is built by hand
-        // from a built-in one: its servers keep their downloads, the row says it is the
-        // user's.
+        // The reader never lets a user's file carry a download, so the row is built by hand.
         let registry = builtin();
         for name in ["typescript", "python", "rust"] {
             let mut row = registry.row(name).unwrap().clone();
@@ -406,8 +343,6 @@ mod tests {
         );
     }
 
-    // NAV-07
-
     fn candidate(kind: CandidateKind, server: usize, program: &str, args: &[&str]) -> Candidate {
         Candidate {
             kind,
@@ -417,7 +352,6 @@ mod tests {
         }
     }
 
-    /// What a list of candidates is, as `kind server program`, for reading a failure.
     fn shown(candidates: &[Candidate]) -> Vec<String> {
         candidates
             .iter()
@@ -482,8 +416,7 @@ mod tests {
         use CandidateKind::*;
         let registry = builtin();
         let python = registry.row("python").unwrap();
-        // Handed over out of the row's order: pyrefly (3) before ty (2) before
-        // basedpyright (0); within ty the two folders keep their order.
+        // Handed over out of the row's order: pyrefly (3) before ty (2) before basedpyright (0).
         let found = Found {
             registered: vec![],
             project: vec![],
@@ -537,8 +470,8 @@ mod tests {
         use CandidateKind::*;
         let registry = builtin();
         let python = registry.row("python").unwrap();
-        // The project's own `ty` is also on the search path, as when `.venv/bin` is on it;
-        // and the downloaded one is the same file as a machine one.
+        // The project's own `ty` is also on the search path; the downloaded one is a machine one
+        // too.
         let found = Found {
             registered: vec![],
             project: vec![candidate(Project, 2, "/w/.venv/bin/ty", &["server"])],
@@ -555,8 +488,6 @@ mod tests {
         );
     }
 
-    /// A user's `python` row: two registered commands, the second with a `project` of its
-    /// own, a third server of a command and a `machine`.
     fn users_python() -> Registry {
         let user = "[python]\n\
             [[python.server]]\nname = \"first\"\ncommand = [\"/opt/first\", \"--a\", \"{root}\"]\n\
@@ -582,7 +513,6 @@ mod tests {
             ],
             project: vec![candidate(Project, 1, "/w/tools/second", &["--b"])],
             machine: vec![candidate(Machine, 2, "/bin/third", &[])],
-            // Whatever the folder holds: the user's row replaces the built-in row whole.
             downloaded: vec![candidate(
                 Downloaded,
                 2,
@@ -601,7 +531,6 @@ mod tests {
                 "Machine 2 /bin/third",
             ]
         );
-        // The registered ones go with their commands' own arguments.
         assert_eq!(order[0].args, ["--a", "{root}"]);
         assert_eq!(order[3].args, ["--b"]);
     }

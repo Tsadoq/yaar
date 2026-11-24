@@ -1,8 +1,6 @@
-//! Component test: the line of the language server of the code on screen, on GPUI's test
-//! platform. The test plays the Keeper on a socket pair and the Navigator at its port: it
-//! reads the asks the pane really makes and tells the states of the servers as the
-//! Navigator would, as data. Keys, clicks and the wheel go in; the line is read back
-//! through what it draws and through the model the pane shows.
+//! Component test: the language-server line of the code on screen.
+//! A negative clause is read after a barrier: asks arrive in order, so a later ask heard first
+//! shows that an earlier key asked nothing.
 
 mod common;
 
@@ -26,12 +24,10 @@ use common::{
     wait_until, workspace,
 };
 
-/// The repository every test workspace lies in, as `common::repository` makes it.
 fn repository() -> RepositoryId {
     RepositoryId::new("a".repeat(32))
 }
 
-/// Another repository, one the Keeper listed no workspace of.
 fn other_repository() -> RepositoryId {
     RepositoryId::new("b".repeat(32))
 }
@@ -63,7 +59,6 @@ fn languages() -> Vec<Language> {
     ]
 }
 
-/// The state of a server of the files on disk of workspace `1`, as the Navigator tells it.
 fn server(language: &str, title: &str, state: State) -> ServerState {
     ServerState {
         workspace: id('1'),
@@ -87,7 +82,6 @@ fn python(state: State) -> ServerState {
     server("python", "Python", state)
 }
 
-/// The server of the old side of the change, read in `COMMIT`.
 fn old_side(of: ServerState) -> ServerState {
     ServerState {
         old_side: Some(COMMIT.to_owned()),
@@ -108,17 +102,12 @@ fn asking(repository: RepositoryId) -> State {
     }
 }
 
-/// Which line of a changed file the reviewer goes to.
 #[derive(Clone, Copy)]
 enum Line {
     Removed,
     Added,
 }
 
-/// A window with the pane showing a change of `app/main.py` and `src/lib.rs` (each file
-/// removes the line `gone` and adds the line `added`, with an unchanged line between them),
-/// `README.md`, and the Navigator connected and telling its languages. The reviewer has
-/// not clicked yet.
 fn open_on_code(cx: &mut TestAppContext) -> (Stage, NavigatorEnd, VisualTestContext) {
     let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
     let changes = since_main(
@@ -140,8 +129,6 @@ fn open_on_code(cx: &mut TestAppContext) -> (Stage, NavigatorEnd, VisualTestCont
     (stage, navigator, cx)
 }
 
-/// Clicks the line of `path` that `which` names, which puts the reviewer on it and gives
-/// the pane the focus.
 fn go_to(stage: &Stage, path: &str, which: Line, cx: &mut VisualTestContext) {
     let index = stage
         .pane
@@ -165,14 +152,12 @@ fn go_to(stage: &Stage, path: &str, which: Line, cx: &mut VisualTestContext) {
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
 }
 
-/// The state the line draws, if it draws one: of the five the module doc names.
 fn drawn_state(cx: &mut VisualTestContext) -> Option<&'static str> {
     ["ready", "starting", "missing", "asking", "downloading"]
         .into_iter()
         .find(|state| drawn(&format!("review-servers-state:{state}"), cx).is_some())
 }
 
-/// Holds the line to what it says: the state, and the words of its text.
 #[track_caller]
 fn assert_line(state: &str, words: &str, cx: &mut VisualTestContext) {
     assert!(drawn("review-servers", cx).is_some(), "no line is drawn");
@@ -183,7 +168,6 @@ fn assert_line(state: &str, words: &str, cx: &mut VisualTestContext) {
     );
 }
 
-/// No dialog came up, and the app holds the one window it had.
 #[track_caller]
 fn assert_no_dialog(cx: &mut VisualTestContext) {
     assert!(!cx.has_pending_prompt(), "a dialog is open");
@@ -200,7 +184,6 @@ fn a_missing_language_server_is_said_on_a_line_that_stays_in_the_pane_and_the_do
 ) {
     let (stage, mut navigator, mut cx) = open_on_code(cx);
     go_to(&stage, "src/lib.rs", Line::Added, &mut cx);
-    // Until the Navigator tells a server there is no line.
     assert!(drawn("review-servers", &mut cx).is_none());
 
     navigator.tell(Told::Servers(vec![rust(missing_with_offer())]), &mut cx);
@@ -211,7 +194,6 @@ fn a_missing_language_server_is_said_on_a_line_that_stays_in_the_pane_and_the_do
     assert!(drawn(&format!("review-servers-download:{words}"), &mut cx).is_some());
     assert_no_dialog(&mut cx);
 
-    // The control asks for the download of the row, by a click and by its key.
     let at = drawn("review-servers-download", &mut cx).unwrap().center();
     cx.simulate_click(at, Modifiers::none());
     assert_eq!(
@@ -221,8 +203,6 @@ fn a_missing_language_server_is_said_on_a_line_that_stays_in_the_pane_and_the_do
         }
     );
     assert_no_dialog(&mut cx);
-    // A click is on the line, not on the rows: the reviewer's line stays and the pane
-    // keeps its focus for the key.
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     cx.simulate_keystrokes("shift-i");
     assert_eq!(
@@ -233,7 +213,6 @@ fn a_missing_language_server_is_said_on_a_line_that_stays_in_the_pane_and_the_do
     );
     assert_no_dialog(&mut cx);
 
-    // The line stays through everything the reviewer does in the pane.
     let stays = |what: &str, cx: &mut VisualTestContext| {
         assert_line("missing", "Rust: no language server found", cx);
         assert!(has_control("download", cx), "the offer went after {what}");
@@ -252,9 +231,6 @@ fn a_missing_language_server_is_said_on_a_line_that_stays_in_the_pane_and_the_do
     cx.run_until_parked();
     stays("the wheel", &mut cx);
     go_to(&stage, "src/lib.rs", Line::Removed, &mut cx);
-    // The removed line is read in the old version, whose server was not told: the line is
-    // that of the new side's server of the language, its offer included, and the control
-    // asks the download of the row.
     stays("a click on a removed line", &mut cx);
     let at = drawn("review-servers-download", &mut cx).unwrap().center();
     cx.simulate_click(at, Modifiers::none());
@@ -291,8 +267,6 @@ fn a_removed_line_shows_the_new_sides_server_until_the_old_sides_state_is_told_a
     let (stage, navigator, mut cx) = open_on_code(cx);
     navigator.tell(Told::Servers(vec![rust(missing_with_offer())]), &mut cx);
 
-    // No state of the old side is told: the line is the new side's server of the language,
-    // with its offer. A language whose new side was not told has no line either.
     go_to(&stage, "src/lib.rs", Line::Removed, &mut cx);
     assert_line("missing", "Rust: no language server found", &mut cx);
     assert!(has_control("download", &mut cx));
@@ -304,8 +278,6 @@ fn a_removed_line_shows_the_new_sides_server_until_the_old_sides_state_is_told_a
     go_to(&stage, "app/main.py", Line::Removed, &mut cx);
     assert!(drawn("review-servers", &mut cx).is_none());
 
-    // Once a state of the old side is told, the line is the old side's, and shows none of
-    // the new side's controls.
     go_to(&stage, "src/lib.rs", Line::Removed, &mut cx);
     navigator.tell(
         Told::Servers(vec![
@@ -334,7 +306,6 @@ fn a_removed_line_shows_the_new_sides_server_until_the_old_sides_state_is_told_a
     );
     assert!(!has_control("download", &mut cx));
 
-    // The line of an added line is the new side's, whatever the old side's state.
     go_to(&stage, "src/lib.rs", Line::Added, &mut cx);
     assert_line("missing", "Rust: no language server found", &mut cx);
     assert!(has_control("download", &mut cx));
@@ -347,8 +318,7 @@ fn the_download_control_goes_when_the_offer_does_and_the_download_is_said_while_
     let (stage, mut navigator, mut cx) = open_on_code(cx);
     go_to(&stage, "src/lib.rs", Line::Added, &mut cx);
 
-    // No offer: a language with no download for this machine, or one the user
-    // registered a server of their own for.
+    // No offer: a language with no download for this machine, or with a server the user registered.
     navigator.tell(
         Told::Servers(vec![rust(State::Missing { offer: None })]),
         &mut cx,
@@ -359,7 +329,6 @@ fn the_download_control_goes_when_the_offer_does_and_the_download_is_said_while_
         &mut cx,
     );
     assert!(!has_control("download", &mut cx));
-    // The key has nothing to download: it says so and asks nothing.
     cx.simulate_keystrokes("shift-i");
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.notice()),
@@ -377,9 +346,6 @@ fn the_download_control_goes_when_the_offer_does_and_the_download_is_said_while_
     );
     assert!(!has_control("download", &mut cx));
 
-    // The barrier: a key pressed on a line of another language asks for that language's
-    // download. The asks come in the order they were made, so when this one is the first
-    // the Navigator hears, the key with nothing to download asked nothing before it.
     navigator.tell(
         Told::Servers(vec![
             rust(missing_with_offer()),
@@ -414,9 +380,6 @@ fn the_update_is_offered_on_the_line_of_a_ready_server_that_runs_an_older_versio
         Some("No language server update waits".to_owned())
     );
 
-    // The barrier: the update of another language is the first ask the Navigator hears
-    // if the key with nothing to update asked nothing, since asks come in the order they
-    // were made.
     let older = ServerState {
         update: Some(newer()),
         ..python(State::Ready)
@@ -467,8 +430,6 @@ fn a_starting_server_told_with_an_update_draws_no_update_control_and_its_key_say
         Some("No language server update waits".to_owned())
     );
 
-    // The barrier: the download of the row is the first ask the Navigator hears if the
-    // key sent nothing, since asks come in the order they were made.
     navigator.tell(Told::Servers(vec![rust(missing_with_offer())]), &mut cx);
     cx.simulate_keystrokes("shift-i");
     assert_eq!(
@@ -488,7 +449,6 @@ fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_fo
 
     navigator.tell(Told::Servers(vec![rust(asking(repository()))]), &mut cx);
 
-    // The pane asks, and the words name the program and the repository.
     assert_line(
         "asking",
         "Rust: /gits/feature/tools/rust-analyzer lies inside the repository repository. \
@@ -500,7 +460,6 @@ fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_fo
     assert!(!has_control("download", &mut cx));
     assert_no_dialog(&mut cx);
 
-    // A click on yes sets the answer of the repository.
     let at = drawn("review-servers-yes", &mut cx).unwrap().center();
     cx.simulate_click(at, Modifiers::none());
     let allowed = Setting::ServersInRepository {
@@ -512,8 +471,6 @@ fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_fo
     });
     assert_no_dialog(&mut cx);
 
-    // The Keeper tells it, and the Navigator, which did not hear it yet, tells the
-    // question again as the newest state the pane has: it is not asked again.
     stage.keeper.tell(Fact::SettingChanged(allowed.clone()));
     wait_until(&mut cx, "the answer in the Frame's model", |cx| {
         stage
@@ -534,7 +491,6 @@ fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_fo
         .is_some()
     );
 
-    // With no question shown the keys say so and send nothing.
     cx.simulate_keystrokes("shift-y");
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.notice()),
@@ -546,7 +502,6 @@ fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_fo
         Some("No question about language servers waits".to_owned())
     );
 
-    // Another repository is asked about, once, by its own question.
     navigator.tell(
         Told::Servers(vec![rust(asking(other_repository()))]),
         &mut cx,
@@ -558,14 +513,10 @@ fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_fo
         repository: other_repository(),
         allowed: false,
     };
-    // The barrier: the Keeper hears the requests in the order they were sent, so when it
-    // has heard the answer for the other repository it has heard everything before it:
-    // the two keys with no question sent nothing.
     wait_until(&mut cx, "the second answer reaching the Keeper", |_| {
         stage.keeper.settings_set().len() >= 2
     });
     assert_eq!(stage.keeper.settings_set(), [allowed, refused.clone()]);
-    // The question for it goes the same way.
     stage.keeper.tell(Fact::SettingChanged(refused));
     navigator.tell(
         Told::Servers(vec![rust(asking(other_repository()))]),
@@ -588,8 +539,6 @@ fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_fo
 fn a_pane_made_after_the_navigator_told_its_servers_draws_the_line_again_on_a_setting_changed_elsewhere(
     cx: &mut TestAppContext,
 ) {
-    // The Navigator is connected and has told its servers, the question among them, before
-    // the pane is made, and tells nothing more.
     let (models, keeper) = common::link_up(vec![workspace('1', "feature")], cx);
     let navigator = NavigatorEnd::connect(&models, cx);
     navigator.tell(Told::Languages(languages()), cx);
@@ -611,9 +560,6 @@ fn a_pane_made_after_the_navigator_told_its_servers_draws_the_line_again_on_a_se
     );
     assert!(has_control("yes", &mut cx));
 
-    // Another window answers: the Keeper tells it, and the pane, which the Navigator tells
-    // nothing more, is drawn again. The pane is read for what it is told of the change, as
-    // the window reads it: it notifies.
     let redrawn = Rc::new(Cell::new(0));
     let watching = cx.update(|_, cx| {
         let redrawn = redrawn.clone();
@@ -662,7 +608,6 @@ fn the_keys_and_the_click_that_refuse_a_repository_send_the_refusal_of_that_repo
         stage.keeper.settings_set() == [refused.clone()]
     });
 
-    // A repository asked about with the keys: yes.
     navigator.tell(
         Told::Servers(vec![rust(asking(other_repository()))]),
         &mut cx,
@@ -707,8 +652,6 @@ fn the_line_says_where_the_server_stands_for_a_built_in_row_and_a_registered_one
             };
             navigator.tell(Told::Servers(vec![row(state)]), &mut cx);
             assert_line(name, words, &mut cx);
-            // Nothing marks the registered row apart, and a state with no offer has no
-            // control for either.
             assert!(!has_control("download", &mut cx), "{registered} {name}");
             assert!(!has_control("update", &mut cx), "{registered} {name}");
             assert!(!has_control("yes", &mut cx), "{registered} {name}");
@@ -747,7 +690,6 @@ fn the_line_follows_the_file_of_the_line_the_reviewer_is_on_and_a_removed_line_s
         &mut cx,
     );
 
-    // A removed line is read in the old version: the server of that version.
     go_to(&stage, "src/lib.rs", Line::Removed, &mut cx);
     assert_line(
         "missing",
@@ -760,7 +702,6 @@ fn the_line_follows_the_file_of_the_line_the_reviewer_is_on_and_a_removed_line_s
         .expect("a server is on screen");
     assert_eq!(on_screen.old_side.as_deref(), Some(COMMIT));
 
-    // A file no row knows has no server, so no line, though others are told.
     let readme = stage.pane.read_with(&cx, |pane, _| {
         pane.rows().iter().position(
             |row| matches!(row, PaneRow::Diff { path, .. } if path == &PathBuf::from("README.md")),
@@ -783,12 +724,10 @@ fn the_line_follows_the_file_of_the_line_the_reviewer_is_on_and_a_removed_line_s
     );
 }
 
-/// The id of a commit or a state that is this digit forty times.
 fn version(digit: char) -> String {
     digit.to_string().repeat(40)
 }
 
-/// The server of the old side of the change, read in `version`.
 fn old_side_in(version: &str, of: ServerState) -> ServerState {
     ServerState {
         old_side: Some(version.to_owned()),
@@ -809,9 +748,8 @@ fn a_removed_line_of_a_change_between_two_versions_shows_the_server_of_the_old_v
         .keeper
         .show(&comparison, |_| texts("a\nb\n", "a\nc\n"), &mut cx);
     wait_for_files(&stage.pane, &mut cx);
-    // A history of a commit, a turn and a commit: the turn is between the first commit
-    // and the state recorded at its end, none of which is what the changes are counted
-    // from.
+    // The turn lies between the first commit and the state recorded at its end, neither of which is
+    // what the changes are counted from.
     let (first, turn_end) = (version('1'), version('5'));
     let history = History {
         workspace: id('1'),
@@ -840,7 +778,6 @@ fn a_removed_line_of_a_change_between_two_versions_shows_the_server_of_the_old_v
     let navigator = NavigatorEnd::connect(&stage.models, &mut cx);
     navigator.tell(Told::Languages(languages()), &mut cx);
 
-    // Select the turn: the change between the first commit and the end of the turn.
     let at = drawn("review-history-1", &mut cx)
         .expect("the turn is drawn in the tree")
         .center();
@@ -878,8 +815,6 @@ fn a_removed_line_of_a_change_between_two_versions_shows_the_server_of_the_old_v
         })
     });
 
-    // The old side of this change is the first commit, not the commit the changes of
-    // the branch are counted from: the two have different states.
     navigator.tell(
         Told::Servers(vec![
             rust(State::Starting),
@@ -895,7 +830,6 @@ fn a_removed_line_of_a_change_between_two_versions_shows_the_server_of_the_old_v
         .read_with(&cx, |pane, cx| pane.server_on_screen(cx))
         .expect("a server is on screen");
     assert_eq!(on_screen.old_side.as_deref(), Some(first.as_str()));
-    // The added line is read in the new side of the files on disk.
     go_to(&stage, "turn.rs", Line::Added, &mut cx);
     assert_line(
         "starting",
@@ -926,8 +860,6 @@ fn a_removed_line_of_a_renamed_file_shows_the_server_of_the_language_of_its_old_
     wait_for_files(&stage.pane, &mut cx);
     let navigator = NavigatorEnd::connect(&stage.models, &mut cx);
     navigator.tell(Told::Languages(languages()), &mut cx);
-    // The old side was Python and the new side is Rust, with a state each, and the
-    // other language's old side told as well, with another state.
     navigator.tell(
         Told::Servers(vec![
             rust(State::Ready),
@@ -967,7 +899,6 @@ fn there_is_no_line_while_no_navigator_is_connected(cx: &mut TestAppContext) {
     wait_for_files(&stage.pane, &mut cx);
     go_to(&stage, "src/lib.rs", Line::Added, &mut cx);
     assert!(drawn("review-servers", &mut cx).is_none());
-    // The key then has nothing to act on, and says so.
     cx.simulate_keystrokes("shift-i");
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.notice()),

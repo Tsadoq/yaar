@@ -1,28 +1,6 @@
-//! One terminal as the pane shows it: its screen, drawn by the app's own painter, and the
-//! keys, the text and the mouse that go to its program.
-//!
-//! A key reaches the view after the key bindings: a kept key has run its action by then
-//! and never arrives here. Of the rest, the view's key listener sends what
-//! [`crate::encode_key`] encodes; a key that types text is left to the view's input
-//! handler, which sends the committed text and holds marked text while an input method
-//! or a dead key composes. The view sets [`yaar_frame::PROGRAM_CONTEXT`], so that no key
-//! of the Frame that is no Cmd key and no kept key fires while it has the focus, and so
-//! that the keys the toolkit binds for the whole window reach the program too
-//! ([`yaar_frame::release_program_keys`]).
-//!
-//! The painter lays the grid of cells from the top left corner of the view's element,
-//! with no margin: the cell at column `c` and line `l` starts `c` cell widths right of the
-//! element's left edge and `l` cell heights below its top edge, and the terminal has as
-//! many columns and lines as whole cells fit.
-//!
-//! The mouse. With the program's mouse mode off, a drag with the left button selects
-//! text, and a step of the wheel scrolls the history three lines, or, on the alternate
-//! screen with alternate scroll on, is one arrow key. With a mode on, presses, releases,
-//! moves and the wheel are sent in the form the program asked for ([`crate::encode_mouse`]);
-//! a move that would send the very bytes the last move sent is not sent again, so that a
-//! pointer crossing one cell reports it once. One step of the wheel is one line of a
-//! [`ScrollDelta::Lines`] event, or the height of a cell in the pixels of a
-//! [`ScrollDelta::Pixels`] one, the rest carried to the next event.
+//! One terminal as the pane shows it: its screen, drawn by the app's own painter, and the keys,
+//! text and mouse that go to its program. A key arrives after the key bindings; text goes through
+//! the input handler, which holds marked text while an input method composes.
 
 use std::cell::Cell;
 use std::ops::Range;
@@ -42,70 +20,43 @@ use crate::{
     encode_focus, encode_key, encode_mouse, encode_paste, encode_release,
 };
 
-/// How many lines of history a step of the wheel scrolls while the program takes no
-/// mouse reports.
 const LINES_A_STEP: i32 = 3;
 
-/// What the view puts before the kept output of a terminal the Keeper cut, in the style
-/// that [`TerminalView::cut_band`] looks for: faint and italic.
+/// Written before the kept output of a terminal the Keeper cut, faint and italic: the style
+/// `TerminalView::cut_band` looks for.
 const CUT_NOTICE: &str = "\x1b[2;3mOlder output is gone.\x1b[0m\r\n";
 
-/// The text of that line.
 const CUT_TEXT: &str = "Older output is gone.";
 
-/// What a view tells the pane that holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewEvent {
-    /// The columns and rows that fit the view changed, and the Keeper was asked to give
-    /// the terminal this size.
     Fitted(TerminalSize),
 }
 
-/// What the painter learns while it paints and the listeners read when an event comes:
-/// where the grid is and how large a cell is.
 #[derive(Default)]
 struct Geometry {
     bounds: Cell<Bounds<Pixels>>,
     cell: Cell<Size<Pixels>>,
-    /// The size and the cell last given to the emulator, so that a frame that fits the
-    /// same grid tells nobody anything.
     fitted: Cell<Option<(TerminalSize, Size<Pixels>)>>,
 }
 
-/// One terminal of the pane.
-///
-/// It holds the emulator that reads what the program writes, and sends the program what
-/// is typed, pasted and done with the mouse, and what the terminal answers its
-/// questions. It tells the Keeper the size of its grid whenever that changes, and the
-/// pane through [`ViewEvent`].
 pub struct TerminalView {
     id: TerminalId,
     link: Entity<KeeperLink>,
-    /// The user's settings, which say what Option does.
     settings: Entity<SettingList>,
     emulator: Emulator,
-    /// The terminal colours of the theme the emulator answers a program's questions from:
-    /// the ones last handed to it.
     colours: TerminalColors,
     focus: FocusHandle,
-    /// The size the Keeper was last told.
     size: TerminalSize,
     marked: Option<String>,
     ending: Option<Ending>,
     geometry: Rc<Geometry>,
-    /// The cells selected, as the painter marks them.
     selection: Option<(CellPlace, CellPlace)>,
-    /// What the selection said last: when output changes it, the mark goes.
     selected_text: Option<String>,
-    /// Where a drag that selects began.
     drag_from: Option<CellPlace>,
-    /// The button whose press the program was told, until it is released.
     reported: Option<ReportedButton>,
-    /// The bytes of the last move sent, to keep from sending the same ones twice.
     last_move: Option<Vec<u8>>,
-    /// Pixels of the wheel not yet worth a step.
     wheel_rest: f32,
-    /// Whether the screen starts with the line that says older output is gone.
     cut: bool,
     attached: bool,
     _output: Option<Task<()>>,
@@ -115,11 +66,8 @@ pub struct TerminalView {
 impl EventEmitter<ViewEvent> for TerminalView {}
 
 impl TerminalView {
-    /// A view of the terminal `id`, whose grid is `size` until the painter fits it to
-    /// the room it has. `output` is what the program writes, if the link had a
-    /// connection to take it from: the view reads it as it comes. When the Keeper dropped
-    /// the oldest of that output, `cut` is true and the screen starts with a line that says
-    /// so, before the first byte of it.
+    /// `output` is what the program writes, if the link had a connection to take it from. `cut` is
+    /// true when the Keeper dropped the oldest output.
     pub(crate) fn new(
         id: TerminalId,
         size: TerminalSize,
@@ -129,8 +77,7 @@ impl TerminalView {
         cut: bool,
         cx: &mut Context<Self>,
     ) -> Self {
-        // One task for the terminal: it waits for output, takes everything that has
-        // come by then in one go, and tells the screen once.
+        // Batched: everything that arrived is read at once and the screen notified once.
         let output = output.map(|output| {
             cx.spawn(async move |view, cx| {
                 while let Some(mut bytes) = output.next().await {
@@ -177,9 +124,8 @@ impl TerminalView {
         }
     }
 
-    /// Where the line that says older output is gone is drawn, as the distance from the
-    /// top of the view and its height, while it is in view: it is part of the output, and
-    /// scrolls with it. None for a terminal the Keeper kept whole.
+    /// Where the "older output is gone" line is drawn, as (distance from the view's top, height);
+    /// None for a terminal the Keeper kept whole.
     pub(crate) fn cut_band(&self, window: &Window, cx: &App) -> Option<(Pixels, Pixels)> {
         if !self.cut {
             return None;
@@ -195,52 +141,40 @@ impl TerminalView {
         Some((cell.height * row as f32, cell.height))
     }
 
-    /// The terminal this view shows.
     pub fn id(&self) -> &TerminalId {
         &self.id
     }
 
-    /// The text of the lines the view draws, top to bottom, each without the blanks at
-    /// its end. The painter draws from the same screen.
     pub fn lines(&self) -> Vec<String> {
         self.emulator.lines()
     }
 
-    /// The text an input method or a dead key is composing, which the view draws
-    /// underlined at the cursor and has not sent; none while nothing is composed.
     pub fn marked_text(&self) -> Option<String> {
         self.marked.clone()
     }
 
-    /// How many lines the view is scrolled back into the history: 0 while it shows the
-    /// newest.
     pub fn scrolled_back(&self) -> usize {
         self.emulator.scrolled_back()
     }
 
-    /// The title the program gave the terminal; none before it gave one.
     pub fn title(&self) -> Option<String> {
         self.emulator.title()
     }
 
-    /// How the program ended; none while it runs. The view still shows its last screen.
     pub fn ending(&self) -> Option<Ending> {
         self.ending
     }
 
-    /// Where the keys go while this view has the focus.
     pub fn focus_handle(&self) -> FocusHandle {
         self.focus.clone()
     }
 
-    /// The program ended: the view keeps its screen and says how.
     pub(crate) fn ended(&mut self, ending: Ending, cx: &mut Context<Self>) {
         self.ending = Some(ending);
         cx.notify();
     }
 
-    /// Sends the program bytes, unless it has ended: the Keeper no longer holds the
-    /// terminal.
+    /// Does nothing once the program has ended: the Keeper no longer holds the terminal.
     fn send(&self, bytes: Vec<u8>, cx: &mut Context<Self>) {
         if bytes.is_empty() || self.ending.is_some() {
             return;
@@ -249,13 +183,10 @@ impl TerminalView {
             .update(cx, |link, _| link.send_input(&self.id, bytes));
     }
 
-    /// Reads what the program wrote, and sends back what the terminal answers.
     fn take_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         self.emulator.advance(bytes);
         let replies = self.emulator.take_replies();
         self.send(replies, cx);
-        // Output that changes the text under a selection takes the mark away: it would
-        // be drawn on text it does not hold.
         if self.selection.is_some() && self.emulator.selected_text() != self.selected_text {
             self.forget_selection();
         }
@@ -268,8 +199,6 @@ impl TerminalView {
         self.emulator.clear_selection();
     }
 
-    /// What typing or pasting does to what the view shows: the newest line comes back
-    /// into view and nothing stays selected.
     fn back_to_the_prompt(&mut self) {
         let back = self.emulator.scrolled_back();
         if back > 0 {
@@ -278,9 +207,6 @@ impl TerminalView {
         self.forget_selection();
     }
 
-    /// What Option does now: the user's setting, and where it says nothing the keyboard
-    /// layout in use. Read at every key, so that a change of the setting is in force at
-    /// once.
     fn option_key(&self, cx: &App) -> OptionKey {
         OptionKey::of_setting(
             self.settings.read(cx).option_key(),
@@ -294,10 +220,9 @@ impl TerminalView {
         let option = self.option_key(cx);
         let keystroke = &event.keystroke;
         let modifiers = &keystroke.modifiers;
-        // A key that types text has no bytes here: it is left alone, and the platform
-        // hands its text to the input handler. Its repeats are the exception: macOS
-        // would offer the accents of the letter instead of repeating it, and no terminal
-        // wants that, so a held key's text is sent here, as the key repeats.
+        // A key that types text has no bytes here: the platform hands its text to the input
+        // handler. Except repeats: macOS would offer the letter's accents instead of repeating it,
+        // so a held key's text is sent here.
         let bytes = encode_key(keystroke, &modes, option, event.is_held).or_else(|| {
             let text = keystroke.key_char.as_ref()?;
             let plain = !modifiers.alt && !modifiers.control && !modifiers.platform;
@@ -320,7 +245,6 @@ impl TerminalView {
         }
     }
 
-    /// The program's terminal gained or lost the focus.
     fn focus_changed(&mut self, focused: bool, cx: &mut Context<Self>) {
         if let Some(bytes) = encode_focus(focused, &self.emulator.modes()) {
             self.send(bytes, cx);
@@ -328,7 +252,6 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// What has to be set up once there is a window to set it up in.
     fn attach(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.attached = true;
         let gained = cx.on_focus(&self.focus, window, |view, _, cx| {
@@ -340,19 +263,16 @@ impl TerminalView {
         self._subscriptions.extend([gained, lost]);
     }
 
-    /// Gives the terminal the size that fits the room the painter found, when it is not
-    /// the one it has: the screen, the Keeper and the pane are told, once.
     fn fit(&mut self, size: TerminalSize, cell: Size<Pixels>, cx: &mut Context<Self>) {
         self.emulator
             .set_cell_size(f32::from(cell.width) as u16, f32::from(cell.height) as u16);
-        // A program that ended has no terminal left to resize.
         if size == self.size || self.ending.is_some() {
             return;
         }
         self.size = size;
         self.emulator.resize(size);
-        // Nothing waits for the answer: a refusal leaves the Keeper's terminal at the
-        // size it had, and the next change asks again.
+        // Nothing waits for the answer: a refusal leaves the Keeper's terminal at its old size and
+        // the next change asks again.
         let terminal = self.id.clone();
         self.link.update(cx, |link, cx| {
             link.ask(Request::ResizeTerminal { terminal, size }, cx)
@@ -362,7 +282,6 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// The cell under a point of the window, the nearest one for a point outside.
     fn cell_at(&self, position: Point<Pixels>) -> CellPlace {
         let bounds = self.geometry.bounds.get();
         let cell = self.geometry.cell.get();
@@ -450,7 +369,6 @@ impl TerminalView {
                 self.send(bytes, cx);
             }
         } else if event.button == gpui_kit::MouseButton::Left && self.drag_from.take().is_some() {
-            // A click that selected no more than the cell it was in selects nothing.
             if self.selection.is_some_and(|(from, to)| from == to) {
                 self.forget_selection();
             }
@@ -496,7 +414,6 @@ impl TerminalView {
                 self.last_move = None;
                 self.send(bytes.repeat(steps.unsigned_abs() as usize), cx);
             }
-            // The program takes no wheel: the history scrolls.
             None => {
                 self.forget_selection();
                 self.emulator.scroll_lines(steps * LINES_A_STEP);
@@ -512,32 +429,25 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Moves the view with `scroll`, which takes the selection's mark away as every other
-    /// scroll of the history does. Nothing is sent to the program.
     fn scroll_with(&mut self, scroll: fn(&mut Emulator), cx: &mut Context<Self>) {
         self.forget_selection();
         scroll(&mut self.emulator);
         cx.notify();
     }
 
-    /// Scrolls the view `lines` into the history, or back towards the newest line when
-    /// negative.
     fn scroll_by(&mut self, lines: i32, cx: &mut Context<Self>) {
         self.forget_selection();
         self.emulator.scroll_lines(lines);
         cx.notify();
     }
 
-    /// [`Clear`]: the history and the screen above the cursor's line go, and the view
-    /// shows the newest line. Nothing is sent to the program: a shell that wants its
-    /// prompt drawn again is asked by the user, as in every terminal.
+    /// Nothing is sent to the program: a shell that wants its prompt redrawn is asked by the user.
     fn clear(&mut self, _: &Clear, _: &mut Window, cx: &mut Context<Self>) {
         self.forget_selection();
         self.emulator.clear_above_the_cursor();
         cx.notify();
     }
 
-    /// [`SelectAll`]: the whole history and screen, marked as far as the view shows it.
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.forget_selection();
         self.selection = Some(self.emulator.select_all());
@@ -567,7 +477,6 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// The font, its size and the size of one cell.
     pub(crate) fn metrics(window: &Window, cx: &App) -> (Font, Pixels, Size<Pixels>) {
         let theme = cx.theme();
         let font = font(theme.mono_font_family.clone());
@@ -585,8 +494,6 @@ impl TerminalView {
     }
 }
 
-/// The button of the mouse as the encoders name it; none for one a program is not told
-/// of.
 fn reported_button(button: gpui_kit::MouseButton) -> Option<ReportedButton> {
     match button {
         gpui_kit::MouseButton::Left => Some(ReportedButton::Left),
@@ -596,7 +503,6 @@ fn reported_button(button: gpui_kit::MouseButton) -> Option<ReportedButton> {
     }
 }
 
-/// How many UTF-16 units a text takes.
 fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
 }
@@ -606,8 +512,8 @@ impl Render for TerminalView {
         if !self.attached {
             self.attach(window, cx);
         }
-        // A synchronized update the program left open ends in its own time, with no
-        // output to say so.
+        // A synchronized update the program left open ends in its own time, with no output to say
+        // so.
         self.emulator.advance(&[]);
 
         let (font, font_size, cell) = Self::metrics(window, cx);
@@ -619,9 +525,8 @@ impl Render for TerminalView {
             theme.muted_foreground,
             theme.border,
         );
-        // The colours are the applied definition's. A program asks for them with a question
-        // the emulator answers at once, so a change of theme is handed on here, at the
-        // frame that draws with the new definition.
+        // A program asks for its colours with a question the emulator answers at once, so a theme
+        // change is handed on at the frame that draws with the new definition.
         let colours = theme::applied(cx).terminal;
         if colours != self.colours {
             self.colours = colours;
@@ -675,9 +580,11 @@ impl Render for TerminalView {
             .size_full()
             .relative()
             .overflow_hidden()
-            // The ground a cell with the default background shows is the one a program is
-            // told by its question about colours, not the window's behind the view.
+            // The terminal theme's background, which a program is told when it asks, not the
+            // window's.
             .bg(colours.background)
+            // While a terminal has the focus no Frame key fires but Cmd and kept keys, and the
+            // toolkit's window-wide keys reach the program.
             .key_context(PROGRAM_CONTEXT)
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
@@ -713,7 +620,6 @@ impl Render for TerminalView {
                     |bounds, _, _| bounds,
                     move |_, bounds, window, cx| {
                         geometry.bounds.set(bounds);
-                        // Whole cells only, from the top left corner.
                         let columns = (f32::from(bounds.size.width) / f32::from(cell.width))
                             .floor()
                             .max(1.) as u16;
@@ -761,7 +667,6 @@ impl EntityInputHandler for TerminalView {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
-        // The view holds no document: only the marked text can be asked for.
         let marked = self.marked.as_ref()?;
         let units: Vec<u16> = marked.encode_utf16().collect();
         let end = range.end.min(units.len());
@@ -776,7 +681,6 @@ impl EntityInputHandler for TerminalView {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        // The cursor sits after the marked text, or nowhere to speak of.
         let end = self.marked.as_deref().map_or(0, utf16_len);
         Some(UTF16Selection {
             range: end..end,
@@ -788,7 +692,6 @@ impl EntityInputHandler for TerminalView {
         self.marked.as_deref().map(|marked| 0..utf16_len(marked))
     }
 
-    /// Ends the composition and sends nothing: what was marked is dropped.
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         if self.marked.take().is_some() {
             cx.notify();
@@ -801,7 +704,6 @@ impl EntityInputHandler for TerminalView {
         }
     }
 
-    /// The text is final: it goes to the program and the marked text is gone.
     fn replace_text_in_range(
         &mut self,
         _: Option<Range<usize>>,
@@ -817,8 +719,6 @@ impl EntityInputHandler for TerminalView {
         cx.notify();
     }
 
-    /// The text is still being composed: it is kept and drawn at the cursor, and nothing
-    /// is sent. An empty text ends the composition.
     fn replace_and_mark_text_in_range(
         &mut self,
         _: Option<Range<usize>>,
@@ -831,7 +731,7 @@ impl EntityInputHandler for TerminalView {
         cx.notify();
     }
 
-    /// The cell under the cursor, where the system puts its candidate window.
+    /// Where the system puts its candidate window.
     fn bounds_for_range(
         &mut self,
         _: Range<usize>,

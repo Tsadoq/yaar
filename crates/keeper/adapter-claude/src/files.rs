@@ -1,28 +1,6 @@
-//! The clean-up of the files of long reviews: the body of the Adapter's
-//! `remove_files_of_ended`.
-//!
-//! The Adapter writes a review too long to ride inline into `<folder>/`[`REVIEWS`]`/<CLI
-//! session id>/` (see `deliver.rs`), and nothing else ever removes it. A call removes the
-//! folder of every session `runs` says no longer runs, and with `written_before` only where
-//! every file in it was last modified before that time (a file written exactly then is not
-//! before it), so that a session ended a moment ago and resumed later still finds its files.
-//!
-//! Nothing outside the folder of reviews is touched and no link is followed: a link inside a
-//! session's folder, a session's folder that is itself a link, and a folder of reviews that
-//! is itself a link are each dealt with by their own metadata, as `symlink_metadata` gives
-//! it, and the link goes, never what it names. What is not a session's folder is left alone:
-//! a plain file beside the sessions, a name that is not text, a name no session id of this
-//! Adapter can be ([`crate::deliver`] writes ASCII letters, digits, `-` and `_` only).
-//!
-//! The bytes given are the blocks the removed files and links used on disk (`st_blocks`,
-//! in units of 512 bytes), the unit the recorded states are counted in: the folders
-//! themselves count for nothing. A session whose folder cannot be removed stays for the next
-//! clean-up: the others go on, and the first failure is what the call gives at the end.
-//!
-//! An error reading the folder of reviews ends the walk: the standard library's listing gives
-//! that error once and nothing after it. The error is noted, what was removed stays removed,
-//! the sessions not reached stay for the next clean-up, and the failure is given at the end.
-//! No test holds this clause, for no surface makes a folder's listing fail partway.
+//! Removes the folder of every session `runs` says no longer runs, under
+//! `<folder>/`[`REVIEWS`]`/`; with `written_before`, only where every file in it is older
+//! (a file written exactly then is not), so a session resumed later keeps its files.
 
 use std::fs;
 use std::io;
@@ -32,8 +10,6 @@ use std::time::SystemTime;
 
 use crate::deliver::{REVIEWS, is_folder_name};
 
-/// Removes the files of the sessions of `folder` that no longer run, as the module doc says;
-/// gives the bytes removed.
 pub(crate) fn remove_files_of_ended(
     folder: &Path,
     runs: &dyn Fn(&str) -> bool,
@@ -50,9 +26,8 @@ pub(crate) fn remove_files_of_ended(
     let mut removed = 0;
     let mut failure = None;
     for entry in fs::read_dir(&reviews)? {
-        // An error reading the listing is noted. The listing gives nothing after it, so the
-        // next look ends the walk: what was removed stays removed, and the sessions not
-        // reached stay for the next clean-up.
+        // An error is noted and the walk goes on, but std's listing gives nothing after an error:
+        // the sessions not reached stay for the next clean-up.
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
@@ -79,9 +54,6 @@ pub(crate) fn remove_files_of_ended(
     }
 }
 
-/// Removes the session's folder at `path`, or the link that stands in its place, unless it
-/// holds a file written at `written_before` or later; gives the bytes removed. What is no
-/// folder and no link (a plain file) is no session and stays.
 fn remove_session(path: &Path, written_before: Option<SystemTime>) -> io::Result<u64> {
     let found = fs::symlink_metadata(path)?;
     if found.is_dir() {
@@ -102,8 +74,6 @@ fn remove_session(path: &Path, written_before: Option<SystemTime>) -> io::Result
     }
 }
 
-/// Whether every file and link under the folder `path` was last modified before
-/// `written_before`, adding to `bytes` the blocks they use. Never follows a link.
 fn all_before(
     path: &Path,
     written_before: Option<SystemTime>,
@@ -126,8 +96,6 @@ fn all_before(
     Ok(true)
 }
 
-/// Whether the file `found` describes was last modified before `written_before`; always,
-/// when there is no time.
 fn is_before(found: &fs::Metadata, written_before: Option<SystemTime>) -> io::Result<bool> {
     match written_before {
         None => Ok(true),

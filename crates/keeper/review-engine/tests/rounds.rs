@@ -1,6 +1,6 @@
 //! A round shown as sent until its agent's first edit, and what changed since a round's
-//! comments were sent, through the engine with the real Store and the real Recorder
-//! beneath, on a repository the test makes.
+//! comments were sent, through the engine with the real Store and Recorder on a repository
+//! the test makes.
 
 mod support;
 
@@ -14,8 +14,8 @@ use yaar_recorder::{Change, ChangedPath};
 use yaar_review_engine::{EngineError, ReviewError, ReviewId, Reviews, SentBy};
 use yaar_store::{CommentId, Round};
 
-// What git says changed between two states, asked of the state store itself with its own
-// diff, as the row states it: `git diff-tree -r -M --name-status`.
+// What git says changed between two states, from the state store's own
+// `git diff-tree -r -M --name-status`.
 fn git_says(reviews: &Reviews, from: &str, to: &str) -> Vec<ChangedPath> {
     let states = reviews.states_of(&workspace()).expect("the state store");
     let printed = git_bytes(
@@ -68,7 +68,6 @@ fn paths(changed: &[ChangedPath]) -> Vec<&str> {
         .collect()
 }
 
-// The id of the newest state of the workspace.
 fn newest(reviews: &Reviews) -> String {
     reviews
         .states_of(&workspace())
@@ -82,8 +81,6 @@ fn newest(reviews: &Reviews) -> String {
         .to_owned()
 }
 
-// A repository of five files with the review of its workspace, a thread on `a.txt` and
-// one on `b.txt` and a worktree to read it through.
 struct Setup {
     repo: PathBuf,
     reviews: Reviews,
@@ -120,8 +117,6 @@ fn setup(scratch: &Scratch) -> Setup {
     }
 }
 
-// A draft on a new thread, then a copy: a round whose comments were sent now and whose
-// state is the worktree as it is. Gives the round's state.
 fn send_round(on: &Setup, thread: u128, path: &str, line_text: &str) -> String {
     let worktree = open(&on.repo);
     on.reviews
@@ -145,7 +140,6 @@ fn send_round(on: &Setup, thread: u128, path: &str, line_text: &str) -> String {
     round.state.expect("a copy records the state of its round")
 }
 
-// REV-15
 #[test]
 fn what_changed_since_a_round_is_the_diff_from_the_state_recorded_at_its_send() {
     let scratch = Scratch::new();
@@ -153,12 +147,10 @@ fn what_changed_since_a_round_is_the_diff_from_the_state_recorded_at_its_send() 
     let worktree = open(&on.repo);
 
     let first = send_round(&on, 1, "a.txt", "one");
-    // Round 1 is sent; the agent changes `a` and `b`.
     write(&on.repo, "a.txt", "one, changed\n");
     write(&on.repo, "b.txt", "two, changed\n");
     let second = send_round(&on, 2, "b.txt", "two, changed");
     assert_ne!(first, second);
-    // Round 2 is sent; the agent changes `c`, `a` again, moves a file and removes one.
     write(&on.repo, "c.txt", "three, changed\n");
     write(&on.repo, "a.txt", "one, changed twice\n");
     let old = std::fs::read_to_string(on.repo.join("old.txt")).expect("read");
@@ -177,8 +169,7 @@ fn what_changed_since_a_round_is_the_diff_from_the_state_recorded_at_its_send() 
         .reviews
         .changed_since_round(&worktree, &on.review, 1)
         .expect("what changed since round 1");
-    // The worktree was recorded by the call, as a state of its own, and that is the one
-    // the diff ends at.
+    // The worktree was recorded by the call, as a state of its own: the one the diff ends at.
     let now = newest(&on.reviews);
     assert_eq!(
         on.reviews
@@ -191,8 +182,6 @@ fn what_changed_since_a_round_is_the_diff_from_the_state_recorded_at_its_send() 
     );
     assert_ne!(now, second);
 
-    // From the state of the send of round 1: every file the agent touched since, the
-    // move paired as git pairs it.
     assert_eq!(
         paths(&since_first),
         ["a.txt", "b.txt", "c.txt", "gone.txt", "moved.txt"]
@@ -212,7 +201,6 @@ fn what_changed_since_a_round_is_the_diff_from_the_state_recorded_at_its_send() 
     }));
     assert_eq!(since_first, git_says(&on.reviews, &first, &now));
 
-    // From the state of the send of round 2: what the agent did after it.
     let since_second = on
         .reviews
         .changed_since_round(&worktree, &on.review, 2)
@@ -222,7 +210,6 @@ fn what_changed_since_a_round_is_the_diff_from_the_state_recorded_at_its_send() 
         ["a.txt", "c.txt", "gone.txt", "moved.txt"]
     );
     assert_eq!(since_second, git_says(&on.reviews, &second, &now));
-    // Nothing changed in between, so the worktree is the state of the call before.
     assert_eq!(newest(&on.reviews), now);
 }
 
@@ -230,8 +217,8 @@ fn what_changed_since_a_round_is_the_diff_from_the_state_recorded_at_its_send() 
 fn nothing_changed_since_a_round_when_the_files_are_as_they_were_at_its_send() {
     let scratch = Scratch::new();
     let on = setup(&scratch);
-    // The files differ from the commit and from every state before the send, and not from
-    // the state of the send: only that counts.
+    // The files differ from the commit and from every state before the send, and not from the
+    // state of the send: only that counts.
     write(&on.repo, "a.txt", "one, changed before the send\n");
     send_round(&on, 1, "a.txt", "one, changed before the send");
 
@@ -272,8 +259,8 @@ fn a_round_with_no_state_or_none_at_all_is_unknown_and_nothing_is_recorded_for_i
     let on = setup(&scratch);
     let worktree = open(&on.repo);
     send_round(&on, 1, "a.txt", "one");
-    // A round delivered with a message has no state until it is recorded: made here as
-    // the Store keeps one.
+    // A round delivered with a message has no state until it is recorded: made here as the
+    // Store keeps one.
     on.reviews
         .save_draft(
             Some(&worktree),
@@ -319,7 +306,6 @@ fn a_round_with_no_state_or_none_at_all_is_unknown_and_nothing_is_recorded_for_i
         matches!(no_review, Err(EngineError::UnknownReview(_))),
         "{no_review:?}"
     );
-    // A refusal is made before the worktree is recorded.
     assert_eq!(
         on.reviews
             .states_of(&workspace())
@@ -341,12 +327,10 @@ fn an_edit_of_a_session_is_kept_on_the_newest_round_of_its_review_and_on_no_othe
     let review_two = on.reviews.session_started(&second).expect("start");
     assert_ne!(review_one, review_two);
 
-    // No round yet: an edit changes nothing, and so for a session nobody knows.
     assert_eq!(on.reviews.agent_edited(&first.id).expect("edited"), None);
     let nobody = yaar_review_engine::SessionId::new(id(0x777));
     assert_eq!(on.reviews.agent_edited(&nobody).expect("edited"), None);
 
-    // A round of the first session's review, sent by a copy.
     let worktree = open(&on.repo);
     on.reviews
         .save_draft(
@@ -364,7 +348,6 @@ fn an_edit_of_a_session_is_kept_on_the_newest_round_of_its_review_and_on_no_othe
     };
     assert_eq!(round_of(&on.reviews, &review_one), (true, Some(false)));
 
-    // The second session's edit does not touch the first's review.
     assert_eq!(on.reviews.agent_edited(&second.id).expect("edited"), None);
     assert_eq!(round_of(&on.reviews, &review_one), (true, Some(false)));
 
@@ -374,7 +357,6 @@ fn an_edit_of_a_session_is_kept_on_the_newest_round_of_its_review_and_on_no_othe
     );
     assert_eq!(on.reviews.agent_edited(&first.id).expect("edited"), None);
 
-    // Kept: read through an engine over a new Store of the same file, as after a restart.
     drop(on.reviews);
     drop(on.store);
     let again = engine(&scratch, self::store(&scratch));

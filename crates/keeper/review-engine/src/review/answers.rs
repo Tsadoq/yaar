@@ -1,28 +1,18 @@
-//! The agent's replies, the states of a thread, and resolving every addressed thread at
-//! once. Built by the engine's package "replies and the states of a thread" of slice 6.
-
 use yaar_store::{Author, Comment, CommentId, SessionId, ThreadId};
 
 use super::{Review, ReviewError};
 
-/// The state of a thread, as the review pane lists it: the first of these that holds.
+/// A thread's state as the review pane lists it: the first variant, in this order, that holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThreadState {
-    /// The reviewer resolved it.
     Resolved,
-    /// It holds a comment of the reviewer that was not sent.
     Draft,
-    /// The agent's last reply marked it addressed.
     Addressed,
-    /// The agent replied last, without the addressed mark: it waits for the reviewer.
     WaitsForReviewer,
-    /// Its comments were sent, and the agent has not replied since.
     Sent,
 }
 
 impl Review {
-    /// The state of a thread, by [`ThreadState`]'s order; none for a thread the review
-    /// does not hold.
     pub fn state_of(&self, thread: &ThreadId) -> Option<ThreadState> {
         let held = self.thread(thread)?;
         Some(if held.resolved {
@@ -42,14 +32,9 @@ impl Review {
         })
     }
 
-    /// Keeps a reply of the agent of `session` in a thread: a comment of the agent, sent
-    /// in the newest round, and the thread addressed or not as the reply says. A reply
-    /// without the mark takes an earlier mark away: the thread waits for the reviewer. A
-    /// reply never resolves a thread, and leaves a resolved one resolved. Refused with
-    /// [`ReviewError::OtherSession`] when the review does not belong to `session`,
-    /// [`ReviewError::UnknownThread`] for a thread the review does not hold, a thread of
-    /// another session's review among them, [`ReviewError::NothingSent`] when no round was
-    /// sent, and [`ReviewError::TakenId`]; nothing changes then.
+    /// Keeps a reply of the agent of `session` as a comment sent in the newest round and sets the
+    /// thread's addressed mark as the reply says; it never resolves a thread. Refused, changing
+    /// nothing, for another session's review, an unknown thread, no round sent or a taken id.
     pub fn agent_reply(
         &mut self,
         session: &SessionId,
@@ -79,11 +64,8 @@ impl Review {
         Ok(())
     }
 
-    /// Resolves every thread in the state [`ThreadState::Addressed`], and gives them, in
-    /// the order of the threads: the threads the agent marked addressed, not resolved, and
-    /// with no draft of the reviewer's, which the pane lists as a draft and which a
-    /// resolve would take out of the next send. The reviewer's action: nothing else
-    /// resolves.
+    /// Resolves every thread in state [`ThreadState::Addressed`]: marked addressed, not resolved,
+    /// with no draft of the reviewer's (a resolve would take it out of the next send).
     pub fn resolve_addressed(&mut self) -> Vec<ThreadId> {
         let addressed: Vec<ThreadId> = self
             .threads()
@@ -125,8 +107,6 @@ mod tests {
         SessionId::new(name)
     }
 
-    // A review of session `agent` with threads 1 to `count`, each holding one comment of the
-    // reviewer.
     fn review_of(agent: &str, count: u32) -> Review {
         let mut review = Review::new(
             ReviewId::new(id(1000)),
@@ -153,7 +133,6 @@ mod tests {
         review
     }
 
-    // The review of `agent` with `count` threads, all sent in round 1.
     fn sent(agent: &str, count: u32) -> Review {
         let mut review = review_of(agent, count);
         review
@@ -182,42 +161,34 @@ mod tests {
         review.thread(&thread(n)).expect("the thread is held")
     }
 
-    // REPLY-03
     #[test]
     fn a_reply_without_the_mark_waits_for_the_reviewer_and_with_it_is_addressed_and_only_the_reviewer_resolves()
      {
         let mut review = sent("A", 2);
 
-        // A reply without the addressed mark leaves the thread open, waiting.
         reply(&mut review, 1, 201, false);
         assert_eq!(state(&review, 1), ThreadState::WaitsForReviewer);
         assert!(!held(&review, 1).resolved);
         assert!(!held(&review, 1).addressed);
 
-        // A reply with it makes the thread addressed and not resolved.
         reply(&mut review, 2, 202, true);
         assert_eq!(state(&review, 2), ThreadState::Addressed);
         assert!(!held(&review, 2).resolved);
         assert!(held(&review, 2).addressed);
 
-        // The reply is the agent's comment, sent in the round the review is in.
         let (_, kept) = review.comment(&comment(201)).expect("the reply is kept");
         assert_eq!(kept.author, Author::Agent);
         assert_eq!(kept.round, Some(1));
         assert_eq!(kept.text, "done");
 
-        // No reply resolves: the second reply without the mark takes the mark away.
         reply(&mut review, 2, 203, false);
         assert_eq!(state(&review, 2), ThreadState::WaitsForReviewer);
         assert!(!held(&review, 2).addressed);
         assert!(!held(&review, 2).resolved);
 
-        // The reviewer's action resolves.
         review.resolve(&thread(2)).expect("resolve");
         assert_eq!(state(&review, 2), ThreadState::Resolved);
 
-        // A reply with the mark to a resolved thread leaves it resolved, and so does one
-        // without.
         reply(&mut review, 2, 204, true);
         assert_eq!(state(&review, 2), ThreadState::Resolved);
         reply(&mut review, 2, 205, false);
@@ -225,11 +196,9 @@ mod tests {
         assert_eq!(state(&review, 1), ThreadState::WaitsForReviewer);
     }
 
-    // REPLY-04
     #[test]
     fn a_reply_that_names_a_thread_of_another_sessions_review_is_refused_and_changes_nothing() {
         let mut mine = sent("A", 1);
-        // The other review holds a thread of its own, number 2.
         let mut other = Review::new(
             ReviewId::new(id(1001)),
             WorkspaceId::new("w"),
@@ -255,12 +224,10 @@ mod tests {
             .expect("send");
         let (mine_before, other_before) = (mine.clone(), other.clone());
 
-        // A's reply to B's thread: the review of A does not hold it.
         assert_eq!(
             mine.agent_reply(&session("A"), &thread(2), comment(301), "no", true),
             Err(ReviewError::UnknownThread(thread(2)))
         );
-        // B's reply to A's thread: the review is not B's.
         assert_eq!(
             mine.agent_reply(&session("B"), &thread(1), comment(302), "no", true),
             Err(ReviewError::OtherSession(session("B")))
@@ -294,7 +261,6 @@ mod tests {
 
         let mut review = sent("A", 1);
         let before = review.clone();
-        // The id of the reviewer's own comment, and the id of the thread.
         for taken in [comment(101), comment(1)] {
             let id = taken.to_string();
             assert_eq!(
@@ -325,7 +291,6 @@ mod tests {
         assert_eq!(state(&review, 1), ThreadState::Sent);
 
         reply(&mut review, 1, 201, true);
-        // An unsent comment of the reviewer comes before the agent's mark.
         review
             .reply(&thread(1), comment(150), "one more thing")
             .expect("a follow-up");
@@ -342,8 +307,6 @@ mod tests {
         reply(&mut review, 1, 201, false);
         assert_eq!(state(&review, 1), ThreadState::WaitsForReviewer);
 
-        // The reviewer's follow-up is a draft, and once sent the thread is sent again: the
-        // agent's earlier reply no longer makes it wait.
         review
             .reply(&thread(1), comment(150), "not quite")
             .expect("a follow-up");
@@ -353,7 +316,6 @@ mod tests {
             .expect("send the follow-up");
         assert_eq!(state(&review, 1), ThreadState::Sent);
 
-        // The agent replies again, and the thread waits again.
         reply(&mut review, 1, 202, false);
         assert_eq!(state(&review, 1), ThreadState::WaitsForReviewer);
     }
@@ -364,19 +326,16 @@ mod tests {
         assert_eq!(state(&review, 1), ThreadState::Draft);
     }
 
-    // REV-13
     #[test]
     fn a_resolved_thread_can_be_reopened_and_one_action_resolves_every_addressed_thread() {
         let mut review = sent("A", 6);
 
-        // T1 is resolved and reopened: it is as it was before, sent.
         review.resolve(&thread(1)).expect("resolve");
         assert_eq!(state(&review, 1), ThreadState::Resolved);
         review.reopen(&thread(1)).expect("reopen");
         assert!(!held(&review, 1).resolved);
         assert_eq!(state(&review, 1), ThreadState::Sent);
 
-        // T2 and T3 addressed, T4 waits for the reviewer, T5 sent, T6 resolved.
         reply(&mut review, 2, 202, true);
         reply(&mut review, 3, 203, true);
         reply(&mut review, 4, 204, false);
@@ -389,7 +348,6 @@ mod tests {
         assert_eq!(state(&review, 5), ThreadState::Sent);
         assert_eq!(state(&review, 6), ThreadState::Resolved);
 
-        // A second call finds none.
         let before = review.clone();
         assert_eq!(review.resolve_addressed(), Vec::<ThreadId>::new());
         assert_eq!(review, before);
@@ -409,8 +367,6 @@ mod tests {
         let mut review = sent("A", 2);
         reply(&mut review, 1, 201, true);
         reply(&mut review, 2, 202, true);
-        // The reviewer started a follow-up in thread 2: it shows as a draft, and resolving
-        // it would take the draft out of the next send.
         review
             .reply(&thread(2), comment(150), "not yet")
             .expect("a follow-up");

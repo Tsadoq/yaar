@@ -1,5 +1,4 @@
-//! `standin-agent`: the stand-in agent CLI of the system tests, started under the names
-//! `claude`, `pi` and `otheragent`. See `yaar_system_tests::standin`.
+//! Stand-in agent CLI, started as `claude`, `pi` or `otheragent`; see `yaar_system_tests::standin`.
 
 use std::path::Path;
 use std::process::ExitCode;

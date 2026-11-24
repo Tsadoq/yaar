@@ -1,6 +1,3 @@
-//! Component tests: the watcher of a worktree, with the real system notices, in real
-//! repositories the tests make.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -8,7 +5,6 @@ use std::path::{Path, PathBuf};
 use support::{Heard, Scratch, ago, commit_all, git, init, wait_until, workspaces, write};
 use yaar_workspaces::{Refusal, WorkspaceError, WorkspaceId};
 
-/// A repository with a file committed, and the workspace of it opened but not watched.
 fn opened(scratch: &Scratch) -> (yaar_workspaces::Workspaces, WorkspaceId, PathBuf) {
     let root = scratch.join("repo");
     init(&root);
@@ -23,7 +19,6 @@ fn opened(scratch: &Scratch) -> (yaar_workspaces::Workspaces, WorkspaceId, PathB
 fn nothing_is_watched_until_a_workspace_is_asked_for_and_it_stays_so_after_unwatching() {
     let scratch = Scratch::new();
     let (workspaces, workspace, _) = opened(&scratch);
-    // Opening, listing and reading the changes start no watcher.
     workspaces.repositories().expect("repositories");
     workspaces.changes(&workspace).expect("changes");
     assert!(workspaces.watched().is_empty());
@@ -33,7 +28,6 @@ fn nothing_is_watched_until_a_workspace_is_asked_for_and_it_stays_so_after_unwat
     assert_eq!(workspaces.watched(), std::slice::from_ref(&workspace));
     workspaces.unwatch(&workspace);
     assert!(workspaces.watched().is_empty());
-    // Unwatching what is not watched is nothing.
     workspaces.unwatch(&workspace);
 }
 
@@ -44,9 +38,8 @@ fn a_written_file_is_told_as_files_and_a_commit_as_the_head_and_the_git_folder_i
     let heard = Heard::default();
     workspaces.watch(&workspace, heard.told()).expect("watch");
 
-    // A commit changes nothing in the files and a great deal in the git folder: objects,
-    // the list of files, the ref. The notices come in order, so that once the head is
-    // told, those of the objects before it have been told or dropped.
+    // A commit changes the git folder, not the files. Notices come in order: once the head is told,
+    // those of the objects before it have been told or dropped.
     git(
         &root,
         &["commit", "--quiet", "--allow-empty", "-m", "second"],
@@ -65,9 +58,9 @@ fn a_file_in_a_folder_made_after_the_watch_began_is_seen_by_its_path() {
     workspaces
         .watch(&workspace, Heard::default().told())
         .expect("watch");
-    // A command runs, so that a path the watcher sees is credited to it and the credits
-    // say which paths were seen. Files are written into the new folder until one of them
-    // is: where the system needs a moment to watch a new folder, the first may be missed.
+    // A command runs, so that a path the watcher sees is credited to it. Files are written into the
+    // new folder until one is seen: the system needs a moment to watch a new folder, so the first
+    // may be missed.
     workspaces.command_began(&workspace, "a", ago(1));
     std::fs::create_dir_all(root.join("made/later")).expect("make the folders");
     let mut written = 0;
@@ -102,9 +95,9 @@ fn a_linked_worktree_tells_its_own_head_and_the_refs_of_its_repository() {
     let heard = Heard::default();
     workspaces.watch(&workspace, heard.told()).expect("watch");
 
-    // A file of the main worktree is no file of this one, and a ref made from there is a
-    // change of what this one sees. The file comes first: once the ref is told, the
-    // notice of the file would have been too.
+    // A file of the main worktree is no file of this one, but a ref made from there is a change of
+    // what this one sees. The file comes first: once the ref is told, the notice of the file would
+    // have been too.
     write(&root, "main-only.txt", "x\n");
     git(&root, &["branch", "another"]);
     wait_until("the ref made elsewhere is told", || heard.heads() > 0);

@@ -1,10 +1,4 @@
-//! Component test: the control that resumes a session a restart cut off, in the composed
-//! Window on GPUI's test platform, with no window on any screen.
-//!
-//! The Keeper is the built program, started again after everything was killed as a restart of
-//! the machine would; the agent beneath it is the stand-in as Claude Code, started by the
-//! control. What reached the stand-in is read from the file it writes down, and the control
-//! from the terminal pane's model and from what the pane draws.
+//! Component test: the control that resumes a session a restart cut off, with a stand-in agent.
 
 mod common;
 
@@ -15,7 +9,6 @@ use yaar_system_tests::{DEADLINE, World, wait_until as wait_for};
 
 use common::{a_session_cut_off, drawn, wait_until};
 
-// AGENT-15 (the Window's control; FR-120).
 #[gpui_kit::test]
 fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_goes_when_it_reports(
     cx: &mut TestAppContext,
@@ -25,8 +18,6 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
     let (mut window, mut cx) = common::open_composed_in(world, cx, Vec::new());
     window.open_this_folder(cut_off.repo.path(), &mut cx);
 
-    // After the restart the pane offers the session, one control for it, with no terminal
-    // open and no stand-in running.
     wait_until(&mut cx, "the control to resume the session", |cx| {
         drawn("terminal-resume-0", cx).is_some()
     });
@@ -43,9 +34,7 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         "nothing runs before the click"
     );
 
-    // The resumed stand-in is held before it reports its start, so that the order of what
-    // follows is made by the test and not by how fast a login shell, the stand-in and its
-    // hook program start: until the test lets it go, the session has not reported.
+    // The resumed stand-in is held before it reports its start, so the order is the test's own.
     let start_gate = window.world.home().with_file_name("resume-start-gate");
     window.world.agent_script(
         "default",
@@ -56,8 +45,6 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         ]),
     );
 
-    // A click runs the CLI's own resume command with the session's id: the stand-in is
-    // started with exactly those arguments.
     let at = window.point_in("terminal-resume-0", &mut cx);
     cx.simulate_click(at, Modifiers::none());
     let wanted = ["--resume".to_owned(), cut_off.cli_session.clone()];
@@ -87,11 +74,7 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         window.world.agent_log("default")
     );
 
-    // The line stands for as long as the Keeper lists the session resumable, not only until
-    // the click: with the terminal open and the stand-in running but not yet reported, the
-    // Keeper lists the session resumable and the control is drawn. This look is taken
-    // while the stand-in is held, so it is a look that finds both, whatever the speed of the
-    // machine.
+    // The stand-in is held, so this look finds the terminal open and the session not yet reported.
     let listed = window.models.agents.read_with(&cx, |agents, _| {
         agents
             .session(&cut_off.session)
@@ -103,9 +86,6 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         "no look after the click found the session listed with its line: listed {listed}, line {line}"
     );
 
-    // The stand-in goes on and reports: from then on, whenever the model still lists the
-    // session resumable, the control is drawn, and it goes when the session is listed so
-    // no more.
     std::fs::write(&start_gate, "").expect("let the stand-in report");
     wait_until(
         &mut cx,
@@ -125,7 +105,6 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         },
     );
 
-    // One click asked for one resume, and the Keeper refused nothing.
     let resumes = window
         .tap
         .requests()
@@ -149,8 +128,6 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         "one click sends one resume of the session: {resumes:?}"
     );
 
-    // The session reports: the Keeper lists it running in the terminal the control opened, and
-    // the line goes. No other session came.
     wait_until(&mut cx, "the resumed session to run", |cx| {
         window.models.agents.read_with(cx, |agents, _| {
             agents.session(&cut_off.session).is_some_and(|session| {
@@ -188,7 +165,6 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         []
     );
 
-    // The stand-in ends at the gate, so that nothing of the test is left running.
     std::fs::write(&cut_off.gate, "").expect("open the gate");
     assert!(
         wait_for(DEADLINE, || window

@@ -1,8 +1,5 @@
-//! Tests of the stand-in agent: the built `standin-agent`, run in a pseudo-terminal the
-//! test opens, with a plugin folder of the test's own whose hooks write down what they
-//! were given. No Keeper, no app: as Claude Code the stand-in knows that CLI's side of the
-//! plugin contract, and as pi it reports through a reporting program of the test's own, in a
-//! home of the test's own.
+//! Tests of the built `standin-agent` in a pseudo-terminal, with plugin folders whose hooks record
+//! their inputs.
 
 use std::cell::RefCell;
 use std::ffi::CString;
@@ -22,19 +19,14 @@ use yaar_system_tests::standin::{
 };
 use yaar_system_tests::{DEADLINE, Place, is_alive, program, wait_until};
 
-/// The progress sequence of a turn that works, and the one that says no progress.
 const WORKING: &[u8] = b"\x1b]9;4;3;\x07";
 const NO_PROGRESS: &[u8] = b"\x1b]9;4;0;\x07";
 
-/// The stand-in's own limit on a hook, 10 s, and a little room for starting and killing it.
+/// The stand-in's own limit on a hook, 10 s, and room for starting and killing it.
 const HOOK_LIMIT_AND_ROOM: Duration = Duration::from_secs(25);
 
-/// The pseudo-terminal a stand-in runs in: the test is the terminal emulator, reading what
-/// the program writes and typing what a user types.
 struct Pty {
-    /// Gone once the test closes the terminal.
     master: Option<OwnedFd>,
-    /// Kept open, so that the settings of the terminal outlive the program.
     slave: OwnedFd,
     output: Vec<u8>,
 }
@@ -78,19 +70,16 @@ impl Pty {
             .as_raw_fd()
     }
 
-    /// Closes the terminal, as the app does when it ends the program's terminal.
     fn close(&mut self) {
         self.master = None;
     }
 
-    /// Types these bytes, in one write.
     fn send(&self, bytes: &[u8]) {
         // SAFETY: the pointer and length are those of a live slice.
         let written = unsafe { libc::write(self.master(), bytes.as_ptr().cast(), bytes.len()) };
         assert_eq!(written, bytes.len() as isize, "typing into the terminal");
     }
 
-    /// Reads whatever the program has written so far.
     fn drain(&mut self) {
         loop {
             let mut poll = libc::pollfd {
@@ -112,14 +101,11 @@ impl Pty {
         }
     }
 
-    /// Reads one chunk of what the program has written, waiting for it in `poll` until
-    /// `deadline` when there is none yet. Gives false when nothing came in time or the
-    /// terminal is closed. The wait is the system's own: a loop that looks and sleeps hands
-    /// over a chunk per sleep, which a slow machine stretches past any deadline.
+    /// Waits in `poll`: a loop that looks and sleeps hands over a chunk per sleep, which a slow
+    /// machine stretches past any deadline.
     fn read_chunk(&mut self, deadline: Instant) -> bool {
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
-            // Rounded up, so that a part of a millisecond left is not a look that waits not at all.
             let wait = i32::try_from(left.as_micros().div_ceil(1000)).unwrap_or(i32::MAX);
             let mut poll = libc::pollfd {
                 fd: self.master(),
@@ -150,12 +136,8 @@ impl Pty {
         }
     }
 
-    /// Reads, one chunk at a time and no further than it has to, until `needle` is in the
-    /// output after byte `from`, for at most [`DEADLINE`]; gives where it ends. What the
-    /// program writes after that stays unread.
     fn read_to(&mut self, needle: &[u8], from: usize) -> Option<usize> {
         let deadline = Instant::now() + DEADLINE;
-        // Only what came in since the last look is searched: the output may be a megabyte.
         let mut looked = from;
         loop {
             if let Some(at) = find(&self.output[looked..], needle) {
@@ -168,7 +150,6 @@ impl Pty {
         }
     }
 
-    /// Waits until `needle` is in the output after byte `from`; gives where it ends.
     fn wait_for(&mut self, needle: &[u8], from: usize) -> usize {
         let end = self.read_to(needle, from);
         self.drain();
@@ -181,8 +162,7 @@ impl Pty {
         })
     }
 
-    /// Reads until `needle` is in the output after byte `from`, and no further, so that
-    /// what the program writes after that stays unread and it soon waits in a write again.
+    /// Reads no further than `needle`, so the program soon waits in a write again.
     fn read_until(&mut self, needle: &[u8], from: usize) {
         assert!(
             self.read_to(needle, from).is_some(),
@@ -207,7 +187,6 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-/// One group of a plugin's `hooks.json`.
 struct Group {
     event: &'static str,
     matcher: Option<&'static str>,
@@ -222,18 +201,14 @@ fn group(event: &'static str, matcher: Option<&'static str>, command: String) ->
     }
 }
 
-/// A command that appends what it is given on its standard input, as a line, to `file`.
 fn record(file: &Path) -> String {
     format!("cat >> '{0}'; echo >> '{0}'", file.display())
 }
 
-/// The folder of a place.
 fn root_of(place: &Place) -> PathBuf {
     place.socket().parent().expect("a folder").to_owned()
 }
 
-/// The lines of a file of recorded hook inputs, each a JSON value; none for a file that is
-/// not there.
 fn events_in(file: &Path) -> Vec<Value> {
     fs::read_to_string(file)
         .unwrap_or_default()
@@ -243,39 +218,29 @@ fn events_in(file: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// One run of the stand-in: its folders, its terminal and its process.
 struct Run {
     place: Place,
     work: PathBuf,
     log: PathBuf,
     pty: Pty,
-    /// The settings of the terminal before any program ran in it.
     before: libc::termios,
     child: Child,
     gates: Vec<PathBuf>,
     sleepers: Vec<PathBuf>,
 }
 
-/// What a run is started with.
 struct Start<'a> {
     place: Place,
     name: &'a str,
     script: Script,
-    /// One plugin folder for each list of groups.
     plugins: Vec<Vec<Group>>,
-    /// Folders named before the plugins in the list the stand-in is given.
     before: Vec<PathBuf>,
     args: Vec<String>,
     env: Vec<(&'a str, String)>,
-    /// Whether the terminal is the program's controlling terminal, as it is in a shell of
-    /// the app: closing it then sends the program a hangup.
+    /// Whether the terminal is the program's controlling terminal: closing it then sends a hangup.
     controlling: bool,
-    /// Gates (FIFOs) hooks wait on, and files naming processes hooks start: ended when
-    /// the test fails.
     gates: Vec<PathBuf>,
     sleepers: Vec<PathBuf>,
-    /// Whether a plugin folder with a tool server of the test's own (`TOOL_SERVER`) is
-    /// among the plugins.
     server: bool,
 }
 
@@ -296,7 +261,6 @@ impl<'a> Start<'a> {
         }
     }
 
-    /// A last plugin folder whose `.mcp.json` names a tool server of the test's own.
     fn with_tool_server(mut self) -> Self {
         self.server = true;
         self
@@ -307,7 +271,6 @@ impl<'a> Start<'a> {
         self
     }
 
-    /// Plugin hooks for these events, each recording its input into `file`.
     fn recording(self, events: &[&'static str], file: &Path) -> Self {
         self.plugin(
             events
@@ -317,19 +280,16 @@ impl<'a> Start<'a> {
         )
     }
 
-    /// The terminal is the program's controlling terminal.
     fn controlling(mut self) -> Self {
         self.controlling = true;
         self
     }
 
-    /// A gate a hook waits on, to be opened when the test fails.
     fn gate(mut self, at: &Path) -> Self {
         self.gates.push(at.to_owned());
         self
     }
 
-    /// A file a hook writes a process id in, to be ended when the test fails.
     fn sleeper(mut self, at: &Path) -> Self {
         self.sleepers.push(at.to_owned());
         self
@@ -339,7 +299,6 @@ impl<'a> Start<'a> {
         let root = root_of(&self.place);
         let work = root.join("work");
         fs::create_dir_all(&work).expect("create the worktree");
-        // The stand-in reports the folder it was started in as the system names it.
         let work = work.canonicalize().expect("resolve the worktree");
         let script = root.join("script");
         fs::write(&script, self.script.text()).expect("write the script");
@@ -385,14 +344,12 @@ impl<'a> Start<'a> {
             dirs.push(folder.display().to_string());
         }
         let pty = Pty::open();
-        // Read here, not after the start: the program sets the terminal raw as it begins, and
-        // a read made later may come after that.
+        // Read here, not after the start: the program sets the terminal raw as it begins.
         let before = pty.termios();
         let stdio = |pty: &Pty| Stdio::from(pty.slave.try_clone().expect("duplicate the slave"));
-        // A copy of the program, not the file Cargo built: Cargo puts that file in its place
-        // again at every build, and tests that start their own builds run beside this one.
+        // `program` gives a staged copy, not the file Cargo built: Cargo replaces that file at
+        // every build, and tests that start their own builds run beside this one.
         let mut command = self.place.command(&program("standin-agent"));
-        // The program is told its name the way a shell tells it: by what it was typed as.
         command
             .arg0(self.name)
             .args(&self.args)
@@ -442,7 +399,6 @@ impl Run {
         StandinLog::read(&self.log)
     }
 
-    /// Waits until the log satisfies `done`, and gives it.
     fn wait_log(&self, what: &str, done: impl Fn(&StandinLog) -> bool) -> StandinLog {
         let mut last = StandinLog::default();
         let seen = wait_until(DEADLINE, || {
@@ -453,15 +409,12 @@ impl Run {
         last
     }
 
-    /// Waits for the prompt after byte `from` of the output, then types the line. Gives
-    /// where the prompt ended.
     fn say(&mut self, from: usize, line: &str) -> usize {
         let at = self.pty.wait_for(PROMPT.as_bytes(), from);
         self.pty.send(format!("{line}\r").as_bytes());
         at
     }
 
-    /// Waits for the program to end.
     fn wait_exit(&mut self) -> ExitStatus {
         let mut status = None;
         let ended = wait_until(DEADLINE, || {
@@ -475,8 +428,6 @@ impl Run {
 
 impl Drop for Run {
     fn drop(&mut self) {
-        // A test that failed leaves the program running, and the hooks it started: end
-        // them and collect the program.
         if std::thread::panicking() {
             free_hooks(&self.gates, &self.sleepers);
         }
@@ -494,7 +445,6 @@ fn names(events: &[Value]) -> Vec<&str> {
         .collect()
 }
 
-/// The log's list of what it did, as short words, to compare in one assertion.
 fn story(log: &StandinLog) -> Vec<String> {
     log.did
         .iter()
@@ -523,11 +473,8 @@ fn make_fifo(at: &Path) {
     assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0, "mkfifo");
 }
 
-/// The command of a hook that has the gate open, says it is there by making `started`, and
-/// waits for a line on the gate. The hook opens the gate for reading and writing, so that
-/// its open never waits for the test: a FIFO opened for reading alone waits for a writer,
-/// and a writer that comes and goes before the reader has looked loses it, which left the
-/// hook waiting for ever on a loaded machine.
+/// The command of a hook that opens the gate, makes `started` and waits for a line on the gate.
+/// It opens the gate for reading and writing, as a FIFO opened only for reading waits for a writer.
 fn gated(started: &Path, gate: &Path) -> String {
     format!(
         "exec 3<> '{}'; : > '{}'; read line <&3",
@@ -536,10 +483,6 @@ fn gated(started: &Path, gate: &Path) -> String {
     )
 }
 
-/// Lets the hook that waits on a gate, a FIFO the test made, end: writes the line it waits
-/// for, once the hook has the gate open (the test has seen its `started` file by then). A
-/// run the gate is named to ([`Start::gate`]) lets the hook end by itself when the test
-/// failed, so that no hook is left behind.
 fn open_gate(at: &Path) {
     let mut gate = fs::OpenOptions::new()
         .write(true)
@@ -549,11 +492,8 @@ fn open_gate(at: &Path) {
     gate.write_all(b"\n").expect("write to the gate");
 }
 
-/// Ends, for a test that failed, what a hook started: the hook waiting at a gate, and the
-/// process a file names.
 fn free_hooks(gates: &[PathBuf], sleepers: &[PathBuf]) {
     for gate in gates {
-        // Opening without waiting fails until the hook has the gate open: try until it does.
         let _ = wait_until(Duration::from_secs(3), || {
             fs::OpenOptions::new()
                 .write(true)
@@ -574,10 +514,8 @@ fn free_hooks(gates: &[PathBuf], sleepers: &[PathBuf]) {
     }
 }
 
-/// The tool server of the tests of a reply: a `sh` script that answers the messages of MCP
-/// one line at a time, as the app's own server does, and writes down what it was started
-/// with and every line it read (`server.started`, `server.read` of the run's folder). A call
-/// whose line holds `REFUSE` is answered with an error result.
+/// An `sh` script that answers MCP messages a line at a time and writes `server.started` and
+/// `server.read`; a call whose line holds `REFUSE` gets an error result.
 fn tool_server_script(root: &Path) -> String {
     format!(
         r#"echo "$$ $PPID $CLAUDE_CODE_SESSION_ID $(pwd -P)" >> '{started}'
@@ -606,10 +544,6 @@ done
     )
 }
 
-/// The review a canned hook answers with: an instruction, then a heading and a comment for
-/// each thread. The words `Thread` and `##` also stand in the instruction, away from the
-/// start of a line, as in the app's own, and each thread's code, fenced as the engine fences
-/// it, holds a line that looks like the next heading.
 fn review_of(ids: &[&str]) -> String {
     let mut text = String::from(
         "This is a review. For each thread, reply to the id written after \"Thread\" \
@@ -623,9 +557,6 @@ fn review_of(ids: &[&str]) -> String {
     text
 }
 
-/// A hook command that answers `UserPromptSubmit` as the app's does when a review rides with
-/// the message: with `additionalContext` and the line shown under the prompt; for a prompt
-/// holding `only_for` when one is given, with nothing for any other.
 fn review_hook(review: &str, only_for: Option<&str>) -> String {
     let answer = json!({
         "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": review},
@@ -639,22 +570,17 @@ fn review_hook(review: &str, only_for: Option<&str>) -> String {
     }
 }
 
-/// The lines the tool server read, each a JSON message.
 fn server_read(root: &Path) -> Vec<Value> {
     events_in(&root.join("server.read"))
 }
 
-/// The tools/call messages among what the tool server read.
 fn calls(read: &[Value]) -> Vec<&Value> {
     read.iter()
         .filter(|message| message["method"] == "tools/call")
         .collect()
 }
 
-/// The reply tool as Claude Code lists it to the agent.
 const LISTED_REPLY_TOOL: &str = "mcp__plugin_yaar-review_yaar__reply_to_thread";
-
-// The script's text.
 
 #[test]
 fn a_script_comes_back_from_its_text_as_it_was() {
@@ -673,8 +599,6 @@ fn a_script_comes_back_from_its_text_as_it_was() {
         Step::Exit,
     ]);
     assert_eq!(Script::parse(&script.text()), script);
-    // The file is one keyword and its words to a line, a line end inside a text written
-    // as `\n`.
     let text = script.text();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 12);
@@ -737,8 +661,6 @@ fn a_script_line_that_cannot_be_read_is_named_by_its_number() {
 fn a_flood_of_no_number_is_named_by_its_line() {
     let _ = Script::parse("turn\nflood many\n");
 }
-
-// A scripted turn.
 
 #[test]
 fn a_scripted_turn_gives_the_hooks_of_claude_code_in_its_order_with_their_inputs() {
@@ -849,8 +771,6 @@ fn a_scripted_turn_gives_the_hooks_of_claude_code_in_its_order_with_their_inputs
         with("Stop", json!({"stop_hook_active": false})),
         with("SessionEnd", json!({"reason": "prompt_input_exit"})),
     ];
-    // The transcript path lies in the world's home, is named for the session and is never
-    // written.
     let home = run.home().display().to_string();
     let without_transcript: Vec<Value> = all
         .iter()
@@ -872,7 +792,6 @@ fn a_scripted_turn_gives_the_hooks_of_claude_code_in_its_order_with_their_inputs
         .collect();
     assert_eq!(without_transcript, expected);
 
-    // The tools really acted.
     assert_eq!(
         fs::read_to_string(run.work.join("a.txt")).unwrap(),
         "replaced"
@@ -886,7 +805,6 @@ fn a_scripted_turn_gives_the_hooks_of_claude_code_in_its_order_with_their_inputs
         "made\n"
     );
 
-    // What it printed, in order, each line starting at the left of the terminal.
     run.pty.drain();
     let output = run.pty.output.clone();
     let mut at = from;
@@ -911,7 +829,6 @@ fn a_scripted_turn_gives_the_hooks_of_claude_code_in_its_order_with_their_inputs
         at += found + part.len();
     }
 
-    // What it wrote down.
     assert_eq!(log.pid, run.child.id());
     assert!(log.args.is_empty());
     assert_eq!(log.received, b"do it\r");
@@ -1005,10 +922,7 @@ fn a_group_with_a_matcher_runs_for_its_tools_and_every_plugin_folder_runs_in_ord
         .plugin(vec![
             group("PreToolUse", None, record(&all)),
             group("PreToolUse", Some("Edit|Write"), record(&edits)),
-            // A matcher is the tool's name or one of its alternatives, not a text that
-            // holds the name.
             group("PreToolUse", Some("Reader|Writer|Bashful"), record(&longer)),
-            // An event that has no tool has nothing for a matcher to match: it runs.
             group("Stop", Some("Bash"), record(&stops)),
             group("SessionStart", None, "echo hello-answer".into()),
             group(
@@ -1022,7 +936,6 @@ fn a_group_with_a_matcher_runs_for_its_tools_and_every_plugin_folder_runs_in_ord
             None,
             format!("echo two >> '{}'", order.display()),
         )]);
-    // A folder that holds no hooks and one that is not there are no fault.
     start.before = vec![root.join("not-there"), empty];
     let mut run = start.start();
     fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
@@ -1047,7 +960,6 @@ fn a_group_with_a_matcher_runs_for_its_tools_and_every_plugin_folder_runs_in_ord
         _ => None,
     });
     assert_eq!(answer, Some(b"hello-answer\n".to_vec()));
-    // The answer is kept, not shown: the program ended, so what it wrote is all here.
     run.pty.drain();
     assert!(
         find(&run.pty.output, b"hello-answer").is_none(),
@@ -1061,8 +973,8 @@ fn a_hooks_parent_is_the_stand_in_and_it_runs_in_the_folder_the_stand_in_started
     let place = Place::new();
     let root = root_of(&place);
     let out = root.join("who");
-    // A lone `exec`: `sh -c` runs the program in its own place, whichever `sh` it is, as it
-    // does for the app's hook program, whose parent has to be the agent.
+    // A lone `exec`: `sh -c` runs the program in its own place, as for the app's hook program,
+    // whose parent has to be the agent.
     let hook = root.join("who.sh");
     fs::write(
         &hook,
@@ -1083,8 +995,6 @@ fn a_hooks_parent_is_the_stand_in_and_it_runs_in_the_folder_the_stand_in_started
         group("SessionStart", None, command.clone()),
         group("Stop", None, command),
     ]);
-    // What the shell of the app gives the agent reaches its hooks: they run with the
-    // agent's own environment.
     start.env.push(("YAAR_TERMINAL", "probe-7".to_owned()));
     let mut run = start.start();
     run.say(0, "go");
@@ -1105,8 +1015,8 @@ fn a_hook_and_a_shell_command_do_not_ignore_a_hangup_the_stand_in_ignores() {
     let place = Place::new();
     let root = root_of(&place);
     let (from_hook, from_shell) = (root.join("from-hook"), root.join("from-shell"));
-    // A program that ignores a hangup passes that on to what it starts, but Claude Code's
-    // hooks and commands do not ignore it: each one hangs itself up and must not go on.
+    // Claude Code's hooks and commands do not ignore a hangup: each one hangs itself up and must
+    // not go on.
     let hook = format!("kill -HUP $$; echo alive >> '{}'", from_hook.display());
     let shell = format!("kill -HUP $$; echo alive >> '{}'", from_shell.display());
     let script = Script(vec![Step::Turn, Step::Shell(shell), Step::End, Step::Exit]);
@@ -1118,8 +1028,6 @@ fn a_hook_and_a_shell_command_do_not_ignore_a_hangup_the_stand_in_ignores() {
     assert!(!from_hook.exists(), "the hook ignored a hangup");
     assert!(!from_shell.exists(), "the command ignored a hangup");
 }
-
-// The keys.
 
 #[test]
 fn esc_during_a_hold_prints_the_mark_and_runs_no_hook_and_the_script_goes_on_after_end() {
@@ -1157,7 +1065,6 @@ fn esc_during_a_hold_prints_the_mark_and_runs_no_hook_and_the_script_goes_on_aft
     run.say(marked, "second");
     assert!(run.wait_exit().success());
 
-    // The first turn gave a prompt submission and then nothing: no read, no stop.
     let seen = events_in(&events);
     assert_eq!(
         names(&seen),
@@ -1179,8 +1086,6 @@ fn esc_during_a_hold_prints_the_mark_and_runs_no_hook_and_the_script_goes_on_aft
         .position(|did| did.starts_with("interrupted"))
         .expect("the interrupt is written down");
     assert_eq!(story[interrupted], "interrupted 1 at 7");
-    // Nothing between the interrupt and the second turn: not a hook, and not the steps
-    // that were skipped, `read` and the `end` of the first turn.
     assert_eq!(story[interrupted + 1], "began 4 at 7");
     assert_eq!(
         fs::read_to_string(run.work.join("a.txt")).unwrap(),
@@ -1194,8 +1099,6 @@ fn esc_read_between_the_steps_of_a_turn_ends_it_with_the_mark_and_the_script_goe
     let root = root_of(&place);
     let (events, started, gate) = (root.join("events"), root.join("started"), root.join("gate"));
     make_fifo(&gate);
-    // The first read tool waits at its gate, and the key is typed meanwhile: the program
-    // reads it when that step is over, between two steps.
     let block = gated(&started, &gate);
     let script = Script(vec![
         Step::Turn,
@@ -1233,7 +1136,6 @@ fn esc_read_between_the_steps_of_a_turn_ends_it_with_the_mark_and_the_script_goe
     run.say(marked, "second");
     assert!(run.wait_exit().success());
 
-    // The tool that was running ended as it would; then nothing: no edit, no stop.
     let seen = events_in(&events);
     assert_eq!(
         names(&seen),
@@ -1282,8 +1184,7 @@ fn a_hold_waits_for_its_file_and_the_turn_goes_on_when_it_is_there() {
     fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
     let at = run.say(0, "first");
     run.pty.wait_for("● Hold ".as_bytes(), at);
-    // The program reads keys while it holds, so a byte it reads after the banner is a
-    // barrier: a hold that did not hold would be past the read tool by then.
+    // The program reads keys while it holds, so a byte it reads after the banner is a barrier.
     run.pty.send(b"k");
     run.wait_log("the probe byte", |log| log.received.ends_with(b"k"));
     assert!(
@@ -1316,13 +1217,10 @@ fn end_runs_the_stop_hooks_and_waits_for_them_before_it_prints_the_mark() {
         wait_until(DEADLINE, || started.exists()),
         "the Stop hook never ran"
     );
-    // The hook is running and holds the program: what was printed before it is here, and
-    // the mark of the end of the turn, which comes after it, is not.
     run.pty.drain();
     assert!(find(&run.pty.output, "● Done\r\n".as_bytes()).is_some());
     assert!(find(&run.pty.output, NO_PROGRESS).is_none());
     assert!(!done.exists());
-    // Opening the gate lets the hook end.
     open_gate(&gate);
     run.pty.wait_for(NO_PROGRESS, 0);
     assert!(
@@ -1332,7 +1230,6 @@ fn end_runs_the_stop_hooks_and_waits_for_them_before_it_prints_the_mark() {
     assert!(run.wait_exit().success());
 }
 
-/// The prompts the `UserPromptSubmit` hooks were given, in order.
 fn prompts_in(events: &Path) -> Vec<String> {
     events_in(events)
         .iter()
@@ -1341,7 +1238,6 @@ fn prompts_in(events: &Path) -> Vec<String> {
         .collect()
 }
 
-/// How many times `needle` is in `haystack`.
 fn count_of(haystack: &[u8], needle: &[u8]) -> usize {
     haystack
         .windows(needle.len())
@@ -1354,8 +1250,7 @@ fn a_line_typed_during_a_hold_is_submitted_at_once_as_claude_code_queues_it() {
     let place = Place::new();
     let root = root_of(&place);
     let (events, go) = (root.join("events"), root.join("go"));
-    // No second `turn`: the queued message starts none, so a stand-in that held it for
-    // one would wait at it for ever.
+    // No second `turn`: the queued message starts none.
     let script = Script(vec![
         Step::Turn,
         Step::Hold(go.clone()),
@@ -1368,8 +1263,6 @@ fn a_line_typed_during_a_hold_is_submitted_at_once_as_claude_code_queues_it() {
     let at = run.say(0, "first");
     run.pty.wait_for("● Hold ".as_bytes(), at);
     run.pty.send(b"second\r");
-    // The hook runs for the line while the hold goes on: a repeated look at a fact that
-    // only becomes true.
     let log = run.wait_log("the hook run for the queued line", |log| {
         log.did
             .iter()
@@ -1389,8 +1282,6 @@ fn a_line_typed_during_a_hold_is_submitted_at_once_as_claude_code_queues_it() {
     fs::write(&go, "").expect("make the file");
     assert!(run.wait_exit().success());
     assert_eq!(prompts_in(&events), ["first", "second"]);
-    // One turn: the progress mark of a turn that works was printed once, and so was the
-    // prompt; the queued line was neither asked for nor echoed.
     run.pty.drain();
     assert_eq!(count_of(&run.pty.output, PROMPT.as_bytes()), 1);
     assert_eq!(count_of(&run.pty.output, WORKING), 1);
@@ -1428,13 +1319,11 @@ fn a_line_typed_between_the_steps_of_a_turn_is_held_for_the_next_turn() {
         wait_until(DEADLINE, || started.exists()),
         "the hook never ran"
     );
-    // Typed while the read tool's hook runs: no hold is open, so it is no queued message.
     run.pty.send(b"second\r");
     open_gate(&gate);
     run.pty.wait_for("● Hold ".as_bytes(), at);
-    // The line was read before the hold began, and the hold is not given what came
-    // before it. A key typed in the hold is the barrier: a hold that took the line as
-    // queued would have run its hook before it read this key.
+    // A key typed in the hold is the barrier: a hold that took the line as queued would have run
+    // its hook before it.
     run.pty.send(b"k");
     let log = run.wait_log("the probe key", |log| log.received.ends_with(b"k"));
     assert!(log.did.contains(&Did::Began {
@@ -1444,8 +1333,6 @@ fn a_line_typed_between_the_steps_of_a_turn_is_held_for_the_next_turn() {
     assert_eq!(prompts_in(&events), ["first"]);
     fs::write(&go, "").expect("make the file");
     assert!(run.wait_exit().success());
-    // It is the next turn's message, taken once the first turn ended, and no prompt was
-    // asked for for it.
     assert_eq!(prompts_in(&events), ["first", "second"]);
     let story = story(&run.log());
     let held = story.iter().position(|did| did == "done 2 at 14");
@@ -1475,14 +1362,14 @@ fn a_message_queued_before_a_dialog_is_up_does_not_answer_it() {
         .start();
     let at = run.say(0, "first");
     run.pty.wait_for("● Hold ".as_bytes(), at);
-    // A message with an `n` in it, which would deny the dialog if the dialog read it.
+    // An `n`, which would deny the dialog if the dialog read it.
     run.pty.send(b"nope\r");
     run.wait_log("the queued line", |log| log.received == b"first\rnope\r");
     fs::write(&go, "").expect("make the file");
     run.pty
         .wait_for(b"Do you want to create p.txt? (y/n)\r\n", at);
-    // A key typed after the dialog is the barrier: it is read after anything the program
-    // made of the bytes before it.
+    // A key typed after the dialog is the barrier: it is read after anything the program made of
+    // the bytes before it.
     run.pty.send(b"q");
     let log = run.wait_log("the key after the dialog", |log| {
         log.received.ends_with(b"nope\rq")
@@ -1536,8 +1423,6 @@ fn a_line_held_for_the_next_turn_does_not_answer_a_dialog_either() {
         wait_until(DEADLINE, || started.exists()),
         "the hook never ran"
     );
-    // For the next turn: it holds an `n`, which would deny the dialog if it were read as
-    // an answer.
     run.pty.send(b"any\r");
     open_gate(&gate);
     run.pty.wait_for("● Hold ".as_bytes(), at);
@@ -1582,7 +1467,6 @@ fn a_self_started_turn_runs_the_hook_with_a_task_notice_and_reads_no_byte() {
     let mut run = Start::new(place, "claude", script)
         .recording(&["UserPromptSubmit", "Stop"], &events)
         .start();
-    // The prompt is for the next turn, and comes after the first one ended.
     let prompt = run.pty.wait_for(PROMPT.as_bytes(), 0);
     let log = run.log();
     assert!(log.received.is_empty(), "it read {:?}", log.received);
@@ -1590,13 +1474,10 @@ fn a_self_started_turn_runs_the_hook_with_a_task_notice_and_reads_no_byte() {
     assert_eq!(names(&seen), ["UserPromptSubmit", "Stop"]);
     let notice = seen[0]["prompt"].as_str().expect("a prompt");
     assert!(notice.starts_with("<task-notification>"), "{notice:?}");
-    // The turn that works came with it, and was shown to have ended; no prompt was
-    // printed before that.
     assert_eq!(find(&run.pty.output, WORKING), Some(0));
     assert!(find(&run.pty.output, NO_PROGRESS).is_some_and(|at| at < prompt));
     assert_eq!(count_of(&run.pty.output, PROMPT.as_bytes()), 1);
 
-    // The message the user types after it is a message of its own.
     run.pty.send(b"typed\r");
     assert!(run.wait_exit().success());
     assert_eq!(prompts_in(&events)[1], "typed");
@@ -1620,16 +1501,12 @@ fn a_hold_outside_a_turn_gates_the_steps_after_it_and_leaves_the_keys_typed_duri
         .recording(&["UserPromptSubmit"], &events)
         .start();
     run.pty.wait_for("● Hold ".as_bytes(), 0);
-    // Keys with no Enter, and an Esc: with no turn open the Esc interrupts nothing. Each
-    // is read before the next is typed, so the Esc is a read of its own, as a key is.
     run.pty.send(b"abc");
     run.wait_log("abc", |log| log.received.ends_with(b"abc"));
     run.pty.send(b"\x1b");
     run.wait_log("the Esc", |log| log.received.ends_with(b"abc\x1b"));
     run.pty.send(b"k");
     let log = run.wait_log("the keys", |log| log.received.ends_with(b"abc\x1bk"));
-    // Read in the hold, which has not ended: the hook of the step after it has not run,
-    // and nothing printed the mark of an interrupt.
     assert!(
         log.did
             .iter()
@@ -1639,8 +1516,6 @@ fn a_hold_outside_a_turn_gates_the_steps_after_it_and_leaves_the_keys_typed_duri
     );
     assert!(!events.exists());
     fs::write(&go, "").expect("make the file");
-    // The turn the stand-in started itself ended, and asks for a message: the keys are
-    // still its own, so that the Enter typed now ends the line they began.
     let prompt = run.pty.wait_for(PROMPT.as_bytes(), 0);
     run.pty.send(b"\r");
     assert!(run.wait_exit().success());
@@ -1648,8 +1523,6 @@ fn a_hold_outside_a_turn_gates_the_steps_after_it_and_leaves_the_keys_typed_duri
     assert_eq!(prompts.len(), 2, "{prompts:?}");
     assert!(prompts[0].starts_with("<task-notification>"));
     assert_eq!(prompts[1], "abck");
-    // The Esc read in the hold interrupted neither the turn the stand-in started nor
-    // anything else.
     let log = run.log();
     assert!(
         log.did
@@ -1686,8 +1559,6 @@ fn a_line_typed_before_a_self_started_turn_is_the_next_turns_message_and_the_sel
     assert!(!events.exists());
     fs::write(&go, "").expect("make the file");
     assert!(run.wait_exit().success());
-    // The notice is the self-started turn's message, and the line is the next turn's, which
-    // had it at hand and asked for nothing.
     let prompts = prompts_in(&events);
     assert_eq!(prompts.len(), 2, "{prompts:?}");
     assert!(prompts[0].starts_with("<task-notification>"));
@@ -1716,9 +1587,8 @@ fn an_esc_typed_after_the_line_of_the_next_turn_interrupts_that_turn_as_it_would
         .start();
     fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
     run.pty.wait_for("● Hold ".as_bytes(), 0);
-    // A whole line, and then an Esc, each read before the next is typed. With no turn
-    // open the line is not submitted, as the hold has not ended; Claude Code would have
-    // started its turn at the Enter, and the Esc is then that turn's.
+    // With no turn open the line is not submitted, as the hold has not ended; Claude Code would
+    // have started its turn at the Enter.
     run.pty.send(b"first\r");
     run.wait_log("the line", |log| log.received == b"first\r");
     run.pty.send(b"\x1b");
@@ -1728,7 +1598,6 @@ fn an_esc_typed_after_the_line_of_the_next_turn_interrupts_that_turn_as_it_would
     run.say(marked, "second");
     assert!(run.wait_exit().success());
     assert_eq!(prompts_in(&events), ["first", "second"]);
-    // The turn the line began was interrupted before its edit.
     assert_eq!(
         fs::read_to_string(run.work.join("a.txt")).unwrap(),
         "seed\n"
@@ -1752,7 +1621,6 @@ fn a_dialog_after_a_hold_outside_a_turn_sets_aside_what_was_typed_during_it() {
     ]);
     let mut run = Start::new(place, "claude", script).start();
     run.pty.wait_for("● Hold ".as_bytes(), 0);
-    // With an `n`, which would deny the dialog if it were read as an answer to it.
     run.pty.send(b"abcn");
     run.wait_log("the keys", |log| log.received == b"abcn");
     fs::write(&go, "").expect("make the file");
@@ -1778,12 +1646,6 @@ fn a_dialog_after_a_hold_outside_a_turn_sets_aside_what_was_typed_during_it() {
     );
 }
 
-// A reply through the plugin's tool server.
-
-/// A run of a turn that gets the review `review` makes, given the run's folder, with its
-/// message, for a prompt holding `only_for` when one is given, and replies as `script` says,
-/// through a tool server of the test's own. Gives the run, its folder and the file its hooks
-/// record their inputs in.
 fn replying(
     review: impl FnOnce(&Path) -> String,
     only_for: Option<&str>,
@@ -1813,8 +1675,6 @@ fn replying(
     (run, root, events)
 }
 
-/// Bodies a reply may carry: quotes, backticks, line ends, shell syntax, a backslash, a
-/// line that looks like a message of the protocol, and what is no ASCII.
 const AWKWARD_BODY: &str = "one \"quoted\" and `ticked` and $(echo hi); rm -rf / && \\ done\n\
     {\"id\":7,\"method\":\"tools/list\"}\n\tTabbed \u{fc}ber \u{2713}\n";
 
@@ -1841,7 +1701,6 @@ fn a_reply_goes_to_the_thread_of_the_review_through_a_tool_server_started_once()
     run.pty.wait_for("● Reply t-bbb\r\n".as_bytes(), at);
     assert!(run.wait_exit().success());
 
-    // What the server read: what Claude Code says before it calls a tool, and the calls.
     let read = server_read(&root);
     let methods: Vec<&str> = read
         .iter()
@@ -1865,7 +1724,6 @@ fn a_reply_goes_to_the_thread_of_the_review_through_a_tool_server_started_once()
     assert_eq!(ids, [0, 1, 2, 3]);
     let sent = calls(&read);
     assert_eq!(sent[0]["params"]["name"], "reply_to_thread");
-    // The second heading's id, the body byte for byte, addressed; then the first's, open.
     let arguments = |call: &Value| call["params"]["arguments"].clone();
     assert_eq!(
         arguments(sent[0]),
@@ -1876,8 +1734,6 @@ fn a_reply_goes_to_the_thread_of_the_review_through_a_tool_server_started_once()
         json!({"thread": "t-aaa", "body": "short", "addressed": false})
     );
 
-    // One server, a child of the stand-in, in its folder, told the session the stand-in
-    // gave itself.
     let log = run.log();
     let started = fs::read_to_string(root.join("server.started")).expect("the server started");
     let started: Vec<&str> = started.lines().collect();
@@ -1887,8 +1743,6 @@ fn a_reply_goes_to_the_thread_of_the_review_through_a_tool_server_started_once()
     assert_eq!(fields[2], log.session);
     assert_eq!(fields[3], run.work.display().to_string());
 
-    // What the stand-in wrote down: the call and the answer, between the hooks around it,
-    // and the line in its terminal.
     let tools: Vec<&Did> = log
         .did
         .iter()
@@ -1934,7 +1788,6 @@ fn a_reply_goes_to_the_thread_of_the_review_through_a_tool_server_started_once()
         json!([{"type": "text", "text": "recorded 1"}])
     );
 
-    // The server is the stand-in's own: it is gone with it.
     let server: u32 = fields[0].parse().expect("the server's id");
     assert!(
         wait_until(DEADLINE, || !is_alive(server)),
@@ -1960,8 +1813,6 @@ fn a_review_delivered_as_a_file_names_its_threads_in_that_file() {
             fs::create_dir_all(&folder).expect("make the folder of reviews");
             let file = folder.join("r-1.md");
             fs::write(&file, review_of(&["f-one", "f-two", "f-three"])).expect("write the review");
-            // The pointer names a folder and a file that is not there as well as the file,
-            // and ends its sentence on the path.
             format!(
                 "Your review is long. Read all of {} first, not {}/missing.md, and answer: {}.",
                 folder.display(),
@@ -1994,7 +1845,6 @@ fn a_review_that_rides_with_a_queued_message_is_the_one_a_reply_names() {
         Step::End,
         Step::Exit,
     ]);
-    // Only the second message gets a review: the first has none to reply to.
     let (mut run, root, _) = replying(
         |_| review_of(&["q-one", "q-two"]),
         Some("with a review"),
@@ -2068,7 +1918,6 @@ fn a_reply_to_a_thread_the_review_does_not_have_stops_the_stand_in_and_says_whic
             Step::Exit,
         ])
     };
-    // Past the last thread of the review it got.
     let (mut run, root, _) = replying(|_| review_of(&["only"]), None, reply(2));
     run.say(0, "go");
     assert!(!run.wait_exit().success());
@@ -2083,7 +1932,6 @@ fn a_reply_to_a_thread_the_review_does_not_have_stops_the_stand_in_and_says_whic
         "the server was started"
     );
 
-    // And with no review at all: the hook answers nothing for any prompt.
     let (mut run, _, _) = replying(|_| review_of(&["only"]), Some("never typed"), reply(1));
     run.say(0, "go");
     assert!(!run.wait_exit().success());
@@ -2111,7 +1959,6 @@ fn ask_ignores_any_byte_but_y_n_and_esc_and_y_writes_the_file() {
     let at = run.say(0, "go");
     run.pty
         .wait_for(b"Do you want to create p.txt? (y/n)\r\n", at);
-    // Capital letters, Enter, Ctrl-C, other letters and digits: none of them answers.
     run.pty.send(b"YN\r\x03q1");
     run.wait_log("the ignored bytes", |log| {
         log.received.ends_with(b"YN\r\x03q1")
@@ -2133,8 +1980,6 @@ fn ask_ignores_any_byte_but_y_n_and_esc_and_y_writes_the_file() {
     assert_eq!(seen[1]["tool_input"], input);
     assert_eq!(seen[2]["tool_response"]["type"], "create");
     assert!(seen[1].get("tool_response").is_none());
-    // The file came after the `y`, and not after a byte before it: the post hook saw
-    // `go\r`, the six ignored bytes and the `y`.
     let post = run.log().did.iter().find_map(|did| match did {
         Did::Hook {
             event, received, ..
@@ -2144,8 +1989,6 @@ fn ask_ignores_any_byte_but_y_n_and_esc_and_y_writes_the_file() {
     assert_eq!(post, Some(3 + 6 + 1));
 }
 
-/// A dialog denied with this key: the mark, no event after the request, no file, the turn
-/// over as interrupted, and the script goes on after its `end`.
 fn denied_with(key: &[u8]) {
     let place = Place::new();
     let events = root_of(&place).join("events");
@@ -2200,8 +2043,6 @@ fn esc_denies_the_dialog_and_ends_the_turn_as_interrupted() {
     denied_with(b"\x1b");
 }
 
-// The end of a script, and the other names.
-
 #[test]
 fn a_script_run_out_reads_on_until_the_terminal_closes_then_ends_with_no_session_end() {
     let place = Place::new();
@@ -2219,7 +2060,6 @@ fn a_script_run_out_reads_on_until_the_terminal_closes_then_ends_with_no_session
             .iter()
             .any(|did| matches!(did, Did::ScriptDone { .. }))
     });
-    // Everything typed from here on reaches its log, and the program goes on.
     run.pty.send(b"left over");
     run.wait_log("the typed bytes", |log| log.received == b"go\rleft over");
     assert!(
@@ -2284,56 +2124,33 @@ fn no_hook_run(name: &str, variable: Option<(&str, &str)>) {
         log.did.iter().all(|did| !matches!(did, Did::Hook { .. })),
         "{log:?}"
     );
-    // It still prints what such a CLI prints, the mark among it.
     run.pty.drain();
     assert!(find(&run.pty.output, "● Edit a.txt\r\n".as_bytes()).is_some());
     assert!(find(&run.pty.output, NO_PROGRESS).is_some());
 }
 
-// The stand-in as pi.
-
-/// The shell level the stand-in as pi is started with: the body of the reporting program is a
-/// script of bash, which adds one to it, and sees that one and no more when the stand-in
-/// runs the program itself.
+/// The shell level the stand-in as pi starts with: the reporting program's bash body adds one,
+/// and sees no more than that when the stand-in runs the program itself.
 const SHLVL_OF_THE_STAND_IN: u32 = 40;
 
-/// The working folder the stand-in as pi is started with, in `PWD`, which names no folder.
-/// Every POSIX shell, bash and dash alike, sets `PWD` to the real folder when it starts and
-/// exports it, so a program that sees this value was run with no shell between. A shell
-/// that execs a lone command leaves the shell level and the parent as the stand-in's own
-/// and does not leave this.
+/// The `PWD` the stand-in as pi is started with, naming no folder: every POSIX shell resets `PWD`
+/// when it starts, so this value seen means no shell ran in between.
 const PWD_OF_THE_STAND_IN: &str = "/no/folder/of/this/name";
 
-/// What a test as pi has: an extension file, the reporting program of the test's own, which
-/// records what it is given and prints an answer the test chose, and the files they live in.
-/// Each test gives pi a home of its own, the folder of its place, so that nothing under the
-/// real `~/.pi` is read or written.
 struct PiKit {
     root: PathBuf,
     extension: PathBuf,
     program: PathBuf,
     reports: PathBuf,
-    /// The bytes the test last wrote into pi's settings, none while it wrote none.
     settings_written: RefCell<Option<Vec<u8>>>,
 }
 
-/// One run of the reporting program, as the test's program wrote it down.
 struct Report {
-    /// The program's parent: the process that ran it.
     parent: u32,
-    /// The shell level the program saw: `SHLVL_OF_THE_STAND_IN` and the one level its own
-    /// interpreter adds. A shell between the stand-in and the program, which sets the level
-    /// of its own, adds another, and a shell that execs the program leaves the parent as
-    /// the stand-in all the same.
     level: u32,
-    /// Whether the `PWD` the program was started with was still `PWD_OF_THE_STAND_IN`: read
-    /// by an interpreter that is no shell, before any shell of the program could set it.
     pwd_kept: bool,
-    /// Whether it was run with `--tool`.
     tool: bool,
-    /// Whether `s.txt` was in the folder it ran in when it ran.
     s_there: bool,
-    /// What it was given on its standard input.
     payload: Value,
 }
 
@@ -2349,9 +2166,6 @@ impl PiKit {
         let extension = root.join("ext/yaar.ts");
         fs::create_dir_all(extension.parent().expect("a folder")).expect("make the folder");
         fs::write(&extension, "// stands for the extension\n").expect("write the extension");
-        // The program lies in a folder whose name a shell would split and expand: run
-        // through `sh -c`, it is not found, so a stand-in that puts a shell between itself
-        // and the program fails every report.
         let folder = root.join("report $x");
         fs::create_dir_all(&folder).expect("make the folder");
         let (program, body, reports) = (
@@ -2359,9 +2173,8 @@ impl PiKit {
             folder.join("body.sh"),
             root.join("reports"),
         );
-        // The program itself is a script of perl, which is no shell and leaves `PWD` as it
-        // was given: it writes the value down for the body and becomes it, as the same
-        // process, so that the parent the body sees is the parent of the program.
+        // A perl script, which is no shell and leaves `PWD` as given: it writes the value down and
+        // becomes the body, so the parent the body sees is the program's parent.
         fs::write(
             &program,
             format!(
@@ -2373,8 +2186,6 @@ impl PiKit {
         )
         .expect("write the program");
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("make it run");
-        // An answer for a steered message comes before one for any message, and each
-        // answer is a file of the test's, there or not.
         fs::write(
             &body,
             format!(
@@ -2415,13 +2226,12 @@ exit 0
         }
     }
 
-    /// The text the program prints for a report: `input` for any message, `steer` for a
-    /// message typed while a tool runs (which comes first), `tool` for the reply tool.
+    /// The text the program prints for a report: `input` for any message, `steer` for one typed
+    /// while a tool runs (comes first), `tool` for the reply tool.
     fn answer(&self, which: &str, text: &str) {
         fs::write(self.root.join(format!("answer-{which}")), text).expect("write the answer");
     }
 
-    /// pi's settings in the home of the test.
     fn settings(&self) -> PathBuf {
         self.root.join("home/.pi/agent/settings.json")
     }
@@ -2436,10 +2246,6 @@ exit 0
         *self.settings_written.borrow_mut() = Some(bytes.to_vec());
     }
 
-    /// Settings that list the extension, with other keys beside it, in a layout no JSON
-    /// writer produces (keys out of order, mixed indentation, a space before one colon, a
-    /// closing line and a blank one), so that a stand-in that parsed and wrote them back
-    /// would change bytes.
     fn list_extension(&self) {
         let path = serde_json::to_string(&self.extension).expect("JSON");
         self.write_settings(&format!(
@@ -2447,8 +2253,6 @@ exit 0
         ));
     }
 
-    /// Checks that pi's settings are the bytes the test wrote, or still not there: pi, and
-    /// the stand-in as pi, never writes them. Called after the stand-in has ended.
     fn assert_settings_kept(&self) {
         assert_eq!(
             fs::read(self.settings()).ok(),
@@ -2457,7 +2261,6 @@ exit 0
         );
     }
 
-    /// The stand-in as `pi`, in a shell that names the program.
     fn start<'a>(&self, place: Place, script: Script) -> Start<'a> {
         let mut start = Start::new(place, "pi", script);
         start
@@ -2468,7 +2271,6 @@ exit 0
         start
     }
 
-    /// What the program was run for, in order.
     fn reports(&self) -> Vec<Report> {
         fs::read_to_string(&self.reports)
             .unwrap_or_default()
@@ -2487,7 +2289,6 @@ exit 0
             .collect()
     }
 
-    /// Waits until the program has been run `n` times.
     fn wait_reports(&self, n: usize) -> Vec<Report> {
         let mut seen = Vec::new();
         let enough = wait_until(DEADLINE, || {
@@ -2504,7 +2305,6 @@ fn events_of(reports: &[Report]) -> Vec<&str> {
     reports.iter().map(Report::event).collect()
 }
 
-/// The words of every `Did::Hook` the stand-in wrote down, as `event`.
 fn hooked(log: &StandinLog) -> Vec<&str> {
     log.did
         .iter()
@@ -2515,7 +2315,6 @@ fn hooked(log: &StandinLog) -> Vec<&str> {
         .collect()
 }
 
-/// Checks that each needle is in the output, one after the other.
 fn in_order(output: &[u8], needles: &[&str]) {
     let mut from = 0;
     for needle in needles {
@@ -2529,7 +2328,6 @@ fn in_order(output: &[u8], needles: &[&str]) {
     }
 }
 
-/// The keys a payload of this event holds, which the crate doc of the pi Adapter gives.
 fn keys_of_event(report: &Report) -> Vec<&'static str> {
     let mut keys = vec!["cwd", "event", "sessionFile", "sessionId"];
     keys.extend(match report.event() {
@@ -2567,7 +2365,6 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
     let place = Place::new();
     let kit = PiKit::new(&place);
     kit.list_extension();
-    // What the program answers to a message is what the log holds as the hook's answer.
     kit.answer("input", r#"{"review": "a review"}"#);
     let script = Script(vec![
         Step::Turn,
@@ -2602,8 +2399,6 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
     ];
     assert_eq!(events_of(&reports), moments);
 
-    // Every payload is one object with the keys the crate doc gives its event, naming the
-    // session, its file and the folder.
     let file = kit
         .root
         .join("home/.pi/agent/sessions/standin")
@@ -2618,8 +2413,6 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
         assert_eq!(report.payload["sessionId"], log.session);
         assert_eq!(report.payload["sessionFile"], file.display().to_string());
         assert_eq!(report.payload["cwd"], run.work.display().to_string());
-        // The program is run by the stand-in itself, with no shell between, and not with
-        // `--tool`.
         assert_eq!(report.parent, log.pid);
         assert_eq!(report.level, SHLVL_OF_THE_STAND_IN + 1);
         assert!(report.pwd_kept, "a shell set PWD before the program saw it");
@@ -2648,7 +2441,6 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
         ]
     );
     for at in [3, 5, 7, 9] {
-        // A result names the call it answers, and none failed.
         assert_eq!(payload(at)["toolCallId"], payload(at + 1)["toolCallId"]);
         assert_eq!(payload(at)["toolName"], payload(at + 1)["toolName"]);
         assert_eq!(payload(at + 1)["isError"], false);
@@ -2659,8 +2451,6 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
         .collect();
     assert!(ids.windows(2).all(|pair| pair[0] != pair[1]), "{ids:?}");
 
-    // The edit's patch: one hunk, whose added range starts at the line after the last of
-    // the three lines the file had, with the line it added and no line of context.
     let patch = payload(6)["details"]["patch"].as_str().expect("a patch");
     let lines: Vec<&str> = patch.lines().collect();
     assert_eq!(
@@ -2671,12 +2461,8 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
     assert_eq!(payload(11)["aborted"], false);
     assert_eq!(payload(12)["reason"], "quit");
 
-    // The shell command runs between its two reports: not yet there when the call was
-    // reported, there when the result was.
     assert!(!reports[9].s_there && reports[10].s_there);
 
-    // What the stand-in wrote down: a hook of each report, under pi's own event name, with
-    // what the program printed.
     assert_eq!(hooked(&log), moments);
     let answers: Vec<&[u8]> = log
         .did
@@ -2697,8 +2483,6 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
             .all(|(at, answer)| at == 1 || answer.is_empty())
     );
 
-    // The steps acted, as the lines of the terminal show, and pi prints no progress
-    // sequence and no mark.
     assert_eq!(
         fs::read_to_string(run.work.join("a.txt")).unwrap(),
         "one\ntwo\nthree\nmore\n"
@@ -2721,7 +2505,6 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
     assert_eq!(count_of(&run.pty.output, NO_PROGRESS), 0);
     assert_eq!(count_of(&run.pty.output, INTERRUPT_MARK), 0);
 
-    // pi's own files: the settings as they were, no session file, nothing else made.
     assert_eq!(log.extensions, std::slice::from_ref(&kit.extension));
     kit.assert_settings_kept();
     assert!(!file.exists());
@@ -2735,7 +2518,6 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
 #[test]
 fn pi_with_no_extension_in_its_settings_reports_nothing_and_with_one_reports_through_the_program_the_shell_names()
  {
-    // No settings at all: pi runs, finds no extension, and the program is never run.
     let place = Place::new();
     let kit = PiKit::new(&place);
     let mut run = kit
@@ -2748,15 +2530,12 @@ fn pi_with_no_extension_in_its_settings_reports_nothing_and_with_one_reports_thr
     assert!(log.extensions.is_empty());
     assert!(hooked(&log).is_empty(), "{log:?}");
     assert!(!kit.reports.exists(), "the program was run");
-    // It ran its script all the same: the turn and the exit are written down.
     assert!(
         log.did
             .iter()
             .any(|did| matches!(did, Did::Done { step: 1, .. }))
     );
 
-    // With the extension listed, the same script is reported, through the program the
-    // shell names.
     let place = Place::new();
     let kit = PiKit::new(&place);
     kit.list_extension();
@@ -2789,8 +2568,6 @@ fn an_extension_given_with_dash_e_is_found_where_the_settings_list_none_and_afte
         ["session_start", "session_shutdown"]
     );
 
-    // Both: what the settings list comes first, then the long form of the flag; a file
-    // named twice is not told apart, as pi's own list is not.
     let place = Place::new();
     let kit = PiKit::new(&place);
     kit.list_extension();
@@ -2803,8 +2580,6 @@ fn an_extension_given_with_dash_e_is_found_where_the_settings_list_none_and_afte
     kit.assert_settings_kept();
     assert_eq!(run.log().extensions, [kit.extension.clone(), other]);
 
-    // A file named in the settings and again with the flag is listed twice, as pi's own
-    // list has it.
     let place = Place::new();
     let kit = PiKit::new(&place);
     kit.list_extension();
@@ -2835,8 +2610,6 @@ fn settings_that_start_with_a_byte_order_mark_are_read_as_pi_reads_them() {
     );
 }
 
-/// A run as pi with the script `turn`, `edit`, `end`, `exit` in which no report is made:
-/// the program the test names was not run, and the steps acted.
 fn pi_reports_nothing(set_up: impl FnOnce(&PiKit, &mut Start<'_>), found: &[&str]) {
     let place = Place::new();
     let kit = PiKit::new(&place);
@@ -2852,8 +2625,6 @@ fn pi_reports_nothing(set_up: impl FnOnce(&PiKit, &mut Start<'_>), found: &[&str
     fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
     run.say(0, "go");
     assert!(run.wait_exit().success());
-    // The stand-in has ended, so a report that would have been run was run: the barrier of
-    // a clause that says nothing happened.
     assert!(!kit.reports.exists(), "the program was run");
     let log = run.log();
     assert!(hooked(&log).is_empty(), "{log:?}");
@@ -2865,7 +2636,6 @@ fn pi_reports_nothing(set_up: impl FnOnce(&PiKit, &mut Start<'_>), found: &[&str
     );
     run.pty.drain();
     in_order(&run.pty.output, &["● Edit a.txt", "● Done"]);
-    // pi's settings are the same bytes, or still not there.
     kit.assert_settings_kept();
 }
 
@@ -2881,7 +2651,6 @@ fn pi_with_settings_that_list_no_extensions_reports_nothing() {
 
 #[test]
 fn pi_with_entries_that_name_no_file_reports_nothing() {
-    // A missing file, a folder and a value that is no string.
     pi_reports_nothing(
         |kit, _| {
             let listed = json!({"extensions": [
@@ -2898,7 +2667,6 @@ fn pi_with_entries_that_name_no_file_reports_nothing() {
 
 #[test]
 fn pi_given_an_extension_with_dash_e_that_names_no_file_reports_nothing() {
-    // No settings, and a flag whose path is no file: one that is not there, and a folder.
     pi_reports_nothing(
         |kit, start| {
             start.args = vec![
@@ -2929,7 +2697,6 @@ fn pi_with_settings_that_are_a_json_array_or_no_json_reports_nothing() {
         |kit, _| kit.write_settings(&format!(r#"{{"extensions": ["{}"#, kit.extension.display())),
         &[],
     );
-    // An `extensions` that is no array.
     pi_reports_nothing(
         |kit, _| {
             kit.write_settings(&json!({"extensions": kit.extension}).to_string());
@@ -3050,8 +2817,6 @@ fn a_line_typed_during_a_hold_is_an_input_that_steers_at_its_enter_and_starts_no
     let at = run.say(0, "first");
     run.pty.wait_for("● Hold ".as_bytes(), at);
     run.pty.send(b"second\r");
-    // The report is made at the Enter, while the hold goes on: the file it waits for is
-    // not there yet when the report is.
     let seen = kit.wait_reports(4);
     assert_eq!(
         events_of(&seen),
@@ -3062,7 +2827,6 @@ fn a_line_typed_during_a_hold_is_an_input_that_steers_at_its_enter_and_starts_no
     fs::write(&go, "").expect("make the file");
     assert!(run.wait_exit().success());
     kit.assert_settings_kept();
-    // The message went with the run that was open: one start, one end.
     assert_eq!(
         events_of(&kit.reports()),
         [
@@ -3106,8 +2870,6 @@ fn esc_during_a_turn_reports_the_run_aborted_prints_no_mark_and_the_script_goes_
     assert!(run.wait_exit().success());
     kit.assert_settings_kept();
 
-    // The first run was aborted, and the read and the end of it that the script still had
-    // were skipped; the second run is whole.
     let reports = kit.reports();
     assert_eq!(
         events_of(&reports),
@@ -3124,8 +2886,6 @@ fn esc_during_a_turn_reports_the_run_aborted_prints_no_mark_and_the_script_goes_
     );
     assert_eq!(reports[3].payload["aborted"], true);
     assert_eq!(reports[6].payload["aborted"], false);
-    // After the program ended, so that nothing printed later is missed: no mark, no
-    // progress sequence, and no `Done` for the run that was aborted.
     run.pty.drain();
     assert_eq!(count_of(&run.pty.output, INTERRUPT_MARK), 0);
     assert_eq!(count_of(&run.pty.output, b"Interrupted"), 0);
@@ -3208,7 +2968,6 @@ fn a_reply_runs_the_program_with_tool_and_the_arguments_of_the_thread_byte_for_b
         reports[4].payload["toolCallId"]
     );
 
-    // Written down as the call and what the program printed.
     let tools: Vec<(Value, Value)> = run
         .log()
         .did
@@ -3223,7 +2982,6 @@ fn a_reply_runs_the_program_with_tool_and_the_arguments_of_the_thread_byte_for_b
     assert_eq!(tools.len(), 2);
     assert_eq!(tools[0], (sent(3), answer));
     assert_eq!(tools[1].0, sent(4));
-    // Neither is a report of a tool pi runs: no `Hook` of the reply.
     assert_eq!(
         hooked(&run.log()),
         [
@@ -3243,8 +3001,6 @@ fn a_review_that_rides_with_a_queued_message_is_the_one_a_reply_names_as_pi() {
     let place = Place::new();
     let kit = PiKit::new(&place);
     kit.list_extension();
-    // Both messages are answered with a review: the one typed while the tool runs comes
-    // later, and its review replaces the first one's.
     kit.answer(
         "input",
         &json!({"review": review_of(&["first-1"])}).to_string(),
@@ -3306,8 +3062,6 @@ fn a_session_told_by_session_and_session_dir_keeps_that_id_and_names_its_file_in
             folder.join("id-1.jsonl").display().to_string()
         );
     }
-    // pi starts a session it was told to take up as any other: the Adapter reads the
-    // resume from the id it holds.
     assert_eq!(reports[0].payload["reason"], "startup");
     assert_eq!(run.log().session, "id-1");
     assert!(!folder.exists(), "the stand-in made the folder");
@@ -3381,8 +3135,6 @@ fn a_shell_command_that_fails_is_a_result_with_is_error_and_an_edit_of_an_empty_
     );
 }
 
-// Sessions, the terminal, the log.
-
 #[test]
 fn a_hold_at_the_start_keeps_claude_code_from_reporting_its_start_until_its_file_is_there() {
     let place = Place::new();
@@ -3396,8 +3148,6 @@ fn a_hold_at_the_start_keeps_claude_code_from_reporting_its_start_until_its_file
     let mut run = Start::new(place, "claude", script)
         .recording(&["SessionStart", "SessionEnd"], &events)
         .start();
-    // The program is up, with its arguments and its session written down, and held at the
-    // first of the two.
     run.pty.wait_for("● Hold ".as_bytes(), 0);
     let log = run.wait_log("the first hold begun", |log| {
         log.did
@@ -3408,7 +3158,6 @@ fn a_hold_at_the_start_keeps_claude_code_from_reporting_its_start_until_its_file
     assert!(hooked(&log).is_empty(), "{:?}", story(&log));
     assert!(!events.exists());
 
-    // The first file lets it on to the second hold, not to its start.
     fs::write(&go, "").expect("make the file");
     let log = run.wait_log("the second hold begun", |log| {
         log.did
@@ -3418,7 +3167,6 @@ fn a_hold_at_the_start_keeps_claude_code_from_reporting_its_start_until_its_file
     assert!(hooked(&log).is_empty(), "{:?}", story(&log));
     assert!(!events.exists());
 
-    // The last file: it reports its start, and then goes on to its end.
     fs::write(&then, "").expect("make the file");
     assert!(run.wait_exit().success());
     let seen = events_in(&events);
@@ -3517,7 +3265,6 @@ fn the_terminal_is_raw_while_the_stand_in_runs_and_as_it_was_after_it_exits() {
         0,
         "a new terminal echoes"
     );
-    // Once the prompt is up the terminal is set.
     run.say(0, "go");
     let during = run.pty.termios();
     assert_eq!(during.c_lflag & (libc::ECHO | libc::ICANON | libc::ISIG), 0);
@@ -3560,8 +3307,6 @@ fn a_flood_writes_its_numbered_lines_in_order_and_writes_down_its_longest_write(
         story[began..began + 3],
         ["began 1 at 3", "flooded 1", "done 1 at 3"]
     );
-    // The terminal was read all the while: no write waited anywhere near the time the next
-    // test holds the terminal for.
     let longest = longest_write(&run.log());
     assert!(
         longest < FLOOD_HOLD / 2,
@@ -3569,10 +3314,8 @@ fn a_flood_writes_its_numbered_lines_in_order_and_writes_down_its_longest_write(
     );
 }
 
-/// How long the test that does not read a flood holds its terminal.
 const FLOOD_HOLD: Duration = Duration::from_millis(1200);
 
-/// The longest write the log says a flood made.
 fn longest_write(log: &StandinLog) -> Duration {
     log.did
         .iter()
@@ -3585,10 +3328,9 @@ fn longest_write(log: &StandinLog) -> Duration {
 
 #[test]
 fn a_flood_into_a_terminal_nobody_reads_writes_down_the_wait_of_its_longest_write() {
-    // More lines than any terminal buffers, a megabyte or so: from the start of the flood
-    // the program waits in one write until the test reads. The test holds the terminal
-    // twice, with a read between that stops half way, and measures both spans itself. The
-    // longest write waited one span; the sum of the waits would be both.
+    // More lines than any terminal buffers: the program waits in one write until the test reads.
+    // The test holds the terminal twice and measures both spans: the longest write waited one span,
+    // not the sum.
     let lines = 100_000;
     let script = Script(vec![Step::Turn, Step::Flood(lines), Step::End, Step::Exit]);
     let mut run = Start::new(Place::new(), "claude", script).start();
@@ -3625,8 +3367,8 @@ fn a_hook_that_does_not_end_is_killed_with_what_it_started_after_ten_seconds() {
     let place = Place::new();
     let root = root_of(&place);
     let (sleeper, late) = (root.join("sleeper"), root.join("late"));
-    // The hook parts a child from itself: the whole group has to go, or the program would
-    // wait on the pipe the child holds.
+    // The hook parts a child from itself: the whole group has to go, or the program would wait on
+    // the pipe the child holds.
     let hook = format!(
         "sleep 60 & echo $! > '{}'; wait; echo late > '{}'",
         sleeper.display(),
@@ -3641,7 +3383,6 @@ fn a_hook_that_does_not_end_is_killed_with_what_it_started_after_ten_seconds() {
         run.child.try_wait().expect("poll").is_some()
     });
     assert!(ended, "the stand-in waited on the hook for ever");
-    // The hook got its ten seconds: the program started it after `began`, and waited for it.
     assert!(
         began.elapsed() >= Duration::from_secs(10),
         "the hook was killed after {:?}",
@@ -3671,7 +3412,6 @@ fn a_log_read_while_the_program_writes_it_ignores_a_line_not_yet_whole() {
     text.extend_from_slice(b"{\"did\":\"exi");
     fs::write(&run.log, text).expect("append a part of a line");
     assert_eq!(run.log(), whole);
-    // A log that is not there yet is an empty one.
     let missing = root_of(&run.place).join("no-such-log");
     assert_eq!(StandinLog::read(&missing), StandinLog::default());
 }
@@ -3681,8 +3421,6 @@ fn a_terminal_that_closes_during_a_tool_stops_the_script_before_its_next_step() 
     let place = Place::new();
     let root = root_of(&place);
     let (gate, after) = (root.join("gate"), root.join("after"));
-    // The shell command blocks the program until the test lets it go: the terminal closes
-    // while the program is not reading it, and the step after the command must not run.
     let wait = format!("while [ ! -e '{}' ]; do sleep 0.05; done", gate.display());
     let script = Script(vec![
         Step::Turn,

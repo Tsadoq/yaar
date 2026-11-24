@@ -1,6 +1,6 @@
-# The Window program links the emulator's crate, which can also open a pseudo-terminal
-# and run a shell. Terminals belong to the Keeper: no crate of the app opens one through
-# that crate, and none runs its event loop.
+# The Window links the emulator's crate, which can open a pseudo-terminal. Terminals belong to the
+# Keeper:
+# no app crate opens one through it or runs its event loop.
 disallowed-methods = [
     { path = "alacritty_terminal::tty::new", reason = "the Keeper's Dock opens terminals", allow-invalid = true },
 ]

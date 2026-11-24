@@ -1,13 +1,4 @@
-//! Component tests: the agents' side of the Keeper, through what a Window and the hook
-//! program of Claude Code use, with real repositories, a real database and real shells
-//! beneath.
-//!
-//! The hook program is the built one, run with recorded inputs moved into the test's own
-//! worktree, as Claude Code would run it; the Keeper is the library on a thread of the
-//! test, told where the hook program lies. The Keeper runs git and the shells of its
-//! terminals with the environment of its process, so each test sets that environment as
-//! its first statement, and these tests are run by `cargo nextest`, which gives each test
-//! a process of its own.
+//! Each test sets the process environment first, so each needs a process of its own (nextest).
 
 use std::io::Write as _;
 use std::os::unix::net::UnixStream;
@@ -27,11 +18,8 @@ use yaar_store::{EndedBy, StepRecord, Store, TurnEndRecord, TurnId};
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// How long the hook program itself waits for the Keeper's answer before it gives up and
-/// lets Claude Code go on: a hook that is answered returns long before.
 const HOOK_DEADLINE: Duration = Duration::from_secs(2);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -42,31 +30,19 @@ const SIZE: TerminalSize = TerminalSize {
 const TOOLS: &str = "claude/turn-tools.jsonl";
 const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 
-/// Prints the mark Claude Code writes when a turn stops, and then a line that the typed
-/// line does not hold: the shell has written both when the line is seen.
 const PRINT_THE_MARK: &[u8] = b"printf '\\033]9;4;0;\\007'; printf 'after-%s\\n' mark\r";
 const AFTER_THE_MARK: &str = "after-mark";
 
-/// The first and the last of the four forms of that mark, as the shell's `printf` writes
-/// them: ended by BEL with the last `;`, and ended by the string terminator without it.
-/// The Keeper maps each form to the place it holds in its Adapter's list, so the two ends
-/// of the list are the ones an index that is off by one gets wrong.
 const FIRST_FORM: &str = "\\033]9;4;0;\\007";
 const LAST_FORM: &str = "\\033]9;4;0\\033\\\\";
 
-/// A second line, typed once the first is seen: its output is read from the terminal after
-/// everything the first line printed.
 const PRINT_THE_NEXT: &[u8] = b"printf 'then-%s\\n' mark\r";
 const THEN: &str = "then-mark";
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the
-    /// shell of a terminal: no configuration of the user or of the system, a fixed
-    /// author, the shell `/bin/sh`, an empty home. It has to be the first statement of a
-    /// test.
+    /// Sets git's and the shell's environment; has to be the first statement of a test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -89,17 +65,13 @@ impl Scratch {
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's lists of files go, and a program of a
-            // terminal's too: a folder that goes with the test.
             std::env::set_var("TMPDIR", root.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -125,11 +97,8 @@ impl Scratch {
         self.0.join("data").join(yaar_store::FILE_NAME)
     }
 
-    /// The folder of the test's own copy of the built hook program, made at the first
-    /// call. Every test process asks `program` to build, and cargo puts a program it built
-    /// in place again each time: where tests run side by side, the program is gone for a
-    /// moment, and one started from there fails. A copy is made at the first try that finds
-    /// the program, and is the test's own.
+    /// A copy of the built hook program, made at the first call: cargo puts the program in place
+    /// again for every test process, so under parallel tests it is briefly missing.
     fn companions(&self) -> PathBuf {
         let folder = self.0.join("companions");
         let copy = folder.join(yaar_adapter_claude::HOOK_PROGRAM);
@@ -150,13 +119,10 @@ impl Scratch {
         }
     }
 
-    /// Starts the Keeper's library on a thread of this test, with the folder of the hook
-    /// program as where the pieces of the agents lie.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         self.keeper_told(Some(self.companions()))
     }
 
-    /// The same, told this folder for the pieces, or none.
     fn keeper_told(&self, companions: Option<PathBuf>) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -170,7 +136,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -192,8 +157,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main` and an identity of its
-    /// own, since git guesses none on every system.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -206,14 +169,12 @@ impl Scratch {
         folder
     }
 
-    /// The database the Keeper kept, read once the Keeper has stopped.
     fn store(&self) -> Store {
         Store::open(&self.database()).expect("open the Keeper's database")
     }
 
-    /// Runs the hook program with `payload` on its standard input, as Claude Code does,
-    /// in the terminal `terminal` of the app; none for a CLI outside the app. Returns how
-    /// long it took. It must succeed and print nothing, whatever became of the report.
+    /// Must succeed and print nothing, whatever became of the report; `terminal` is none for a CLI
+    /// outside the app.
     fn hook(&self, terminal: Option<&TerminalId>, payload: &[u8]) -> Duration {
         let mut command = Command::new(self.companions().join(yaar_adapter_claude::HOOK_PROGRAM));
         command
@@ -247,12 +208,9 @@ impl Drop for Scratch {
     }
 }
 
-/// A process the test started, killed and collected when the test ends, whatever way it
-/// does.
 struct Process(std::process::Child);
 
 impl Process {
-    /// Kills it and collects it.
     fn end(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
@@ -280,8 +238,6 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// One end of the Link, as a Window holds it. Everything it is sent is kept, so that a
-/// test reads it in order, and what it has looked at is not looked at again.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -310,8 +266,6 @@ impl Window {
         id
     }
 
-    /// Reads one frame and keeps it. Fails the test at the deadline, with the facts that
-    /// came.
     fn read(&mut self, waiting_for: &str) {
         match read_message(&mut self.stream) {
             Ok(Message::Fact(fact)) => self.facts.push(fact),
@@ -330,7 +284,6 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = self.send(request);
         loop {
@@ -341,7 +294,6 @@ impl Window {
         }
     }
 
-    /// The first fact from here on that `wanted` takes, passing over the ones before it.
     fn until<T>(&mut self, what: &str, mut wanted: impl FnMut(&Fact) -> Option<T>) -> T {
         loop {
             while self.looked_at < self.facts.len() {
@@ -354,7 +306,6 @@ impl Window {
         }
     }
 
-    /// The next `AgentsChanged` of `workspace` that `wanted` takes.
     fn agents_until(
         &mut self,
         workspace: &WorkspaceId,
@@ -369,7 +320,6 @@ impl Window {
         })
     }
 
-    /// Reads until `text` is in the output of `terminal`.
     fn output_until(&mut self, terminal: &TerminalId, text: &str) {
         loop {
             let heard = self.output.iter().find(|(from, _)| from == terminal);
@@ -390,7 +340,6 @@ impl Window {
         workspace
     }
 
-    /// Opens a terminal with a shell in it, and waits until the shell has started.
     fn open_terminal(&mut self, workspace: &WorkspaceId) -> TerminalId {
         let opened = self.ask(Request::OpenTerminal {
             workspace: workspace.clone(),
@@ -400,7 +349,6 @@ impl Window {
         let Ok(Reply::TerminalOpened { terminal }) = opened else {
             panic!("no terminal: {opened:?}");
         };
-        // A line the typed one does not hold: the shell is reading when it is seen.
         self.type_into(&terminal, b"printf 'ready-%s\\n' now\r");
         self.output_until(&terminal, "ready-now");
         terminal
@@ -430,8 +378,6 @@ impl Window {
     }
 }
 
-/// A Keeper with one repository open, a Window attached and a shell of the app open in
-/// the repository: what a CLI typed in that shell reports from.
 struct Setup {
     scratch: Scratch,
     keeper: JoinHandle<std::io::Result<Exit>>,
@@ -442,14 +388,12 @@ struct Setup {
 }
 
 impl Setup {
-    /// Has to be the first statement of a test.
     fn new() -> Setup {
         let scratch = Scratch::new();
         let repo = scratch.repository("repo");
         Setup::on(scratch, repo)
     }
 
-    /// The same on a repository the test made, in its own scratch folder.
     fn on(scratch: Scratch, repo: PathBuf) -> Setup {
         let keeper = scratch.keeper();
         let mut window = scratch.window();
@@ -465,20 +409,17 @@ impl Setup {
         }
     }
 
-    /// Runs the hook of `record`, moved into the repository, in the shell's terminal.
     fn hook(&self, record: &HookRecord) -> Duration {
         let record = record.in_project(&self.repo);
         self.scratch
             .hook(Some(&self.terminal), &record.input_bytes())
     }
 
-    /// Runs the hook of `record`, moved into the repository, in `terminal`.
     fn hook_in(&self, terminal: &TerminalId, record: &HookRecord) -> Duration {
         let record = record.in_project(&self.repo);
         self.scratch.hook(Some(terminal), &record.input_bytes())
     }
 
-    /// Runs the hooks of the lines `lines` of `records`, in order.
     fn hooks(&self, records: &[HookRecord], lines: &[usize]) {
         for line in lines {
             self.hook(&records[*line]);
@@ -493,16 +434,10 @@ impl Setup {
         self.window.agents_until(&self.workspace, what, wanted)
     }
 
-    /// Types the mark of a turn that stopped into the shell, and reads until the shell has
-    /// printed a second line typed after the first was seen. The Keeper is told a mark after
-    /// the output that held its last byte has gone out, so the line that printed it can be
-    /// seen before the Keeper has been told; the output of the second line is read from the
-    /// terminal after all of that, so the Keeper has been told the mark by the time it is seen.
     fn print_the_mark(&mut self) {
         self.print_the_mark_in(PRINT_THE_MARK);
     }
 
-    /// [`Setup::print_the_mark`] with the form `form` of the mark, as `printf` writes it.
     fn print_the_mark_form(&mut self, form: &str) {
         let line = format!("printf '{form}'; printf 'after-%s\\n' mark\r");
         self.print_the_mark_in(line.as_bytes());
@@ -515,7 +450,6 @@ impl Setup {
         self.window.output_until(&self.terminal, THEN);
     }
 
-    /// Stops the Keeper and gives the database it kept.
     fn finish(self) -> (Store, Scratch) {
         self.window.stop(self.keeper);
         let store = self.scratch.store();
@@ -527,8 +461,6 @@ fn is_state(state: SessionState) -> impl Fn(&WorkspaceAgents) -> bool {
     move |agents| agents.sessions.iter().any(|session| session.state == state)
 }
 
-/// Checks that the plugin the Keeper writes for Claude Code names the app's plugin and has
-/// every hook run `hook`, quoted as the shell reads it.
 fn assert_the_plugin_runs(data: &Path, hook: &Path) {
     let plugin = data
         .join("agents")
@@ -599,9 +531,8 @@ fn with_no_folder_told_the_pieces_are_looked_for_beside_the_keepers_own_program(
 fn nothing_waits_for_the_recording_of_a_turns_state() {
     let scratch = Scratch::new();
     let repo = scratch.repository("repo");
-    // A state is recorded through the repository's own filters, as `git add` makes it. A
-    // clean filter that takes its time makes the recording of a turn's end slow whatever
-    // the machine, so that what must not wait for it is shown to run during it.
+    // A state is recorded through the repository's filters: a slow clean filter makes the recording
+    // slow, so what must not wait for it is shown to run during it.
     const RECORDING: Duration = Duration::from_secs(3);
     git(&repo, &["config", "filter.slow.clean", "sleep 3; cat"]);
     std::fs::write(repo.join(".gitattributes"), "slow.txt filter=slow\n").expect("write it");
@@ -612,23 +543,17 @@ fn nothing_waits_for_the_recording_of_a_turns_state() {
 
     setup.hooks(&records, &[1, 2]);
     setup.agents_until("the turn works", is_state(SessionState::Works));
-    // The file that the slow filter holds up, made at the turn's end.
     std::fs::write(setup.repo.join("slow.txt"), "slow\n").expect("write a file");
     let stopped = Instant::now();
     setup.hook(&records[32]);
     setup.agents_until("the turn is unreviewed", is_state(SessionState::Unreviewed));
 
-    // The recording runs now, for as long as the filter takes. A report is answered, and
-    // what it leads to is told, and the Keeper answers its Windows, all before it ends.
     let took = setup.hook(&records[33]);
     assert!(
         took < HOOK_DEADLINE,
         "the hook waited {took:?}: a report is answered before anything it leads to"
     );
     setup.agents_until("the next turn works", is_state(SessionState::Works));
-    // The fact came while the slow filter still ran: the next turn did not wait for the
-    // recording of the one before it, not only for the end of that turn to be told. The
-    // fact comes in a fraction of the filter's time, so the bound has room under load.
     assert!(
         stopped.elapsed() < RECORDING,
         "the next turn worked only {:?} after the stop: it waited for the recording",
@@ -646,7 +571,6 @@ fn nothing_waits_for_the_recording_of_a_turns_state() {
         "the turn's end was told before the recording could have ended"
     );
 
-    // The recording does end, and tells its state.
     let state = setup
         .window
         .until("the end of the first turn", |fact| match fact {
@@ -670,12 +594,10 @@ fn a_stop_followed_at_once_by_the_mark_ends_the_turn_finished_and_the_mark_chang
     let working = setup.agents_until("the turn works", is_state(SessionState::Works));
     let turn = working.sessions[0].turn.clone().expect("the open turn");
 
-    // The hook has returned: its report is on the queue. The mark that follows is on the
-    // same queue, behind it.
+    // The hook has returned: its report is on the queue, and the mark that follows is behind it.
     setup.hook(&records[32]);
     setup.print_the_mark();
-    // Another turn begins after the mark: when it is told, the mark was worked out, in the
-    // turn that was not open any more.
+    // Another turn begins after the mark: when it is told, the mark was worked out.
     setup.hook(&records[33]);
     let next = setup.agents_until("the next turn works", |agents| {
         agents
@@ -738,8 +660,6 @@ fn a_mark_alone_ends_the_turn_interrupted(form: &str) {
 fn the_steps_of_a_turn_are_told_in_order_with_paths_in_the_worktree_and_are_kept() {
     let mut setup = Setup::new();
     let records = recorded::hook_events(TOOLS);
-    // The reads, the edit, the new file and the shell command of the recording's first
-    // turn, with the hooks that name no step among them, and its end.
     setup.hooks(&records, &[1, 2, 3, 4, 9, 10, 12, 13, 15, 16, 32]);
     let ended = setup
         .window
@@ -760,8 +680,6 @@ fn the_steps_of_a_turn_are_told_in_order_with_paths_in_the_worktree_and_are_kept
         })
         .collect();
 
-    // The steps came in the order they happened, numbered from 1, with the paths as they
-    // lie in the worktree.
     let numbers: Vec<u32> = steps.iter().map(|(number, _)| *number).collect();
     assert_eq!(numbers, [1, 2, 3, 4]);
     let command = records[15].input["tool_input"]["command"]
@@ -793,7 +711,6 @@ fn the_steps_of_a_turn_are_told_in_order_with_paths_in_the_worktree_and_are_kept
         }
     );
 
-    // The same steps are kept, whether or not a Window was there to hear them.
     let (store, _scratch) = setup.finish();
     let (_, kept) = store
         .turn(&TurnId::new(ended.0.as_str()))
@@ -818,8 +735,6 @@ fn an_unreadable_payload_is_answered_done_and_what_follows_it_is_still_followed(
         pid: std::process::id(),
         payload: b"this is not what Claude Code hands a hook".to_vec(),
     };
-    // Sent as the piece sends it: a request of its own connection, which is let go once
-    // it is answered.
     let mut piece = setup.scratch.window();
     assert_eq!(
         piece.ask(Request::Report { report: garbled }),
@@ -846,7 +761,6 @@ fn a_report_for_an_agent_the_keeper_does_not_have_is_refused() {
         pid: std::process::id(),
         payload: Vec::new(),
     };
-    // On a connection of its own, which the Keeper lets go once it has answered.
     let refused = scratch.window().ask(Request::Report { report: strange });
     assert!(
         matches!(refused, Err(Refusal::Failed { .. })),
@@ -860,7 +774,6 @@ fn a_report_from_outside_the_apps_terminals_is_answered_and_followed_by_its_fold
     let mut setup = Setup::new();
     let dialogs = recorded::hook_events(DIALOGS);
     let outside = dialogs[0].in_project(&setup.repo);
-    // From a CLI outside the app: no terminal.
     setup.scratch.hook(None, &outside.input_bytes());
     let told = setup.agents_until("the session of the CLI outside the app", |agents| {
         !agents.sessions.is_empty()
@@ -873,7 +786,6 @@ fn a_report_from_outside_the_apps_terminals_is_answered_and_followed_by_its_fold
         "it holds a review as any session does"
     );
 
-    // Then one inside a terminal of the app: both are listed, each as it ran.
     let records = recorded::hook_events(TOOLS);
     setup.hooks(&records, &[1]);
     let running = setup.terminal.clone();
@@ -900,15 +812,13 @@ fn a_report_from_outside_the_apps_terminals_whose_folder_no_workspace_holds_is_f
     let elsewhere = setup.scratch.0.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("make the folder");
     let outside = dialogs[0].in_project(&elsewhere);
-    // No terminal, and the terminal of the app that is not held: neither has a worktree
-    // that holds the folder.
     setup.scratch.hook(None, &outside.input_bytes());
     setup.scratch.hook(
         Some(&TerminalId::new("not-a-terminal")),
         &outside.input_bytes(),
     );
-    // Then one inside it. Reports are worked out in the order they came, so that when
-    // this one is told, the first two were passed over.
+    // Reports are worked out in the order they came, so when this one is told the first two were
+    // passed over.
     let records = recorded::hook_events(TOOLS);
     setup.hooks(&records, &[1]);
     setup.agents_until("the session is idle", is_state(SessionState::Idle));
@@ -928,7 +838,6 @@ fn a_session_started_in_a_terminal_of_one_workspace_in_the_folder_of_another_bel
     let other = setup.window.open(&other_repo);
     let records = recorded::hook_events(TOOLS);
 
-    // The terminal is the first workspace's; the CLI works in the other worktree.
     let record = records[1].in_project(&other_repo);
     setup
         .scratch
@@ -952,7 +861,6 @@ fn a_session_started_in_a_terminal_of_one_workspace_in_the_folder_of_another_bel
 #[test]
 fn a_session_in_a_folder_inside_a_worktree_belongs_to_the_deepest_workspace_that_holds_it() {
     let mut setup = Setup::new();
-    // A worktree of the same repository inside the first worktree's folder.
     let inner_path = setup.repo.join("inner");
     git(
         &setup.repo,
@@ -961,8 +869,6 @@ fn a_session_in_a_folder_inside_a_worktree_belongs_to_the_deepest_workspace_that
     let inner = setup.window.open(&inner_path);
     let records = recorded::hook_events(TOOLS);
 
-    // The CLI works in a folder below the inner worktree's root, as one started in `src`
-    // does, a folder that the first worktree holds as well.
     let below = inner_path.join("sub");
     std::fs::create_dir(&below).expect("make the folder");
     let record = records[1].in_project(&below);
@@ -992,8 +898,6 @@ fn a_session_in_a_folder_that_holds_worktrees_but_is_in_none_belongs_to_the_work
     setup.window.open(&inner_path);
     let records = recorded::hook_events(TOOLS);
 
-    // The folder above both worktrees: they lie inside it, it lies inside neither. The
-    // terminal is the outer worktree's, which is not the deepest worktree there.
     let record = records[1].in_project(&setup.scratch.0);
     setup
         .scratch
@@ -1020,7 +924,6 @@ fn a_report_from_a_terminal_the_keeper_does_not_hold_is_followed_by_its_folder()
     let dialogs = recorded::hook_events(DIALOGS);
     let records = recorded::hook_events(TOOLS);
 
-    // A terminal the Keeper never opened, in the folder of a worktree it holds.
     setup.hook_in(&TerminalId::new("not-a-terminal"), &dialogs[0]);
     let first = setup.agents_until("the session of the terminal that is not held", |agents| {
         !agents.sessions.is_empty()
@@ -1029,8 +932,6 @@ fn a_report_from_a_terminal_the_keeper_does_not_hold_is_followed_by_its_folder()
     assert_eq!(first.sessions[0].workspace, setup.workspace);
     assert_eq!(first.sessions[0].terminal, None, "none the app knows");
 
-    // A terminal it opened, whose program has ended and which it holds no more: the same
-    // session reports from it, and is the one session still.
     let ended = setup.window.open_terminal(&setup.workspace);
     setup.window.type_into(&ended, b"exit\r");
     setup
@@ -1041,7 +942,7 @@ fn a_report_from_a_terminal_the_keeper_does_not_hold_is_followed_by_its_folder()
         });
     setup.hook_in(&ended, &dialogs[0]);
 
-    // A report from the terminal that runs, after both: when it is told, they were taken.
+    // A report from the terminal that runs, after both: when it is told, both were taken.
     setup.hooks(&records, &[1]);
     let running = setup.terminal.clone();
     let told = setup.agents_until("the session of the terminal that runs", |agents| {
@@ -1065,8 +966,6 @@ fn a_report_from_a_terminal_the_keeper_does_not_hold_is_followed_by_its_folder()
 fn the_next_session_in_a_terminal_takes_over_the_review_of_the_one_that_ended() {
     let mut setup = Setup::new();
     let dialogs = recorded::hook_events(DIALOGS);
-    // The first session of the recording starts, and its CLI reports its end; the second
-    // starts in the same terminal.
     setup.hooks(&dialogs, &[0]);
     let first = setup.agents_until("the first session", is_state(SessionState::Idle));
     let review = first.sessions[0].review.clone().expect("it has a review");
@@ -1110,8 +1009,6 @@ fn the_next_session_in_a_terminal_takes_the_review_of_the_one_that_ended_there_n
     let first_terminal = setup.terminal.clone();
     let second_terminal = setup.window.open_terminal(&setup.workspace);
 
-    // One session runs in each terminal, and each has a review: the first took the review
-    // of no agent, the second got one of its own.
     setup.hook_in(&first_terminal, &dialogs[0]);
     let one = setup.agents_until("the first session", is_state(SessionState::Idle));
     let first_review = one.sessions[0].review.clone().expect("a review");
@@ -1120,7 +1017,6 @@ fn the_next_session_in_a_terminal_takes_the_review_of_the_one_that_ended_there_n
     let second_review = both.sessions[1].review.clone().expect("a review");
     assert_ne!(first_review, second_review);
 
-    // The session of the first terminal ends first, the one of the second ends last.
     setup.hook_in(&first_terminal, &dialogs[13]);
     setup.agents_until(
         "the first session ended",
@@ -1134,8 +1030,6 @@ fn the_next_session_in_a_terminal_takes_the_review_of_the_one_that_ended_there_n
             .all(|s| s.state == SessionState::NotRunning)
     });
 
-    // A session that starts in the first terminal takes the review of the session that
-    // ended there, though the other ended after it.
     setup.hook_in(&first_terminal, &dialogs[14]);
     let third = setup.agents_until("the third session", |agents| {
         agents
@@ -1187,7 +1081,6 @@ fn a_session_whose_terminal_ends_is_not_running_and_is_kept_as_gone_with_it() {
     let session = working.sessions[0].id.clone();
     let turn = working.sessions[0].turn.clone().expect("the open turn");
 
-    // The shell exits: the CLI that ran in it is gone with it, in the middle of a turn.
     setup.window.type_into(&setup.terminal, b"exit\r");
     let gone = setup.agents_until(
         "the session is not running",
@@ -1211,14 +1104,11 @@ fn a_session_whose_terminal_ends_is_not_running_and_is_kept_as_gone_with_it() {
 
 #[test]
 fn a_session_whose_process_is_gone_is_not_running_within_the_watch() {
-    // The Keeper looks for processes that are gone every 250 ms, so the fact follows the
-    // end of the process within a few watches. Two seconds is eight of them: room for the
-    // lag of a busy machine, and far under the 20 s deadline, which only keeps the test
-    // from waiting for ever and would let a watch of seconds pass.
+    // The Keeper looks for gone processes every 250 ms: 2 s is eight watches, far under the 20 s
+    // deadline that would let a slower watch pass.
     const WITHIN_THE_WATCH: Duration = Duration::from_secs(2);
     let mut setup = Setup::new();
     let records = recorded::hook_events(TOOLS);
-    // The report names the process of the CLI: one the test starts, and kills.
     let mut cli = Process(
         Command::new("sleep")
             .arg("600")
@@ -1272,7 +1162,6 @@ fn marking_the_review_reviewed_turns_the_unreviewed_session_idle() {
     setup.hooks(&records, &[1, 2, 32]);
     let finished = setup.agents_until("the turn is unreviewed", is_state(SessionState::Unreviewed));
     let review = finished.sessions[0].review.clone().expect("a review");
-    // The turn's state is recorded by now: a mark of reviewed needs one to count from.
     setup.window.until("the end of the turn", |fact| {
         matches!(fact, Fact::TurnEnded { .. }).then_some(())
     });
@@ -1295,7 +1184,6 @@ fn a_keeper_started_on_a_store_with_a_running_session_marks_it_ended_by_keeper_s
     let session = started.sessions[0].id.clone();
     let scratch = setup.scratch;
     setup.window.stop(setup.keeper);
-    // The Keeper that stopped marked nothing: the session is still running in the Store.
     let before = scratch
         .store()
         .session(&yaar_store::SessionId::new(session.as_str()))
@@ -1303,7 +1191,6 @@ fn a_keeper_started_on_a_store_with_a_running_session_marks_it_ended_by_keeper_s
         .expect("the session");
     assert!(before.running);
 
-    // A Keeper that starts runs none.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let listed = window.agents();
@@ -1335,8 +1222,6 @@ fn a_session_its_cli_resumes_after_a_restart_keeps_its_id_and_its_review() {
     let (scratch, repo, workspace) = (setup.scratch, setup.repo, setup.workspace);
     setup.window.stop(setup.keeper);
 
-    // The Keeper starts again; the CLI, with the same name for its session, reports in a
-    // terminal of the new Keeper.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let terminal = window.open_terminal(&workspace);
@@ -1365,7 +1250,6 @@ fn a_session_that_ended_with_an_unreviewed_turn_is_shown_unreviewed_with_its_rev
         finished.sessions[0].id.clone(),
         finished.sessions[0].review.clone().expect("a review"),
     );
-    // The turn's state is recorded by now, so that nothing of the turn is still to come.
     setup.window.until("the end of the turn", |fact| {
         matches!(fact, Fact::TurnEnded { .. }).then_some(())
     });
@@ -1373,7 +1257,6 @@ fn a_session_that_ended_with_an_unreviewed_turn_is_shown_unreviewed_with_its_rev
     let ended = setup.agents_until("the session ended", is_state(SessionState::NotRunning));
     assert_eq!(ended.sessions[0].review, Some(review.clone()));
 
-    // Its CLI resumes it, and nobody has reviewed the turn it left.
     setup.hook(&records[1]);
     let resumed = setup.agents_until("the session runs again", |agents| {
         agents
@@ -1391,7 +1274,6 @@ fn a_session_that_ended_with_an_unreviewed_turn_is_shown_unreviewed_with_its_rev
         Some(SessionState::Unreviewed)
     );
 
-    // Marking the review reviewed is what makes it idle.
     assert_eq!(
         setup.window.ask(Request::MarkReviewed { review }),
         Ok(Reply::Done)
@@ -1411,20 +1293,15 @@ fn a_bash_command_denied_at_its_dialog_leaves_no_command_window_open() {
             workspace: Some(setup.workspace.clone()),
         })
         .expect("the workspace is on screen");
-    // A turn that runs a shell command, which waits at its permission dialog; the user
-    // denies it, and Claude Code writes the mark and no hook.
     setup.hooks(&dialogs, &[0, 10, 11, 12]);
     setup.agents_until("the dialog", is_state(SessionState::WaitsForPermission));
     setup.print_the_mark();
     setup.agents_until("the turn is over", is_state(SessionState::Unreviewed));
 
-    // A file made by hand once the window of the command could have closed. The shortest
-    // time the window can reach past the command's end is the ledger's own settle time:
-    // waited for here because it is the clock the rule is written in, not a fact to wait
-    // for.
+    // The file below is made by hand once the command's window could have closed, reckoned in the
+    // ledger's settle time: the clock the rule is written in, not a fact to wait for.
     std::thread::sleep(2 * yaar_workspaces::SETTLE);
-    // What the Keeper told so far is read, and the file is made: the watcher's fact for it
-    // is one that comes after.
+    // The watcher's fact for the file comes after what the Keeper told so far.
     setup.window.ask(Request::ListAgents).expect("the list");
     setup.window.looked_at = setup.window.facts.len();
     std::fs::write(setup.repo.join("by-hand.txt"), "typed\n").expect("write a file");

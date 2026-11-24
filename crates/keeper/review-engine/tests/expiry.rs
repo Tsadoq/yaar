@@ -1,8 +1,3 @@
-//! The clean-up of recorded states, through the engine with the real Store and the real
-//! Recorder beneath, on a repository the test makes, with a clock of the test's own: the
-//! deletion by the set time and at once, what refers to a state, the history's mark of an
-//! expired turn, and the room the stores take.
-
 mod support;
 
 use std::collections::BTreeSet;
@@ -32,7 +27,6 @@ const HOUR: Duration = Duration::from_secs(60 * 60);
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 const SECOND: Duration = Duration::from_secs(1);
 
-/// A clock that starts at [`BASE`] and moves only when the test moves it.
 #[derive(Debug)]
 struct TestClock {
     base: SystemTime,
@@ -47,7 +41,6 @@ impl TestClock {
         })
     }
 
-    /// Puts the clock `offset` after its base.
     fn move_to(&self, offset: Duration) {
         *self.moved.lock().expect("the clock") = offset;
     }
@@ -59,8 +52,7 @@ impl Clock for TestClock {
     }
 }
 
-/// Pseudo-random bytes from a xorshift of a seed: incompressible, and none of two seeds
-/// share a run.
+/// Pseudo-random bytes from a xorshift of a seed: incompressible, and no two seeds share a run.
 struct Noise(u64);
 
 impl Noise {
@@ -78,7 +70,6 @@ impl Noise {
     }
 }
 
-/// A repository with a tracked text file and an untracked `turn.bin`, one commit.
 fn repository(scratch: &Scratch) -> PathBuf {
     let repo = scratch.join("repo");
     init(&repo);
@@ -88,7 +79,6 @@ fn repository(scratch: &Scratch) -> PathBuf {
     repo
 }
 
-/// What a read-only look at a repository gives, by the seven reads of the plan.
 #[derive(Debug, PartialEq, Eq)]
 struct Reads {
     status: Vec<u8>,
@@ -131,7 +121,6 @@ fn reads(repo: &Path) -> Reads {
     }
 }
 
-/// Every file below `folder` with its size, by its path relative to `folder`, in order.
 fn files_below(folder: &Path) -> Vec<(String, u64)> {
     fn walk(root: &Path, folder: &Path, into: &mut Vec<(String, u64)>) {
         for child in std::fs::read_dir(folder).expect("read the folder") {
@@ -151,17 +140,13 @@ fn files_below(folder: &Path) -> Vec<(String, u64)> {
     found
 }
 
-/// A repository with two objects planted in it that no ref reaches, and its reads taken,
-/// before the engine runs: what a clean-up must leave as it found it.
 struct Watched {
     repo: PathBuf,
     planted: [String; 2],
     before: Reads,
 }
 
-/// Plants a blob and a commit that `git stash create` made and left unnamed, then reads
-/// the repository. Called after the test's own commits and before anything of the engine
-/// runs.
+/// Called after the test's own commits and before anything of the engine runs.
 fn watch(scratch: &Scratch, repo: &Path) -> Watched {
     let file = scratch.join("planted.txt");
     std::fs::write(&file, "a blob nothing names\n").expect("write the file");
@@ -179,7 +164,6 @@ fn watch(scratch: &Scratch, repo: &Path) -> Watched {
 }
 
 impl Watched {
-    /// The reads are as they were, and both planted objects are still there.
     fn assert_unchanged(&self) {
         assert!(
             reads(&self.repo) == self.before,
@@ -191,8 +175,6 @@ impl Watched {
     }
 }
 
-/// What the files under `path` take on disk, as the test counts it: the blocks of every
-/// entry, `path` itself included, links not followed.
 fn blocks_of(path: &Path) -> u64 {
     let meta = std::fs::symlink_metadata(path).expect("the entry");
     let mut total = meta.blocks() * 512;
@@ -204,7 +186,6 @@ fn blocks_of(path: &Path) -> u64 {
     total
 }
 
-/// Whether the store at `folder` holds the object.
 fn holds_object(folder: &Path, id: &str) -> bool {
     Command::new("git")
         .arg("-C")
@@ -215,7 +196,6 @@ fn holds_object(folder: &Path, id: &str) -> bool {
         .success()
 }
 
-/// Every state the engine's store of `workspace` lists, by full id.
 fn held(reviews: &Reviews, workspace: &WorkspaceId) -> BTreeSet<String> {
     reviews
         .states_of(workspace)
@@ -235,7 +215,6 @@ fn deleted(expired: &Expired) -> BTreeSet<String> {
     expired.states.iter().cloned().collect()
 }
 
-/// The room the store of `workspace` takes, as the engine reports it.
 fn room_of(reviews: &Reviews, workspace: &WorkspaceId) -> u64 {
     let StoreRoom { workspaces, .. } = reviews.state_sizes().expect("the sizes");
     workspaces
@@ -249,8 +228,6 @@ fn store_folder(scratch: &Scratch, workspace: &WorkspaceId) -> PathBuf {
     scratch.join(&format!("app/states/{workspace}.git"))
 }
 
-/// One workspace with a session and its review, a clock, and the engine over them: the
-/// set-up of every test below.
 struct Setup {
     scratch: Scratch,
     repo: PathBuf,
@@ -293,15 +270,12 @@ impl Setup {
         std::fs::write(self.repo.join("turn.bin"), self.noise.kib(64)).expect("write turn.bin");
     }
 
-    /// A turn of the session ends at the clock's time with `turn.bin` changed: its state is
-    /// recorded and the turn kept with it, as the Keeper keeps one.
     fn end_turn(&mut self, number: u32) -> (TurnId, StateId) {
         self.change_files();
         let state = self.end_turn_as_it_is(number);
         (TurnId::new(id(5000 + u128::from(number))), state)
     }
 
-    /// The same with no file changed.
     fn end_turn_as_it_is(&mut self, number: u32) -> StateId {
         let ended = self
             .reviews
@@ -320,7 +294,6 @@ impl Setup {
         ended.state
     }
 
-    /// A thread on line 2 of `notes.txt` in the files on disk.
     fn thread_on_the_files(&mut self, n: u128) -> String {
         self.change_files();
         self.reviews
@@ -333,7 +306,6 @@ impl Setup {
         self.thread_tree(n)
     }
 
-    /// The version thread `n` was written in.
     fn thread_tree(&self, n: u128) -> String {
         self.thread(n).anchor.tree
     }
@@ -373,15 +345,12 @@ impl Setup {
     }
 }
 
-// STATE-09
 #[test]
 fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_stays_in_the_history_marked_expired()
  {
     let mut run = Setup::new();
     let w = workspace();
 
-    // At B, turn T1 ends: S1. A new thread on line 2 of the files on disk, with nothing
-    // changed, sits on the state recorded within the hour: S1.
     let (t1, s1) = run.end_turn(1);
     run.reviews
         .save_draft(
@@ -392,7 +361,6 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
         .expect("save the draft");
     assert_eq!(run.thread_tree(1), s1.as_str());
 
-    // At B + 1 day, T2 ends: S2, and the round that sends the thread is at S2.
     run.clock.move_to(DAY);
     let (t2, s2) = run.end_turn(2);
     run.reviews
@@ -408,7 +376,6 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
     let round = run.store.reviews_of(&w).expect("read")[0].rounds[0].clone();
     assert_eq!(round.state.as_deref(), Some(s2.as_str()));
 
-    // At B + 2 days the reviewer marks the change reviewed: Sm.
     run.clock.move_to(2 * DAY);
     run.change_files();
     let sm = run
@@ -422,9 +389,6 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
         Some(sm.as_str())
     );
 
-    // At B + 3 days T3 ends: S3, which nothing names. At B + 4 days T4: S4, the newest. The
-    // thread has no place of its own: notes.txt never changes, so it sits where its anchor
-    // says, in S1.
     run.clock.move_to(3 * DAY);
     let (t3, s3) = run.end_turn(3);
     run.clock.move_to(4 * DAY);
@@ -432,11 +396,9 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
     assert_eq!(run.thread(1).now, None);
     assert_eq!(held(&run.reviews, &w), set(&[&s1, &s2, &sm, &s3, &s4]));
 
-    // "After the set time, 30 days with nothing set": one second short of the set time and
-    // the hour after S3 was recorded, nothing goes, though S1, S2 and Sm are older.
     assert_eq!(KEEP_STATES, 30 * DAY);
-    // The room is read with the objects packed, as a pack after the delete leaves them, so
-    // that a smaller store below is the doing of the delete and not of the packing.
+    // The room is read with the objects packed, as after a delete, so that a smaller store is
+    // the delete's doing and not the packing's.
     let blob_of_s3 = git(
         &store_folder(&run.scratch, &w),
         &["rev-parse", &format!("{}:turn.bin", s3.as_str())],
@@ -454,17 +416,13 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
     );
     assert_eq!(short.states, Vec::<String>::new());
     assert_eq!(held(&run.reviews, &w), set(&[&s1, &s2, &sm, &s3, &s4]));
-    // A sweep that deletes nothing packs nothing: the room is as it was.
     assert_eq!(room_of(&run.reviews, &w), size_before);
     assert_eq!((short.before, short.after), (size_before, size_before));
 
-    // At the set time it deletes S3 and nothing else.
     let expired = run.expire(3 * DAY + KEEP_STATES + HOUR, KEEP_STATES, Presence::Present);
     assert_eq!(expired.workspace, w);
     assert_eq!(expired.states, vec![s3.as_str().to_owned()]);
 
-    // The Recorder deleted that state of a turn no thread, round or mark names: the round's
-    // and the mark's are still there.
     assert_eq!(held(&run.reviews, &w), set(&[&s1, &s2, &sm, &s4]));
     assert!(!holds_object(&store_folder(&run.scratch, &w), s3.as_str()));
     assert!(
@@ -472,7 +430,6 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
         "the files only S3 held are gone from the disk"
     );
 
-    // The store is smaller: by the 64 KiB of S3's turn.bin and more than 32 KiB.
     let size_after = room_of(&run.reviews, &w);
     assert!(
         size_before >= size_after + 32 * 1024,
@@ -481,7 +438,6 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
     assert_eq!(expired.before, size_before);
     assert_eq!(expired.after, size_after);
 
-    // The turn stays in the history, marked expired.
     let turns = run.store.turns_of(&w).expect("the turns");
     let of_t3 = turns.iter().find(|turn| turn.id == t3).expect("T3 is kept");
     assert_eq!(of_t3.state.as_deref(), Some(s3.as_str()));
@@ -492,7 +448,6 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
         assert_eq!(marks[held_turn], TurnMark::Held);
     }
 
-    // A state a thread sits on is still there, and reads.
     assert!(held(&run.reviews, &w).contains(s1.as_str()));
     let content = run
         .reviews
@@ -502,11 +457,9 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
         .expect("read");
     assert_eq!(content.as_deref(), Some(&b"one\ntwo\nthree\n"[..]));
 
-    // Nothing of the user's repository was written.
     run.watched.assert_unchanged();
 }
 
-// STATE-09 (a turn that changed nothing)
 #[test]
 fn a_turn_that_changed_nothing_names_a_state_as_young_as_the_turn_and_is_not_taken_with_the_old_one()
  {
@@ -514,8 +467,7 @@ fn a_turn_that_changed_nothing_names_a_state_as_young_as_the_turn_and_is_not_tak
     let w = workspace();
     let (t1, s1) = run.end_turn(1);
 
-    // At B + 40 days a turn ends with nothing changed: a new state, dated that day, with
-    // the files of the first. At B + 40 days and an hour a turn ends with turn.bin changed.
+    // A turn with nothing changed records a new state with the files of the first.
     run.clock.move_to(40 * DAY);
     let s2 = run.end_turn_as_it_is(2);
     assert_ne!(s2, s1);
@@ -546,7 +498,6 @@ fn a_turn_that_changed_nothing_names_a_state_as_young_as_the_turn_and_is_not_tak
     run.watched.assert_unchanged();
 }
 
-// STATE-09 (a time the caller read)
 #[test]
 fn a_sweep_with_the_time_its_caller_read_counts_every_age_from_that_time_and_not_from_the_clock_of_the_engine()
  {
@@ -556,8 +507,6 @@ fn a_sweep_with_the_time_its_caller_read_counts_every_age_from_that_time_and_not
     let w = workspace();
     let at = |offset: Duration| UNIX_EPOCH + Duration::from_secs(BASE) + offset;
 
-    // The engine's clock stays at B, where the states were recorded. A second short of the
-    // set time and the hour, as the caller read it, nothing goes.
     let short = run
         .reviews
         .expire_at(
@@ -570,8 +519,6 @@ fn a_sweep_with_the_time_its_caller_read_counts_every_age_from_that_time_and_not
     assert_eq!(short.states, Vec::<String>::new());
     assert_eq!(run.held(), set(&[&s1, &s2]));
 
-    // At that time the first state goes and the newest stays, though the engine's own clock
-    // reads B.
     let expired = run
         .reviews
         .expire_at(&w, KEEP_STATES, at(KEEP_STATES + HOUR), Presence::Present)
@@ -583,15 +530,12 @@ fn a_sweep_with_the_time_its_caller_read_counts_every_age_from_that_time_and_not
     run.watched.assert_unchanged();
 }
 
-// STATE-09 (a worktree that is gone)
 #[test]
 fn the_store_of_a_gone_worktree_goes_as_one_once_its_newest_state_is_old_enough_and_opens_anew_empty()
  {
     let mut run = Setup::new();
     let w = workspace();
 
-    // A thread's state recorded at B, a turn's state nothing names beside it, the newest at
-    // B + 20 days.
     let s_thread = StateId::new(run.thread_on_the_files(1));
     let (_, s_unnamed) = run.end_turn(1);
     run.clock.move_to(20 * DAY);
@@ -599,15 +543,11 @@ fn the_store_of_a_gone_worktree_goes_as_one_once_its_newest_state_is_old_enough_
     assert_eq!(run.held(), set(&[&s_thread, &s_unnamed, &s_newest]));
     let folder = store_folder(&run.scratch, &w);
 
-    // At B + 31 days the store stays, as its newest state is young: until it goes, the
-    // ordinary rule holds, so the state nothing names is deleted and the thread's is still
-    // there, older than the set time as it is.
     let at_31 = run.expire(31 * DAY, KEEP_STATES, Presence::Gone);
     assert_eq!(deleted(&at_31), set(&[&s_unnamed]));
     assert_eq!(run.held(), set(&[&s_thread, &s_newest]));
     assert!(folder.is_dir());
 
-    // One second short of the set time and the hour after the newest: still there.
     let short = run.expire(
         20 * DAY + KEEP_STATES + HOUR - SECOND,
         KEEP_STATES,
@@ -626,10 +566,8 @@ fn the_store_of_a_gone_worktree_goes_as_one_once_its_newest_state_is_old_enough_
     assert_eq!((gone.before, gone.after), (size_before, 0));
     assert!(!folder.exists(), "the store's folder is gone");
 
-    // The thread keeps its own text: a gone worktree's reviews stay.
     assert_eq!(run.thread(1).anchor.tree, s_thread.as_str());
 
-    // The engine opens it anew, empty, and a recording goes into the new folder.
     let fresh = run.reviews.states_of(&w).expect("open anew");
     assert!(folder.is_dir());
     assert!(fresh.states().expect("list").is_empty());
@@ -648,9 +586,6 @@ fn the_clean_up_at_once_of_a_gone_worktree_deletes_only_what_nothing_names_howev
     git(&run.repo, &["commit", "--allow-empty", "-q", "-m", "two"]);
     run.watched = watch(&run.scratch, &run.repo);
 
-    // At B: a thread on the files (its state), a state nothing names, a thread written on
-    // the commit c1 and the newest state, all of them at least the set time and the hour
-    // before the clean-up: by the set time the whole store would go.
     let s_files = StateId::new(run.thread_on_the_files(1));
     let (_, s_unnamed) = run.end_turn(1);
     let on_commit = DraftSave {
@@ -673,8 +608,6 @@ fn the_clean_up_at_once_of_a_gone_worktree_deletes_only_what_nothing_names_howev
     let folder = store_folder(&run.scratch, &w);
     assert_eq!(run.held(), set(&[&s_files, &s_unnamed, &s_newest]));
 
-    // Of a gone worktree the newest state is no referrer, but the store is not taken as one
-    // either: only what nothing names goes, and the folder stays with what a thread names.
     let expired = run.clean_up(KEEP_STATES + 10 * DAY, Presence::Gone);
     assert_eq!(deleted(&expired), set(&[&s_unnamed, &s_newest]));
     assert_eq!(run.held(), set(&[&s_files]));
@@ -701,7 +634,6 @@ fn a_store_of_a_gone_worktree_that_holds_only_a_kept_commit_a_thread_names_is_no
     git(&run.repo, &["commit", "--allow-empty", "-q", "-m", "two"]);
     run.watched = watch(&run.scratch, &run.repo);
 
-    // At B two states that nothing names, and a thread written on the commit c1.
     let (_, first) = run.end_turn(1);
     let (_, second) = run.end_turn(2);
     let on_commit = DraftSave {
@@ -723,8 +655,6 @@ fn a_store_of_a_gone_worktree_that_holds_only_a_kept_commit_a_thread_names_is_no
     let folder = store_folder(&run.scratch, &w);
     assert_eq!(run.held(), set(&[&first, &second]));
 
-    // At once: both states go, and the store, which holds a kept commit a thread names, is
-    // not removed.
     let expired = run.clean_up(2 * HOUR, Presence::Gone);
     assert_eq!(deleted(&expired), set(&[&first, &second]));
     assert!(run.held().is_empty());
@@ -739,8 +669,6 @@ fn a_store_of_a_gone_worktree_that_holds_only_a_kept_commit_a_thread_names_is_no
     assert_eq!(kept(&run), vec![c1.clone()]);
     assert!(holds_object(&folder, &c1));
 
-    // The sweep finds a store with no state and a kept commit: it has no newest state to age
-    // and lets no kept commit go, so the store stays long after.
     let swept = run.expire(KEEP_STATES + 10 * DAY, KEEP_STATES, Presence::Gone);
     assert_eq!(swept.states, Vec::<String>::new());
     assert!(folder.is_dir(), "the store's folder is still there");
@@ -756,15 +684,10 @@ fn the_clean_up_at_once_deletes_what_nothing_names_but_for_the_hour_and_lets_go_
     let c1 = git(&run.repo, &["rev-parse", "HEAD"]);
     git(&run.repo, &["commit", "--allow-empty", "-q", "-m", "two"]);
     let c2 = git(&run.repo, &["rev-parse", "HEAD"]);
-    // The states are taken on a third commit, so that neither of the two is reached
-    // through them.
+    // States are taken on a third commit, so neither c1 nor c2 is reached through them.
     git(&run.repo, &["commit", "--allow-empty", "-q", "-m", "three"]);
-    // The repository is read after its last commit.
     run.watched = watch(&run.scratch, &run.repo);
 
-    // At B: thread A on the files (its anchor is S0), a turn whose state a round names,
-    // a mark, a state nothing names (U); a thread written on the commit c1, and c2 kept
-    // by nothing's name.
     let s0 = run.thread_on_the_files(1);
     let (_, p1) = run.end_turn(1);
     run.reviews
@@ -809,8 +732,7 @@ fn the_clean_up_at_once_deletes_what_nothing_names_but_for_the_hour_and_lets_go_
         both
     });
 
-    // At B + 110 minutes a turn ends (Y), at B + 119 minutes another (Z, the newest): both
-    // are younger than the hour at B + 120 minutes.
+    // Y and Z (the newest) are both younger than the hour at B + 120 minutes.
     run.clock.move_to(110 * 60 * SECOND);
     let (_, y) = run.end_turn(3);
     run.clock.move_to(119 * 60 * SECOND);
@@ -818,10 +740,8 @@ fn the_clean_up_at_once_deletes_what_nothing_names_but_for_the_hour_and_lets_go_
     let s0 = StateId::new(s0);
 
     let expired = run.clean_up(120 * 60 * SECOND, Presence::Present);
-    // Only U: S0 is a thread's, p1 a round's, sm a mark's, Y and Z are young.
     assert_eq!(deleted(&expired), set(&[&u]));
     assert_eq!(run.held(), set(&[&s0, &p1, &sm, &y, &z]));
-    // The kept commit nothing names is let go, and the one a thread sits on stays.
     assert_eq!(states.kept_commits().expect("list"), vec![c1]);
     assert!(!holds_object(&store_folder(&run.scratch, &w), &c2));
     assert!(expired.after < expired.before);
@@ -837,8 +757,8 @@ fn the_sweep_by_the_set_time_lets_go_no_kept_commit_and_the_clean_up_at_once_doe
     git(&run.repo, &["commit", "--allow-empty", "-q", "-m", "two"]);
     run.watched = watch(&run.scratch, &run.repo);
     let (_, old) = run.end_turn(1);
-    // The newest is ten minutes old when the clean-ups run: young, so that the rule of the
-    // newest state is shown by its own test and not by this one.
+    // The newest state is ten minutes old when the clean-ups run: young, so that the rule of the
+    // newest state is left to its own test.
     run.clock.move_to(40 * DAY - 10 * MINUTE);
     let (_, newest) = run.end_turn(2);
     run.reviews
@@ -864,7 +784,6 @@ fn the_sweep_by_the_set_time_lets_go_no_kept_commit_and_the_clean_up_at_once_doe
 fn the_turn_that_is_running_keeps_the_state_its_change_counts_from_until_it_ends() {
     let mut run = Setup::new();
     let (_, start) = run.end_turn(1);
-    // Turn 2 is running, counting from `start`; two turns end meanwhile.
     run.store
         .put_turn(&TurnRecord {
             id: TurnId::new(id(5002)),
@@ -876,20 +795,17 @@ fn the_turn_that_is_running_keeps_the_state_its_change_counts_from_until_it_ends
         })
         .expect("keep the running turn");
     let (_, q) = run.end_turn(3);
-    // The last turn ends ten minutes before the clean-ups: young, so that it is kept
-    // whatever else is said of the newest state.
+    // The last turn ends ten minutes before the clean-ups: young, so it is kept whatever is said
+    // of the newest state.
     run.clock.move_to(40 * DAY - 10 * MINUTE);
     let (_, newest) = run.end_turn(4);
 
-    // By the set time: Q goes, `start` is kept though as old.
     let by_time = run.expire(40 * DAY, KEEP_STATES, Presence::Present);
     assert_eq!(deleted(&by_time), set(&[&q]));
-    // At once: nothing more goes.
     let at_once = run.clean_up(40 * DAY, Presence::Present);
     assert_eq!(at_once.states, Vec::<String>::new());
     assert_eq!(run.held(), set(&[&start, &newest]));
 
-    // The turn ends: the next clean-up takes `start`.
     run.store
         .end_turn(&TurnId::new(id(5002)), TurnEndRecord::Finished, None)
         .expect("end the turn");
@@ -902,16 +818,12 @@ fn the_turn_that_is_running_keeps_the_state_its_change_counts_from_until_it_ends
 #[test]
 fn the_state_a_thread_was_carried_to_is_kept_with_the_one_it_was_written_in() {
     let mut run = Setup::new();
-    // Thread 1 is written in S1, on line 2 of notes.txt.
     let s1 = StateId::new(run.thread_on_the_files(1));
-    // A line is added above it: S2, where the thread now sits, on line 3.
     run.clock.move_to(HOUR);
     write(&run.repo, "notes.txt", "zero\none\ntwo\nthree\n");
     let (_, s2) = run.end_turn(1);
     let place = run.thread(1).now.expect("the thread was carried");
     assert_eq!((place.tree.as_str(), place.first), (s2.as_str(), 3));
-    // The reviewer resolves it: from then on no state takes it along, and its place stays
-    // in S2 while two more states are recorded.
     run.reviews
         .resolve(&run.review, &ThreadId::new(id(1)))
         .expect("resolve");
@@ -932,8 +844,6 @@ fn the_state_a_thread_was_carried_to_is_kept_with_the_one_it_was_written_in() {
     run.watched.assert_unchanged();
 }
 
-// The newest state of a worktree that is there is a referrer (slice 9 ruling 10). This
-// test is the one that shows it, so that it can be taken out alone.
 #[test]
 fn the_newest_state_of_a_worktree_that_is_there_is_kept_however_old_and_one_of_a_gone_worktree_is_not()
  {
@@ -943,11 +853,9 @@ fn the_newest_state_of_a_worktree_that_is_there_is_kept_however_old_and_one_of_a
     run.clock.move_to(DAY);
     let (t2, s1) = run.end_turn(2);
 
-    // Forty days on, by the set time: S0 goes, S1 stays as the newest.
     let expired = run.expire(40 * DAY, KEEP_STATES, Presence::Present);
     assert_eq!(deleted(&expired), set(&[&s0]));
     assert_eq!(run.held(), set(&[&s1]));
-    // At once, the same: the newest of a worktree that is there stays.
     let at_once = run.clean_up(40 * DAY, Presence::Present);
     assert_eq!(at_once.states, Vec::<String>::new());
     assert_eq!(run.held(), set(&[&s1]));
@@ -957,8 +865,6 @@ fn the_newest_state_of_a_worktree_that_is_there_is_kept_however_old_and_one_of_a
         (TurnMark::Expired, TurnMark::Held)
     );
 
-    // Of a gone worktree it is no referrer: at once it goes, and with it the folder of a
-    // store that holds nothing.
     let gone = run.clean_up(40 * DAY, Presence::Gone);
     assert_eq!(deleted(&gone), set(&[&s1]));
     assert_eq!(gone.after, 0);
@@ -971,8 +877,8 @@ fn the_newest_state_of_a_worktree_that_is_there_is_kept_however_old_and_one_of_a
 fn the_clean_up_at_once_packs_though_it_deleted_nothing_and_the_set_time_sweep_does_not() {
     let mut run = Setup::new();
     let w = workspace();
-    // The one state is ten minutes old when the clean-ups run: young, so that nothing is
-    // deleted whatever is said of the newest state, which has its own test.
+    // The only turn ends ten minutes before the clean-ups: young, so nothing is deleted whatever
+    // is said of the newest state.
     run.clock.move_to(40 * DAY - 10 * MINUTE);
     let (_, newest) = run.end_turn(1);
     // An object no ref reaches, in the store's own folder: what a comparison leaves behind.
@@ -985,14 +891,12 @@ fn the_clean_up_at_once_packs_though_it_deleted_nothing_and_the_set_time_sweep_d
     );
     assert!(holds_object(&folder, &loose));
 
-    // By the set time nothing is deleted: no git runs, the object stays.
     let by_time = run.expire(40 * DAY, KEEP_STATES, Presence::Present);
     assert_eq!(by_time.states, Vec::<String>::new());
     assert_eq!(by_time.after, by_time.before);
     assert!(holds_object(&folder, &loose));
 
-    // At once nothing is deleted either, for the state is young; the pack still removes
-    // the object.
+    // At once nothing is deleted either, the state is young; the pack still removes the object.
     let at_once = run.clean_up(40 * DAY, Presence::Present);
     assert_eq!(at_once.states, Vec::<String>::new());
     assert!(!holds_object(&folder, &loose), "the pack removed it");
@@ -1015,15 +919,14 @@ fn a_state_from_the_future_is_young_for_both_clean_ups() {
     run.clock.move_to(10 * DAY + 90 * MINUTE);
     let (_, s3) = run.end_turn(3);
 
-    // The clock goes back before all three were recorded: nothing is old.
+    // Swept at time zero, before all three were recorded: the clock went back, so nothing is old.
     let by_time = run.expire(Duration::ZERO, Duration::ZERO, Presence::Present);
     assert_eq!(by_time.states, Vec::<String>::new());
     let at_once = run.clean_up(Duration::ZERO, Presence::Present);
     assert_eq!(at_once.states, Vec::<String>::new());
     assert_eq!(run.held(), set(&[&s1, &s2, &s3]));
 
-    // Control: two hours after the first two were recorded they are old, with no set time,
-    // and the third, half an hour old, is not.
+    // Control: two hours after the first two they are old; the third, half an hour old, is not.
     let later = run.expire(10 * DAY + 2 * HOUR, Duration::ZERO, Presence::Present);
     assert_eq!(deleted(&later), set(&[&s1, &s2]));
     assert_eq!(run.held(), set(&[&s3]));
@@ -1062,7 +965,6 @@ fn a_workspace_with_no_state_store_deletes_nothing_and_makes_none() {
 fn a_turn_with_no_state_is_not_recorded_and_the_marks_are_of_the_workspace_alone() {
     let mut run = Setup::new();
     let (_, state) = run.end_turn(1);
-    // A turn that ended with no state, and one that is still running.
     run.store
         .put_turn(&TurnRecord {
             id: TurnId::new(id(5002)),
@@ -1083,7 +985,6 @@ fn a_turn_with_no_state_is_not_recorded_and_the_marks_are_of_the_workspace_alone
             state: None,
         })
         .expect("keep");
-    // A turn of another workspace's session.
     let elsewhere = session_in(&run.store, 2, WorkspaceId::new(id(0xbb)));
     run.store
         .put_turn(&TurnRecord {
@@ -1193,7 +1094,6 @@ fn a_store_that_is_a_link_is_neither_cleaned_nor_removed_and_its_target_is_as_be
         assert_eq!(files_below(&target), files_before);
         assert_eq!(git(&target, &["for-each-ref"]), refs_before);
     }
-    // It is listed by its name, counted as the link.
     let room = run.reviews.state_sizes().expect("the sizes");
     assert_eq!(
         room.workspaces,
@@ -1208,7 +1108,6 @@ fn a_store_that_is_a_link_is_neither_cleaned_nor_removed_and_its_target_is_as_be
     run.watched.assert_unchanged();
 }
 
-// The states of the store at `folder`, read by git directly.
 fn states_in(folder: &Path) -> BTreeSet<String> {
     git(
         folder,

@@ -1,8 +1,3 @@
-//! What a Window reads of the agents' side but the agents themselves: one turn, the
-//! history of a worktree, its uncommitted changes as a review lists them, and two
-//! versions of a change. Each is read from the Store, the state stores, the Review engine
-//! and Workspaces, through `Kept`, and from nothing of this side's thread.
-
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::path::{Component, Path};
@@ -24,7 +19,6 @@ use crate::wiring::{Kept, refusal};
 const TEXT_PROBE: usize = 8000;
 
 impl Agents {
-    /// `Request::GetTurn`.
     pub(crate) fn turn(&self, kept: &Kept, turn: &TurnId) -> Result<Reply, Refusal> {
         let (record, steps) = kept
             .store
@@ -42,21 +36,13 @@ impl Agents {
         }))
     }
 
-    /// `Request::GetHistory`: the commits since the one the changes are counted from and
-    /// the turns that ended on them, read from the state store, the commits and the Store.
-    /// No `git status` runs.
-    ///
-    /// The turns are read before the states, as `Reviews::turn_marks` reads them: a state a
-    /// turn names was recorded before the turn was kept, so it is in the states read after
-    /// the turns unless a clean-up took it. Read the other way round, a recording that ends
-    /// between the two reads would show a live turn as expired until the history is read
-    /// again. No surface orders the two reads, so this is stated and no test holds it.
+    /// The turns are read before the states: a state a turn names was recorded before the turn was
+    /// kept, so the other order could show a live turn as expired.
     pub(crate) fn history(&self, kept: &Kept, workspace: &WorkspaceId) -> Result<Reply, Refusal> {
         let id = yaar_workspaces::WorkspaceId::new(workspace.as_str());
         let worktree = worktree_needed(kept, &id, workspace)?;
-        // The history lists the commits after the one the changes are counted from. The
-        // commits `counted_from` gives besides it, those not on a remote, come before
-        // that commit: they are Changes' to show, and no entry of this history.
+        // The history lists the commits after `counted_from`; the unpushed commits it also gives
+        // lie before that one and are Changes' to show.
         let (counted_from, _) = kept.workspaces.counted_from(&id).map_err(refusal)?;
         let turns = kept.store.turns_of(&id).map_err(failed)?;
         let states = states_of(kept, &id)?;
@@ -75,7 +61,6 @@ impl Agents {
         }))
     }
 
-    /// `Request::CompareVersions`.
     pub(crate) fn compare(
         &self,
         kept: &Kept,
@@ -107,12 +92,6 @@ impl Agents {
             })
     }
 
-    /// `Request::CompareForReview`: what `review` shows of the change from `from` to the
-    /// recorded state `to` of `workspace`, as `Reviews::credited_change` lists it, each
-    /// path with its status as `Request::CompareVersions` gives it and the sessions credited
-    /// with it, in the order of the paths. Refused as `Request::CompareVersions` is, and with
-    /// `Refusal::UnknownReview` for a review the Keeper does not hold or of another
-    /// workspace.
     pub(crate) fn compare_for_review(
         &self,
         kept: &Kept,
@@ -125,9 +104,8 @@ impl Agents {
         let worktree = kept.workspaces.worktree(&id).map_err(refusal)?;
         let found = review_of_workspace(kept, &id, review)?;
         let states = states_of(kept, &id)?;
-        // The engine reads the two versions from the state store alone, as states it holds.
-        // A commit of the repository is copied into the store first, and a version nothing
-        // holds is refused as `Request::CompareVersions` refuses it.
+        // The engine reads both versions from the state store alone: a commit is copied into it
+        // first, and a version nothing holds is refused.
         states
             .compare(worktree.as_deref(), from, Some(to))
             .map_err(|error| {
@@ -151,8 +129,6 @@ impl Agents {
         ))
     }
 
-    /// `Request::ReadVersions`: each side at its own path, in a version of the state store
-    /// or on disk.
     pub(crate) fn read_versions(
         &self,
         kept: &Kept,
@@ -191,8 +167,6 @@ impl Agents {
         }))
     }
 
-    /// `Request::GetUncommitted`: the review's list, by `yaar_review_engine::uncommitted_of`
-    /// over `Workspaces::credits`.
     pub(crate) fn uncommitted(
         &self,
         kept: &Kept,
@@ -200,8 +174,6 @@ impl Agents {
         review: Option<&ReviewId>,
     ) -> Result<Reply, Refusal> {
         let id = yaar_workspaces::WorkspaceId::new(workspace.as_str());
-        // The workspace first, which costs no git: a refusal of the review is no later
-        // for it.
         worktree_needed(kept, &id, workspace)?;
         let review = review
             .map(|review| review_of_workspace(kept, &id, review))
@@ -240,33 +212,19 @@ impl Agents {
     }
 }
 
-/// Where a turn goes among the entries of the recorder.
 #[derive(Debug, Clone, Copy)]
 enum Place {
-    /// After the state at this index of the recorder's entries.
     After(usize),
-    /// Before the start of the history: its state is kept, on a commit the history does
-    /// not reach. A turn that has this place is left out.
+    /// Before the history: its state is kept on a commit the history does not reach. The turn is
+    /// left out.
     Before,
-    /// Before the first entry: where a turn with no place of its own goes when the turn it
-    /// follows is left out as before the start.
     Start,
-    /// After the last entry.
     End,
 }
 
-/// The entries of the recorder with the turns that ended put among them: a commit stays, a
-/// state that is a turn's becomes that turn (the turns that ended on one state, in the
-/// order they started), any other state is left out.
-///
-/// A turn whose state the Store names and `held` does not has expired: it is an
-/// `ExpiredTurn`; one with no state named is a recording that failed and stays a `Turn` with
-/// no state. Either has no place of its own: it goes right
-/// after the turn that started before it, or, when none did, before the turn that started
-/// after it, or, with none known, at the end. When the turn it follows is left out as before
-/// the start, the place is the start of the history: it ended after that turn. When the turn
-/// it precedes is left out, so is it: it ended before that turn. A turn that has not ended
-/// is not listed.
+/// Commits stay, a state that is a turn's becomes that turn, any other state is left out.
+/// A turn with no place goes after the turn that started before it (at the start if that one
+/// is left out), else before the next (left out with it), else at the end.
 fn with_turns(
     recorded: Vec<Recorded>,
     held: &HashSet<String>,
@@ -295,9 +253,6 @@ fn with_turns(
             }
         })
         .collect();
-    // The place of a turn that borrows one from the turn before it: a turn left out is no
-    // place to go after, and the turn that follows it ended after the start, as far as is
-    // known.
     let borrowed = |place: Place| match place {
         Place::Before => Place::Start,
         other => other,
@@ -310,9 +265,8 @@ fn with_turns(
                 before_it = Some(place);
                 place
             }
-            // No turn before it has a place: it started before the first turn that has one,
-            // so it ended before it, and where that one is left out so is this one. This
-            // place is not one to borrow from.
+            // No turn before it has a place: it ended before the first turn that has one, so it
+            // takes that turn's place and is left out where that one is.
             None => known[number..]
                 .iter()
                 .flatten()
@@ -368,8 +322,6 @@ fn with_turns(
     entries
 }
 
-/// The worktree of a workspace; refused with `UnknownWorkspace` when the Keeper does not
-/// hold the workspace and when its worktree is gone.
 fn worktree_needed(
     kept: &Kept,
     id: &yaar_workspaces::WorkspaceId,
@@ -383,9 +335,8 @@ fn worktree_needed(
         })
 }
 
-/// The review `review` as the Keeper holds it; refused with `UnknownReview` when it holds
-/// none, and for one of another workspace than `workspace`, since a review lists the changes
-/// of its own workspace alone.
+/// Refused with `UnknownReview` for a review the Keeper does not hold or one of another
+/// workspace.
 fn review_of_workspace(
     kept: &Kept,
     workspace: &yaar_workspaces::WorkspaceId,
@@ -408,7 +359,6 @@ fn review_of_workspace(
     }
 }
 
-/// The state store of a workspace.
 pub(super) fn states_of(
     kept: &Kept,
     id: &yaar_workspaces::WorkspaceId,
@@ -416,9 +366,8 @@ pub(super) fn states_of(
     kept.reviews.states_of(id).map_err(failed)
 }
 
-/// The refusal of a comparison or a reading that failed: `UnknownRevision` naming the first
-/// version that is neither held by the state store nor a commit of the repository, else
-/// the failure as it was.
+/// `UnknownRevision` naming the first version that neither the state store nor the repository
+/// holds, else the failure as it was.
 pub(super) fn versions_refusal(
     error: RecordError,
     states: &StateStore,
@@ -447,20 +396,16 @@ pub(super) fn versions_refusal(
     }
 }
 
-/// What is refused for the files on disk of a worktree that is gone.
 fn worktree_is_gone() -> Refusal {
     failed(EngineError::NoWorktree)
 }
 
-/// A failure the user cannot mend from here, as a sentence.
 pub(super) fn failed(error: impl Display) -> Refusal {
     Refusal::Failed {
         reason: error.to_string(),
     }
 }
 
-/// Whether a path, meant to be counted from the folder of a worktree, leads out of it by
-/// its own words.
 fn leads_out(path: &Path) -> bool {
     path.as_os_str().is_empty()
         || path
@@ -468,7 +413,6 @@ fn leads_out(path: &Path) -> bool {
             .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
 }
 
-/// What happened to a file, in the words of the Link.
 fn status(change: Change) -> FileStatus {
     match change {
         Change::Added => FileStatus::Added,
@@ -494,9 +438,6 @@ fn step(step: StepRecord) -> Step {
     }
 }
 
-/// One version of a file as far as it travels, as `Request::ReadFile` sends it: its bytes
-/// when it is text of a size the Link carries, else its size alone. What is not text is
-/// said to be so whatever its size.
 fn content(version: Option<Vec<u8>>) -> Content {
     let Some(bytes) = version else {
         return Content::Absent;

@@ -1,7 +1,3 @@
-//! The engine told by a watch of the worktree's files: a new thread on files nobody
-//! changed records no state, and every state the engine takes is told to the watch.
-//! Through the engine with the real Store and the real Recorder beneath.
-
 mod support;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,8 +9,8 @@ use support::{
 use yaar_recorder::StateId;
 use yaar_review_engine::{StateWatch, WorkspaceId};
 
-/// What the Keeper's watcher of a worktree is to the engine: it says whether files changed
-/// and remembers each state it was told of.
+/// Stands in for the Keeper's worktree watcher: says whether files changed and records each state
+/// told.
 #[derive(Debug, Default)]
 struct Watch {
     changed: AtomicBool,
@@ -83,10 +79,8 @@ fn every_state_the_engine_records_is_told_to_the_watch() {
     let told = watch.told();
     assert_eq!(told.len(), 5, "{told:?}");
     assert!(told.iter().all(|(workspace, _)| workspace == &w));
-    // In the order they were taken, the ones the calls returned among them.
     assert_eq!(told[0].1, marked);
     assert_eq!(told[1].1, ended.state);
-    // Each is a state the store holds, and they are the store's, oldest first.
     let kept: Vec<StateId> = reviews
         .states_of(&w)
         .expect("the state store")
@@ -120,7 +114,6 @@ fn a_new_thread_on_files_nobody_changed_sits_on_the_newest_state_and_records_non
     let newest = reviews.mark_reviewed(&worktree, &review).expect("mark");
     let told = watch.told().len();
 
-    // The files stayed as they were: the watch says so, and so does the repository.
     reviews
         .save_draft(
             Some(&worktree),
@@ -135,9 +128,8 @@ fn a_new_thread_on_files_nobody_changed_sits_on_the_newest_state_and_records_non
     assert_eq!(states.states().expect("list").len(), 1);
     assert_eq!(watch.told().len(), told, "no state was taken");
 
-    // The engine believes the watch: with a file edited behind its back, a thread still
-    // sits on the newest state and the store records nothing, which is how this shows
-    // that it did not look at the files at all.
+    // A file edited behind the watch's back: the engine trusts the watch and does not look at the
+    // files.
     write(&repo, "a.txt", "one\nbehind the watch's back\n");
     reviews
         .save_draft(
@@ -218,7 +210,7 @@ fn a_new_thread_on_lines_the_newest_state_lacks_records_a_state_though_the_watch
         .id()
         .clone();
     let before = reviews.mark_reviewed(&worktree, &review).expect("mark");
-    // The write is on disk, and the watch has not told of it yet.
+    // The write is on disk, but the watch has not told of it.
     write(&repo, "a.txt", "one\ntwo\n");
 
     reviews
@@ -272,7 +264,6 @@ fn a_new_thread_records_the_first_state_though_the_watch_saw_no_change() {
         )
         .expect("a thread");
 
-    // The store held no state, so there was none to sit on.
     let listed = reviews
         .states_of(&w)
         .expect("the state store")

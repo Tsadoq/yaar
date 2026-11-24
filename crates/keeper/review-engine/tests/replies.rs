@@ -1,8 +1,6 @@
 //! The agent's replies, and what only the reviewer does to a thread, through the engine
-//! with the real Store and the real Recorder beneath, on a repository the test makes.
-//!
-//! A round is sent here by copying the review as text: the one send that is built under
-//! this crate's calls for replies.
+//! with the real Store and Recorder on a repository the test makes. A round is sent by
+//! copying the review as text.
 
 mod support;
 
@@ -16,7 +14,6 @@ use yaar_review_engine::{
 };
 use yaar_store::Store;
 
-// A repository with one file of ten lines, and its worktree.
 fn repo(scratch: &Scratch) -> (PathBuf, Worktree) {
     let repo = scratch.join("repo");
     init(&repo);
@@ -30,7 +27,6 @@ fn thread(n: u128) -> ThreadId {
     ThreadId::new(id(n))
 }
 
-// A reply to thread `n` as the reply tool gave it.
 fn reply(n: u128, text: &str, addressed: bool) -> ThreadReply {
     ThreadReply {
         thread: thread(n),
@@ -39,15 +35,12 @@ fn reply(n: u128, text: &str, addressed: bool) -> ThreadReply {
     }
 }
 
-// Starts session `n`, whose review is made, and gives the review.
 fn started(reviews: &Reviews, store: &Store, n: u128) -> (SessionId, ReviewId) {
     let record = session(store, n);
     let review = reviews.session_started(&record).expect("start the session");
     (record.id, review)
 }
 
-// Writes a draft on each thread of `threads` (thread `n` on line `n` of `a.txt`) and sends
-// the review as a copy: the next round.
 fn send_threads(
     reviews: &Reviews,
     worktree: &Worktree,
@@ -71,7 +64,6 @@ fn send_threads(
     reviews.copy_as_text(worktree, review).expect("copy");
 }
 
-// The Store and the engine opened anew on the same file, as after a restart.
 fn reopened(scratch: &Scratch, store: Store, reviews: Reviews) -> (Store, Reviews) {
     drop(reviews);
     drop(store);
@@ -88,7 +80,6 @@ fn a_reply_is_kept_byte_for_byte_as_the_agents_comment_in_the_newest_round() {
     let reviews = engine(&scratch, store.clone());
     let (a, review) = started(&reviews, &store, 1);
 
-    // Round 1 sends thread 1; a follow-up of the reviewer sends round 2.
     send_threads(&reviews, &worktree, &review, 1..=1);
     reviews
         .save_draft(
@@ -122,7 +113,6 @@ fn a_reply_is_kept_byte_for_byte_as_the_agents_comment_in_the_newest_round() {
     assert!(held.addressed);
     assert!(!held.resolved);
     assert_eq!(read.state_of(&thread(1)), Some(ThreadState::Addressed));
-    // The reply is the last comment, after the reviewer's follow-up.
     assert_eq!(held.comments.last().map(|c| &c.id), Some(&comment));
 }
 
@@ -168,7 +158,6 @@ fn a_reply_to_a_thread_of_another_sessions_review_is_refused_and_keeps_nothing()
         reviews.review(&review_b).expect("read"),
     );
 
-    // A names B's thread, and B names A's.
     assert!(matches!(
         reviews.agent_replied(&a, &reply(2, "mine", true)),
         Err(EngineError::Refused(ReviewError::UnknownThread(t))) if t == thread(2)
@@ -177,7 +166,6 @@ fn a_reply_to_a_thread_of_another_sessions_review_is_refused_and_keeps_nothing()
         reviews.agent_replied(&b, &reply(1, "mine", true)),
         Err(EngineError::Refused(ReviewError::UnknownThread(t))) if t == thread(1)
     ));
-    // A thread that is nowhere.
     assert!(matches!(
         reviews.agent_replied(&a, &reply(9, "mine", true)),
         Err(EngineError::Refused(ReviewError::UnknownThread(_)))
@@ -203,12 +191,10 @@ fn a_reply_from_a_session_with_no_review_or_before_any_send_is_refused() {
         )
         .expect("save the draft");
 
-    // Nothing was sent: there is no round for the reply.
     assert!(matches!(
         reviews.agent_replied(&a, &reply(1, "x", true)),
         Err(EngineError::Refused(ReviewError::NothingSent(t))) if t == thread(1)
     ));
-    // A session the Store does not hold.
     let unknown = SessionId::new(id(77));
     assert!(matches!(
         reviews.agent_replied(&unknown, &reply(1, "x", true)),
@@ -240,7 +226,6 @@ fn the_reviewer_resolves_and_reopens_a_thread_and_the_engine_keeps_it() {
 
     reviews.resolve(&review, &thread(1)).expect("resolve");
     reviews.resolve(&review, &thread(2)).expect("resolve");
-    // A reply to a resolved thread leaves it resolved.
     reviews
         .agent_replied(&a, &reply(1, "also this", true))
         .expect("reply");

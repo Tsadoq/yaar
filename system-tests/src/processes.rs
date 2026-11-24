@@ -1,43 +1,24 @@
-//! What a process holds open and which processes it started, read from outside it.
-//!
-//! On Linux both are read from `/proc`, which a plain container has. Elsewhere they are
-//! asked of `lsof` and `ps`, which macOS has.
-
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// One thing a process holds open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Descriptor {
-    /// A socket of the unix kind: one that leads nowhere beyond this machine.
     UnixSocket {
-        /// The file it is bound at, when it is bound at one. A connection that a
-        /// listener accepted carries the path of the listener.
         path: Option<PathBuf>,
-        /// Whether it listens, where the system says so: Linux does, `lsof` does not.
         listens: Option<bool>,
     },
-    /// A socket of any other kind, with what the system calls it. Whatever the listing
-    /// cannot place counts as one, so that a kind nobody thought of fails a test and does
-    /// not pass it.
+    /// A socket of any other kind, with what the system calls it. Whatever the listing cannot place
+    /// counts as one, so that a kind nobody thought of fails a test.
     OtherSocket(String),
-    /// A socket of macOS's system domain, with the name `lsof` gives it: a line from the
-    /// process to its own kernel, as the system's libraries open for themselves in any
-    /// process. No other process and no network can connect to one.
+    /// macOS's system domain: a line from the process to its own kernel, which nothing else can
+    /// connect to.
     KernelSocket(String),
-    /// One end of a pipe.
     Pipe,
-    /// A terminal device: the end of a pseudo-terminal the Keeper holds, or the terminal a
-    /// program runs on. Neither is a socket.
     Terminal,
-    /// A file, a folder, a device that is no terminal, or anything else that is no
-    /// socket and no pipe.
     File,
 }
 
-/// Everything the process holds open, in one listing. Empty when the process is not
-/// there or cannot be read: an empty listing says nothing about a process.
 pub fn descriptors_of(pid: u32) -> Vec<Descriptor> {
     if cfg!(target_os = "linux") {
         let unix = std::fs::read_to_string("/proc/net/unix").unwrap_or_default();
@@ -49,7 +30,6 @@ pub fn descriptors_of(pid: u32) -> Vec<Descriptor> {
             .map(|target| from_proc(&target.to_string_lossy(), &unix))
             .collect()
     } else {
-        // No selector but the process: every descriptor of every kind is listed.
         let listed = Command::new("lsof")
             .args(["-a", "-p", &pid.to_string(), "-F", "ftn"])
             .stdin(Stdio::null())
@@ -60,9 +40,6 @@ pub fn descriptors_of(pid: u32) -> Vec<Descriptor> {
     }
 }
 
-/// Every process that descends from this one and still runs: its children, theirs, and
-/// so on. One that has ended and waits to be collected holds nothing open and is left
-/// out, and so is one that is on its way out.
 pub fn descendants_of(pid: u32) -> Vec<u32> {
     let running: Vec<(u32, u32)> = if cfg!(target_os = "linux") {
         std::fs::read_dir("/proc")
@@ -88,8 +65,6 @@ pub fn descendants_of(pid: u32) -> Vec<u32> {
     descendants(&running, pid)
 }
 
-/// Whether a link of `/proc/<pid>/fd` leads to the device of a pseudo-terminal: the file
-/// a master is made by opening, or the slave end a program runs on.
 fn is_terminal_on_linux(path: &str) -> bool {
     path == "/dev/ptmx"
         || path
@@ -97,8 +72,6 @@ fn is_terminal_on_linux(path: &str) -> bool {
             .is_some_and(|n| !n.is_empty())
 }
 
-/// Whether a character device `lsof` names is a pseudo-terminal of macOS: the file a
-/// master is made by opening, or the slave end a program runs on.
 fn is_terminal_on_macos(name: &str) -> bool {
     name == "/dev/ptmx"
         || name
@@ -106,8 +79,6 @@ fn is_terminal_on_macos(name: &str) -> bool {
             .is_some_and(|n| !n.is_empty())
 }
 
-/// What a link in `/proc/<pid>/fd` leads to, with the content of `/proc/net/unix` to
-/// tell the kind of a socket.
 fn from_proc(target: &str, unix_sockets: &str) -> Descriptor {
     let inode_of = |prefix: &str| {
         target
@@ -124,8 +95,8 @@ fn from_proc(target: &str, unix_sockets: &str) -> Descriptor {
             Descriptor::File
         };
     };
-    // One line for each unix socket of the machine:
-    // `Num RefCount Protocol Flags Type St Inode Path`, the path only when bound.
+    // One line for each unix socket: `Num RefCount Protocol Flags Type St Inode Path`, the path
+    // only when bound.
     unix_sockets
         .lines()
         .find_map(|line| {
@@ -135,22 +106,17 @@ fn from_proc(target: &str, unix_sockets: &str) -> Descriptor {
                 return None;
             }
             Some(Descriptor::UnixSocket {
-                // A name that starts with `@` is no file.
                 path: fields
                     .next()
                     .filter(|path| path.starts_with('/'))
                     .map(PathBuf::from),
-                // The flag a socket carries while it accepts connections.
                 listens: Some(flags & 0x1_0000 != 0),
             })
         })
         .unwrap_or_else(|| Descriptor::OtherSocket("not of the unix kind".to_owned()))
 }
 
-/// What `lsof -F ftn` printed for one process: for each descriptor a line `f` with its
-/// number, a line `t` with its type and a line `n` with its name.
 fn from_lsof(listing: &str) -> Vec<Descriptor> {
-    // The types `lsof` gives to what is no socket. Any other type counts as a socket.
     const NO_SOCKET: [&str; 10] = [
         "REG", "DIR", "CHR", "BLK", "LINK", "KQUEUE", "PSXSHM", "PSXSEM", "FSEVENTS", "NPOLICY",
     ];
@@ -158,12 +124,10 @@ fn from_lsof(listing: &str) -> Vec<Descriptor> {
     let mut kind = None;
     for line in listing.lines() {
         match line.split_at_checked(1) {
-            // The name closes the lines of one descriptor.
             Some(("t", value)) => kind = Some(value),
             Some(("n", name)) => {
                 found.push(match kind.take() {
                     Some("unix") => Descriptor::UnixSocket {
-                        // A socket with no file shows the address of the other end.
                         path: name.starts_with('/').then(|| PathBuf::from(name)),
                         listens: None,
                     },
@@ -181,9 +145,8 @@ fn from_lsof(listing: &str) -> Vec<Descriptor> {
     found
 }
 
-/// The parent of the process in the one line of its `/proc/<pid>/stat`; none for a
-/// process that has ended. The name of the program stands between brackets and may hold anything, so
-/// the fields are counted from the last `)`: the state, then the parent.
+/// The name of the program stands between brackets and may hold anything, so the fields are counted
+/// from the last `)`.
 fn parent_in_stat(stat: &str) -> Option<u32> {
     let (_, rest) = stat.rsplit_once(')')?;
     let mut fields = rest.split_whitespace();
@@ -192,13 +155,8 @@ fn parent_in_stat(stat: &str) -> Option<u32> {
     (state != "Z").then_some(parent)
 }
 
-/// The process and its parent in one line of `ps -o pid=,ppid=,stat=`; none for a
-/// process that has ended or is ending.
-///
-/// The state is one letter for what the process does, `Z` when it has ended, and then
-/// letters that say more, `E` among them for one that is trying to exit. While a process
-/// is started, and for a moment after one has ended, macOS lists such a one under its
-/// parent: it runs nothing and is about to be gone.
+/// `Z` is a process that has ended, `E` one trying to exit. macOS lists such a one under its parent
+/// while a process starts and for a moment after one ends: it runs nothing.
 fn parent_in_ps(line: &str) -> Option<(u32, u32)> {
     let mut fields = line.split_whitespace();
     let pid = fields.next()?.parse().ok()?;
@@ -208,8 +166,6 @@ fn parent_in_ps(line: &str) -> Option<(u32, u32)> {
     (!ending).then_some((pid, parent))
 }
 
-/// Those of `running`, given as pairs of a process and its parent, that descend from
-/// `ancestor`.
 fn descendants(running: &[(u32, u32)], ancestor: u32) -> Vec<u32> {
     let mut found = BTreeSet::new();
     let mut parents = vec![ancestor];
@@ -293,15 +249,12 @@ Num       RefCount Protocol Flags    Type St Inode Path
         );
         assert_eq!(read("socket:[23459]"), unix(None, Some(false)));
         assert_eq!(read("socket:[1234]"), unix(None, Some(true)));
-        // A socket the list of unix sockets lacks is of another kind: a network port.
         assert_eq!(
             read("socket:[777]"),
             Descriptor::OtherSocket("not of the unix kind".to_owned())
         );
         assert_eq!(read("pipe:[4242]"), Descriptor::Pipe);
         assert_eq!(read("/dev/null"), Descriptor::File);
-        // Both ends of a pseudo-terminal: the master the Keeper holds, the slave a
-        // program runs on. The device of a serial line and the folder are neither.
         assert_eq!(read("/dev/ptmx"), Descriptor::Terminal);
         assert_eq!(read("/dev/pts/3"), Descriptor::Terminal);
         assert_eq!(read("/dev/pts"), Descriptor::File);

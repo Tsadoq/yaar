@@ -1,9 +1,5 @@
-//! Component tests: the Store's calls for the user's settings, on a real database file.
-//!
-//! The setter is this test binary started again: [`the_setter_sets_the_settings_of_the_file_named_by_its_variable_and_does_nothing_without_it`]
-//! does nothing unless the variable `YAAR_STORE_SETTER` names a database file. Once it
-//! has set what its round says it reports `set` on its standard output and waits on its
-//! standard input, until the test kills it with `SIGKILL`, as a Keeper is killed.
+//! The setter is this test binary started again: it sets the settings of the file named by
+//! `YAAR_STORE_SETTER`, reports `set` on stdout and waits on stdin until killed with `SIGKILL`.
 
 mod support;
 
@@ -21,16 +17,14 @@ use yaar_store::{
     Theme, TurnEndSelects, WorkspaceId,
 };
 
-/// The variable that names the database file the setter sets settings in.
 const SETTER_VARIABLE: &str = "YAAR_STORE_SETTER";
-/// The variable that says which round the setter does: `1` sets every setting, `2` sets
-/// the place of the terminal pane again.
+/// Which round the setter does: `1` sets every setting, `2` sets the place of the terminal pane
+/// again.
 const ROUND_VARIABLE: &str = "YAAR_STORE_SETTER_ROUND";
-/// The name of the test function the setter is: how the test binary is told to run it.
 const SETTER_TEST: &str =
     "the_setter_sets_the_settings_of_the_file_named_by_its_variable_and_does_nothing_without_it";
-/// How long the parent waits for the setter to report: a process starting, a database
-/// opening and six calls that wait for the drive, on a loaded machine.
+/// A process starting, a database opening and six calls that wait for the drive, on a loaded
+/// machine.
 const SET_WITHIN: Duration = Duration::from_secs(60);
 
 fn w1() -> WorkspaceId {
@@ -41,7 +35,6 @@ fn w2() -> WorkspaceId {
     WorkspaceId::new("w-2")
 }
 
-/// Keeps one repository and the workspaces named, in that order.
 fn keep_workspaces(store: &Store, workspaces: &[&str]) {
     store
         .put_repository(&RepositoryRecord {
@@ -67,8 +60,6 @@ fn refusal_of<T: std::fmt::Debug>(result: Result<T, StoreError>) -> String {
     }
 }
 
-/// What the setter does: keeps two workspaces and sets what its round says, then tells
-/// the test and waits to be killed.
 #[test]
 fn the_setter_sets_the_settings_of_the_file_named_by_its_variable_and_does_nothing_without_it() {
     let Some(file) = std::env::var_os(SETTER_VARIABLE) else {
@@ -105,8 +96,7 @@ fn the_setter_sets_the_settings_of_the_file_named_by_its_variable_and_does_nothi
     let _ = std::io::stdin().read_to_end(&mut Vec::new());
 }
 
-/// The setter, started again from this binary. Dropping it kills the process and waits
-/// for it, so that a failing test leaves none.
+/// Dropping it kills the process, so a failing test leaves none.
 struct Setter {
     child: Child,
     lines: Receiver<String>,
@@ -145,7 +135,6 @@ impl Setter {
         }
     }
 
-    /// Waits until the setter reports that every call it made has returned.
     fn wait_until_set(&self) {
         loop {
             match self.lines.recv_timeout(SET_WITHIN) {
@@ -156,7 +145,6 @@ impl Setter {
         }
     }
 
-    /// Kills the setter with `SIGKILL` and waits until it is gone.
     fn kill(&mut self) {
         // Killing a process that ended already is not a fault.
         let _ = self.child.kill();
@@ -177,7 +165,6 @@ impl Drop for Setter {
     }
 }
 
-/// Runs a setter on the file through one round, to the end of its calls, and kills it.
 fn set_and_kill(file: &Path, round: &str) {
     let mut setter = Setter::start(file, round);
     setter.wait_until_set();
@@ -190,8 +177,6 @@ fn every_setting_is_still_set_after_the_process_that_set_it_is_killed() {
     set_and_kill(&scratch.file(), "1");
 
     let store = Store::open(&scratch.file()).expect("open after the kill");
-    // What a turn end selects, the stop time, the theme, the place of the terminal pane
-    // and the form of Flow, in the order of the kinds; the second workspace has no form.
     assert_eq!(
         store.settings().expect("settings"),
         [
@@ -205,7 +190,6 @@ fn every_setting_is_still_set_after_the_process_that_set_it_is_killed() {
             },
         ]
     );
-    // The base, kept with its workspace.
     let bases: Vec<_> = store
         .workspaces()
         .expect("workspaces")
@@ -215,8 +199,6 @@ fn every_setting_is_still_set_after_the_process_that_set_it_is_killed() {
     assert_eq!(bases, [(w1(), Some("release".to_owned())), (w2(), None)]);
     drop(store);
 
-    // A second setter changes one of them, and the new value is the one a store finds,
-    // in the one place of the old.
     set_and_kill(&scratch.file(), "2");
     let store = Store::open(&scratch.file()).expect("open after the second kill");
     assert_eq!(
@@ -311,7 +293,6 @@ fn the_form_of_flow_is_kept_for_each_workspace_and_listed_in_the_order_the_works
     let scratch = Scratch::new();
     let store = Store::open(&scratch.file()).expect("open");
     keep_workspaces(&store, &["w-2", "w-1"]);
-    // Set in the opposite order to the one the workspaces were kept in.
     for (workspace, form) in [(w1(), FlowForm::LiveDiff), (w2(), FlowForm::Timeline)] {
         store
             .set_setting(&Setting::FlowForm { workspace, form })
@@ -349,8 +330,7 @@ fn the_form_of_flow_of_a_workspace_the_store_does_not_hold_is_refused_with_its_i
     }));
     assert!(sentence.contains("w-99"), "{sentence}");
     assert_eq!(store.settings().expect("settings"), []);
-    // Nothing was written for it, not even a row that `settings` hides while no such
-    // workspace is kept: once a workspace of that id is kept, no form comes with it.
+    // Nothing is written, not even a row that `settings` hides until such a workspace is kept.
     store
         .put_workspace(
             &WorkspaceId::new("w-99"),
@@ -359,7 +339,6 @@ fn the_form_of_flow_of_a_workspace_the_store_does_not_hold_is_refused_with_its_i
         )
         .expect("put workspace");
     assert_eq!(store.settings().expect("settings"), []);
-    // The refusal leaves the store as it was: a setting is still kept after it.
     store
         .set_setting(&Setting::Theme(Theme::Dark))
         .expect("set");
@@ -391,15 +370,13 @@ fn a_row_with_a_name_or_a_value_this_build_does_not_know_is_left_out_of_the_list
         },
     ];
 
-    // What a later version, or a hand, left in the file: the Store has no call to write
-    // it. Each row is written in the place of the one before of its name, so that the
-    // list is read with one unknown row at a time among the known ones.
+    // Rows the Store has no call to write, as a later version or a hand leaves them. Each takes
+    // the place of the row before of its name, so the list holds one unknown row at a time.
     let connection = Connection::open(scratch.file()).expect("open the file");
     for (name, value) in [
         ("turn_end", "sometimes"),
         ("stop_after", "soon"),
         ("stop_after", "-5"),
-        // Parses as a number, but is not what the Store writes.
         ("stop_after", "+90"),
         ("stop_after", "4294967296"),
         ("terminal_place", "above"),
@@ -420,7 +397,6 @@ fn a_row_with_a_name_or_a_value_this_build_does_not_know_is_left_out_of_the_list
     for (workspace, name, value) in [
         ("w-1", "flow_form", "sideways"),
         ("w-1", "zoom", "2"),
-        // A workspace the store does not hold.
         ("w-gone", "flow_form", "live_diff"),
     ] {
         connection
@@ -436,8 +412,6 @@ fn a_row_with_a_name_or_a_value_this_build_does_not_know_is_left_out_of_the_list
             "{workspace} {name} = {value} is left out"
         );
     }
-    // A value of the theme this build does not know takes the place of the known theme's
-    // row, so the theme holds its default and only the form of Flow is listed.
     connection
         .execute(
             "UPDATE setting SET value = 'sepia' WHERE name = 'theme'",
@@ -476,13 +450,11 @@ fn the_answer_on_a_repository_is_listed_after_the_settings_of_the_workspaces_in_
     let scratch = Scratch::new();
     let store = Store::open(&scratch.file()).expect("open");
     keep_workspaces(&store, &["w-1"]);
-    // Kept r-3 before r-2, so that the order they were kept in is not the order of their
-    // ids: a list sorted by id would show it.
+    // Kept r-3 before r-2, so the order they were kept in differs from the order of their ids.
     keep_repository(&store, "r-3");
     keep_repository(&store, "r-2");
-    // Set in the opposite order to the one the repositories were kept in, and the
-    // settings of the other kinds after it, so that where the answers come in the list
-    // is the Store's doing and not the order of the calls.
+    // Set in the opposite order to the repositories, other kinds after, so the list order is the
+    // Store's doing.
     for setting in [
         answer("r-2", true),
         answer("r-3", false),
@@ -524,7 +496,6 @@ fn a_second_answer_on_a_repository_takes_the_place_of_the_first_and_lists_one_en
     ] {
         store.set_setting(&setting).expect("set");
     }
-    // The first answer is the one that was changed, and the other is as it was.
     assert_eq!(
         store.settings().expect("settings"),
         [answer("r-1", false), answer("r-2", true)]
@@ -545,11 +516,9 @@ fn the_answer_on_a_repository_the_store_does_not_hold_is_refused_with_its_id_and
     let sentence = refusal_of(store.set_setting(&answer("r-99", true)));
     assert!(sentence.contains("r-99"), "{sentence}");
     assert_eq!(store.settings().expect("settings"), []);
-    // Nothing was written for it, not even a row that `settings` hides while no such
-    // repository is kept: once a repository of that id is kept, no answer comes with it.
+    // Nothing is written, not even a row that `settings` hides until such a repository is kept.
     keep_repository(&store, "r-99");
     assert_eq!(store.settings().expect("settings"), []);
-    // The refusal leaves the store as it was: an answer is still kept after it.
     store.set_setting(&answer("r-1", false)).expect("set");
     assert_eq!(store.settings().expect("settings"), [answer("r-1", false)]);
 }
@@ -579,15 +548,13 @@ fn a_row_of_a_repository_that_is_unknown_or_not_held_is_left_out_of_the_list() {
     store.set_setting(&answer("r-1", true)).expect("set");
     let known = [answer("r-1", true)];
 
-    // What a later version, or a hand, left in the file: the Store has no call to write
-    // it. Each row is written beside the known one, so that the list is read with one
-    // unknown row at a time among it.
+    // Rows the Store has no call to write, as a later version or a hand leaves them. The first
+    // replaces the known row, so the list is empty; each pass sets the known row again.
     let connection = Connection::open(scratch.file()).expect("open the file");
     for (repository, name, value) in [
         ("r-1", "servers_inside", "maybe"),
         ("r-1", "servers_inside_always", "yes"),
         ("r-1", "zoom", "2"),
-        // A repository the store does not hold.
         ("r-gone", "servers_inside", "yes"),
     ] {
         connection
@@ -597,8 +564,6 @@ fn a_row_of_a_repository_that_is_unknown_or_not_held_is_left_out_of_the_list() {
                 [repository, name, value],
             )
             .expect("write the row");
-        // The unknown value takes the place of the known one: it is the one that is left
-        // out, and the rest of the list is as it was.
         let expected: &[Setting] = if value == "maybe" { &[] } else { &known };
         assert_eq!(
             store.settings().expect("settings"),
@@ -639,7 +604,6 @@ fn the_answer_on_a_repository_is_kept_as_its_name_and_a_word_in_a_table_of_its_o
     assert_eq!(app_rows, 0, "no row of the whole app's table");
 }
 
-/// The rows of `setting`, by name, as the file holds them.
 fn app_rows(file: &Path) -> Vec<(String, String)> {
     let connection = Connection::open(file).expect("open the file");
     connection
@@ -659,8 +623,8 @@ fn folder(repository: &str, path: Option<&str>) -> Setting {
 }
 
 #[test]
-fn the_settings_of_slice_9_are_read_back_as_set_replaced_in_place_and_held_by_a_store_opened_anew()
-{
+fn the_keep_states_option_key_and_theme_are_read_back_as_set_replaced_in_place_and_held_by_a_store_opened_anew()
+ {
     let scratch = Scratch::new();
     let store = Store::open(&scratch.file()).expect("open");
     keep_workspaces(&store, &[]);
@@ -685,7 +649,6 @@ fn the_settings_of_slice_9_are_read_back_as_set_replaced_in_place_and_held_by_a_
     for values in kinds {
         for setting in values {
             store.set_setting(setting).expect("set");
-            // One entry for the kind, the value just set.
             let read = store.settings().expect("settings");
             let of_kind: Vec<_> = read
                 .iter()
@@ -704,7 +667,6 @@ fn the_settings_of_slice_9_are_read_back_as_set_replaced_in_place_and_held_by_a_
     }
     drop(store);
 
-    // The kinds are listed in the order of the table, not of the sets.
     let store = Store::open(&scratch.file()).expect("open again");
     assert_eq!(
         store.settings().expect("settings"),
@@ -732,11 +694,11 @@ fn a_theme_named_with_a_space_and_a_letter_outside_ascii_is_read_back_as_named()
 }
 
 #[test]
-fn light_and_dark_are_kept_as_slice_5_wrote_them_and_the_rows_it_wrote_are_read() {
+fn light_and_dark_are_kept_as_an_older_store_wrote_them_and_the_rows_it_wrote_are_read() {
     let scratch = Scratch::new();
     let store = Store::open(&scratch.file()).expect("open");
-    // A built-in theme asked for by its name is the same row as the theme itself, so that
-    // a Store of slice 5 reads what this one wrote.
+    // A built-in theme named explicitly is the same row as the theme itself, so an older Store
+    // reads it.
     for (name, written, read) in [
         ("Light", "light", Theme::Light),
         ("Dark", "dark", Theme::Dark),
@@ -750,7 +712,6 @@ fn light_and_dark_are_kept_as_slice_5_wrote_them_and_the_rows_it_wrote_are_read(
         );
         assert_eq!(store.settings().expect("settings"), [Setting::Theme(read)]);
     }
-    // Another capitalisation is another theme's name.
     store
         .set_setting(&Setting::Theme(Theme::Named("light".to_owned())))
         .expect("set");
@@ -759,7 +720,6 @@ fn light_and_dark_are_kept_as_slice_5_wrote_them_and_the_rows_it_wrote_are_read(
         [("theme".to_owned(), "named:light".to_owned())]
     );
 
-    // The rows slice 5 wrote.
     let connection = Connection::open(scratch.file()).expect("open the file");
     for (value, theme) in [("light", Theme::Light), ("dark", Theme::Dark)] {
         connection
@@ -815,7 +775,6 @@ fn a_row_of_the_new_kinds_that_this_build_does_not_accept_is_left_out_of_the_lis
             .execute("DELETE FROM setting WHERE name = ?1", [name])
             .expect("remove the row");
     }
-    // The rows that are accepted, at their edges, are listed.
     for (name, value, setting) in [
         ("keep_states", "1", Setting::KeepStates { days: 1 }),
         (
@@ -891,8 +850,6 @@ fn a_folder_for_worktrees_is_read_back_replaced_by_none_and_listed_after_the_ans
         store.settings().expect("settings")[1..],
         [folder("r-1", Some("/a b/é"))]
     );
-    // The second repository's folder, set first among the two, the answer of the first
-    // repository last: the order is the repositories', then the names'.
     store
         .set_setting(&folder("r-2", Some("/work/trees")))
         .expect("set");
@@ -915,14 +872,12 @@ fn a_folder_for_worktrees_is_read_back_replaced_by_none_and_listed_after_the_ans
     ];
     assert_eq!(store.settings().expect("settings"), expected);
 
-    // None takes the place of the folder, as a value, and is held by a Store opened anew.
     store.set_setting(&folder("r-1", None)).expect("set");
     drop(store);
     let store = Store::open(&scratch.file()).expect("open again");
     let mut expected = expected;
     expected[3] = folder("r-1", None);
     assert_eq!(store.settings().expect("settings"), expected);
-    // Set again to a folder, it takes its place.
     store
         .set_setting(&folder("r-1", Some("/else")))
         .expect("set");
@@ -999,8 +954,6 @@ fn a_folder_that_is_not_absolute_or_not_text_is_refused_and_so_is_one_for_a_repo
     assert!(sentence.contains("worktrees_folder"), "{sentence}");
     assert_eq!(store.settings().expect("settings"), kept);
 
-    // A repository the Store does not hold: refused with its id, and no row is left for a
-    // repository of that id kept later.
     let sentence = refusal_of(store.set_setting(&folder("r-99", Some("/x"))));
     assert!(sentence.contains("r-99"), "{sentence}");
     let sentence = refusal_of(store.set_setting(&folder("r-99", None)));
@@ -1034,7 +987,6 @@ fn a_row_of_a_folder_that_is_not_absolute_or_whose_repository_is_not_held_is_lef
             "{repository} {value:?} is left out"
         );
     }
-    // The empty text is the way back to the rule, and is listed as none.
     connection
         .execute(
             "UPDATE repository_setting SET value = '' WHERE repository = 'r-1'",

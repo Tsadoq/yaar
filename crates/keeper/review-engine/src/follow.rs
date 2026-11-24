@@ -1,30 +1,10 @@
-//! How a thread follows the code it was written on from one tree to the next: pure
-//! functions over the two versions of one file, which never ask what kind of change a
-//! tree is.
-//!
-//! The rule, one tree at a time, for the lines a thread sits on in the first tree:
-//! - no hunk of the diff of the file touches them: the thread shifts with them, with no
-//!   notice;
-//! - a hunk touches them, and the same lines, byte for byte, occur exactly once among the
-//!   lines the diff adds to the file, and hold at least [`MOVED_BLOCK`] letters and
-//!   digits: the thread follows that block, with no notice;
-//! - otherwise the thread sits on the lines that replaced them in the hunk, with
-//!   [`Notice::Changed`], or, where the hunk added nothing in their place, on the one line
-//!   at the point of deletion, with [`Notice::Deleted`]. A line put inside the lines it
-//!   sits on is a change too: the thread then keeps the whole range, with
-//!   [`Notice::Changed`].
-//!
-//! The diff is `yaar-diff`'s, the one the review pane draws. A file renamed into the next
-//! tree is the same file under its new path, as git pairs a rename; a file deleted and not
-//! paired keeps the thread where it was, with [`Notice::Deleted`]. A notice, once given,
-//! stays given in later trees; [`Notice::Deleted`] outlasts [`Notice::Changed`]. A thread
-//! on the side that did not change between the two trees stays where it is.
-//!
-//! Where the rule leaves a choice: a range of which only some lines were removed keeps
-//! the lines it has left, with [`Notice::Changed`], and the thread is on the one line at
-//! the point of deletion only when every line of it was removed. A place is always a line
-//! of the next version (line 1 of a version with none), so that a thread never sits past
-//! the end of its file.
+//! How a thread follows its code from one tree to the next, over `yaar-diff`'s diff of one file. No
+//! hunk touches its lines: it shifts with them. A hunk touches them and the same lines occur
+//! exactly once among the added lines, with at least [`MOVED_BLOCK`] letters and digits: it follows
+//! that block. Otherwise it sits on the lines that replaced them ([`Notice::Changed`]) or on the
+//! one line at the point of deletion ([`Notice::Deleted`]). A notice stays in later trees and
+//! `Deleted` outlasts `Changed`. A rename git pairs is the same file; an unpaired deleted file
+//! keeps the thread in place with `Deleted`.
 
 #[cfg(test)]
 mod corpus;
@@ -36,78 +16,51 @@ use std::path::{Path, PathBuf};
 use yaar_diff::{FileDiff, Side as YaarSide};
 use yaar_store::Side;
 
-/// The fewest letters and digits a moved block must hold for a thread to follow it with
-/// no notice, as git's blame counts a moved line.
+/// The fewest letters and digits a moved block must hold to be followed with no notice, as git's
+/// blame counts a moved line.
 pub const MOVED_BLOCK: usize = 20;
 
-/// The lines of one file a thread sits on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
-    /// The path of the file, relative to the folder of the worktree.
     pub path: PathBuf,
-    /// The side of the diff.
     pub side: Side,
-    /// The first line, counted from 1.
     pub first: u32,
-    /// The last line, at least `first`.
     pub last: u32,
 }
 
-/// What became of the lines a thread was written on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Notice {
-    /// They were rewritten, or a line was put inside them.
     Changed,
-    /// They were deleted, or their file was.
     Deleted,
 }
 
-/// Where a thread sits, and whether the code it was written on changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
-    /// Where.
     pub at: Place,
-    /// What became of the code; none while it only moved or did not change.
     pub notice: Option<Notice>,
 }
 
-/// What one file became from one tree to the next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileStep<'a> {
-    /// It is the same.
     Unchanged,
-    /// Its content changed: from `before` to `after`.
     Changed {
-        /// Its content in the first tree.
         before: &'a [u8],
-        /// Its content in the next.
         after: &'a [u8],
     },
-    /// It was renamed to `to`, its content changing from `before` to `after`, which may be
-    /// the same.
     Renamed {
-        /// Its path in the next tree.
         to: &'a Path,
-        /// Its content in the first tree.
         before: &'a [u8],
-        /// Its content in the next.
         after: &'a [u8],
     },
-    /// It is gone, and no file of the next tree is paired with it.
     Deleted,
 }
 
-/// Carries a thread from one tree to the next, in which the files of side `changed`
-/// changed, its file as `step` says: see the module's doc. A thread on the other side
-/// stays as it is.
 pub fn carry(placed: &Placed, changed: Side, step: FileStep<'_>) -> Placed {
     carry_file(std::slice::from_ref(placed), changed, step)
         .pop()
         .expect("one thread carried gives one thread")
 }
 
-/// Carries every thread of one file as [`carry`] does, in their order, with the file's
-/// diff worked out once for all of them.
 pub fn carry_file(placed: &[Placed], changed: Side, step: FileStep<'_>) -> Vec<Placed> {
     let affected = |p: &Placed| p.at.side == changed;
     match step {
@@ -132,8 +85,7 @@ pub fn carry_file(placed: &[Placed], changed: Side, step: FileStep<'_>) -> Vec<P
     }
 }
 
-/// The notice a thread carries after one that it already had and one it was just given:
-/// a deletion is not taken back by a later change of the line it sits on.
+/// A deletion is not taken back by a later change of the line it sits on.
 fn stronger(had: Option<Notice>, given: Notice) -> Notice {
     match (had, given) {
         (Some(Notice::Deleted), _) | (_, Notice::Deleted) => Notice::Deleted,
@@ -141,8 +93,6 @@ fn stronger(had: Option<Notice>, given: Notice) -> Notice {
     }
 }
 
-/// Carries the threads of the side that changed through the diff of `before` to `after`,
-/// and moves them to `to` when the file was renamed.
 fn follow_content(
     placed: &[Placed],
     changed: Side,
@@ -150,7 +100,6 @@ fn follow_content(
     before: &[u8],
     after: &[u8],
 ) -> Vec<Placed> {
-    // A file with no thread on the side that changed costs no diff.
     if placed.iter().all(|p| p.at.side != changed) {
         return placed.to_vec();
     }
@@ -179,17 +128,14 @@ fn follow_content(
         .collect()
 }
 
-/// The lines the diff adds, looked up by their content: where a block that a hunk
-/// removed may have been put. Worked out when a thread first needs it.
+/// The lines the diff adds, by content, worked out when a thread first needs it.
 struct Moves<'a> {
     diff: &'a FileDiff,
     index: OnceCell<AddedLines<'a>>,
 }
 
 struct AddedLines<'a> {
-    /// Whether each line of the new version is added by some hunk.
     added: Vec<bool>,
-    /// The added lines of the new version, by their bytes.
     by_text: HashMap<&'a [u8], Vec<u32>>,
 }
 
@@ -219,8 +165,8 @@ impl<'a> Moves<'a> {
         })
     }
 
-    /// Where the old lines `first..=last` (counted from 0) are in the new version, if
-    /// they occur there exactly once, as consecutive lines that all are added.
+    /// Where the old lines `first..=last` (counted from 0) are in the new version, if they occur
+    /// there exactly once, as consecutive added lines.
     fn once_added(&self, first: u32, last: u32) -> Option<u32> {
         let wanted = |at: u32| self.diff.line(YaarSide::Old, first + at);
         let count = last - first + 1;
@@ -243,7 +189,6 @@ impl<'a> Moves<'a> {
     }
 }
 
-/// How many letters and digits the old lines `first..=last` hold.
 fn letters_and_digits(diff: &FileDiff, first: u32, last: u32) -> usize {
     (first..=last)
         .map(|line| {
@@ -255,12 +200,8 @@ fn letters_and_digits(diff: &FileDiff, first: u32, last: u32) -> usize {
         .sum()
 }
 
-/// Where the lines `first..=last` of the old version, numbered from 1 as a [`Place`] has
-/// them, sit in the new one, numbered the same way, and the notice they earn.
-///
-/// `yaar-diff` counts lines from 0 and a hunk's range ends after its last line; the
-/// arithmetic below is in its numbers, and the line numbers of a [`Place`] are turned
-/// into them on the way in and back on the way out.
+/// `first..=last` are numbered from 1 as a [`Place`]; the arithmetic is in `yaar-diff`'s numbers:
+/// lines from 0, a hunk's range ending after its last line.
 fn place(diff: &FileDiff, moves: &Moves<'_>, first: u32, last: u32) -> (u32, u32, Option<Notice>) {
     let old_count = diff.line_count(YaarSide::Old);
     let new_count = diff.line_count(YaarSide::New);
@@ -269,8 +210,6 @@ fn place(diff: &FileDiff, moves: &Moves<'_>, first: u32, last: u32) -> (u32, u32
     let e = last.saturating_sub(1).clamp(s, old_count.saturating_sub(1));
     let hunks = diff.hunks();
 
-    // Where a line that no hunk removed goes: by how many lines the hunks before it, and
-    // the lines they put just above it, moved it.
     let shifted = |line: u32| -> i64 {
         let moved: i64 = hunks
             .iter()
@@ -287,7 +226,8 @@ fn place(diff: &FileDiff, moves: &Moves<'_>, first: u32, last: u32) -> (u32, u32
 
     let touched = hunks.iter().any(|h| {
         if h.old.is_empty() {
-            // Lines put above the first line or below the last are not inside.
+            // An insertion is inside the range only between two of its lines; one just above or
+            // below is not.
             s < h.old.start && h.old.start <= e
         } else {
             h.old.start <= e && h.old.end > s
@@ -307,7 +247,6 @@ fn place(diff: &FileDiff, moves: &Moves<'_>, first: u32, last: u32) -> (u32, u32
         return (start + 1, start + e - s + 1, None);
     }
 
-    // Every line of the range was removed and nothing put in its place.
     let deleted = hunks
         .iter()
         .any(|h| h.new.is_empty() && h.old.start <= s && e < h.old.end);
@@ -322,7 +261,6 @@ fn place(diff: &FileDiff, moves: &Moves<'_>, first: u32, last: u32) -> (u32, u32
     };
     let hi = match removing(e) {
         Some(h) if !h.new.is_empty() => i64::from(h.new.end) - 1,
-        // The last line before the lines that were taken out.
         Some(h) => i64::from(h.new.start) - 1,
         None => shifted(e),
     };
@@ -334,8 +272,8 @@ fn place(diff: &FileDiff, moves: &Moves<'_>, first: u32, last: u32) -> (u32, u32
     )
 }
 
-/// The line number, counted from 1, of line `line` counted from 0, kept inside a version
-/// of `count` lines (or on line 1 of one that has none).
+/// The line number, counted from 1, of line `line` counted from 0, kept inside a version of `count`
+/// lines (or on line 1 of one that has none).
 fn to_line(line: i64, count: u32) -> u32 {
     let last = i64::from(count.saturating_sub(1));
     (line.clamp(0, last) + 1) as u32
@@ -354,7 +292,6 @@ mod tests {
             .collect()
     }
 
-    // `line 1` to `line n`.
     fn numbered(n: u32) -> Vec<String> {
         (1..=n).map(|i| format!("line {i}")).collect()
     }
@@ -383,7 +320,6 @@ mod tests {
         FileStep::Changed { before, after }
     }
 
-    // Where the thread sits, and its notice, after one step on the new side.
     fn carried(placed: &Placed, before: &[u8], after: &[u8]) -> (u32, u32, Option<Notice>) {
         let got = carry(placed, Side::New, changed(before, after));
         assert_eq!(got.at.path, placed.at.path);
@@ -412,7 +348,6 @@ mod tests {
         let mut new = numbered(20);
         new.remove(2);
         new.insert(14, LONG.to_string());
-        // `line 15` is now line 14 and the moved line is line 15.
         assert_eq!(new[13], "line 15");
         assert_eq!(new[14], LONG);
 
@@ -445,8 +380,7 @@ mod tests {
             carried(&new_side(3, 3), &text(&old), &text(&new))
         };
 
-        // The x counts: 19 letters in all are too few, 20 are enough. Spaces and
-        // punctuation do not count.
+        // The x counts: 19 letters are too few, 20 enough. Spaces and punctuation do not count.
         assert_eq!(moves("x = (aaaaaaaaaaaaaaaaaa) ;").2, Some(Notice::Deleted));
         assert_eq!(moves("x = (aaaaaaaaaaaaaaaaaaa) ;"), (15, 15, None));
     }
@@ -543,7 +477,6 @@ mod tests {
         let mut lines = numbered(8);
         lines.drain(3..5);
         let new = text(&lines);
-        // Lines 4 and 5 are gone: line 4 is now `line 6`.
         assert_eq!(lines[3], "line 6");
 
         assert_eq!(
@@ -570,7 +503,6 @@ mod tests {
         lines.drain(4..6);
         let new = text(&lines);
 
-        // Lines 4 to 6: line 4 stays, lines 5 and 6 are gone.
         assert_eq!(
             carried(&new_side(4, 6), &old, &new),
             (4, 4, Some(Notice::Changed))
@@ -874,7 +806,6 @@ mod tests {
             .map(|t| carry(t, Side::New, changed(&old, &new)))
             .collect();
         assert_eq!(together, alone);
-        // And the cases above were not all the same answer.
         assert!(together.iter().any(|p| p.notice.is_some()));
         assert!(together.iter().any(|p| p.notice.is_none()));
     }

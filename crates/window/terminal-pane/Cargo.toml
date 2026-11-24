@@ -13,10 +13,7 @@ gpui-kit.workspace = true
 alacritty_terminal.workspace = true
 
 [dev-dependencies]
-# GPUI's test platform, for tests only: the programs users get are built without it.
 gpui-kit = { workspace = true, features = ["test-support"] }
-# A real pseudo-terminal whose two ends a test holds, to read the bytes a program on it
-# receives.
 libc.workspace = true
 
 [lints]

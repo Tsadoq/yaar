@@ -1,9 +1,4 @@
-//! Component tests: what the Keeper answers and tells, through the surface a Window
-//! uses, with real repositories the tests make and a real database beneath.
-//!
-//! The Keeper runs git as its user does, with the environment of its process. Each test
-//! therefore cleans that environment as its first statement, and these tests are run by
-//! `cargo nextest`, which gives each test a process of its own.
+//! Each test cleans the process environment first, so each needs a process of its own (nextest).
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -21,19 +16,13 @@ use yaar_link::{
     WorkspaceReviews, handshake, read_message, write_message,
 };
 
-/// What the one file of a new repository holds.
 const FIVE_LINES: &str = "one\ntwo\nthree\nfour\nfive\n";
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and cleans the environment of this process for git: no
-    /// configuration of the user or of the system, a fixed author and date, an empty
-    /// home. It has to be the first statement of a test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -55,17 +44,14 @@ impl Scratch {
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's lists of files go, and a program of a
-            // terminal's too: a folder that goes with the test.
+            // Where the Keeper's copies of git's file lists and a terminal's programs go.
             std::env::set_var("TMPDIR", root.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -85,7 +71,6 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -99,14 +84,10 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen, and waiting until it
-    /// serves this Window: a fact told before that is told to a Window that is not there
-    /// yet, and the first reply is the proof that it is.
+    /// Waits until the Keeper serves this Window, which the first reply proves: a fact told
+    /// before then never reaches this Window.
     fn window(&self) -> Window {
         let mut window = self.window_speaking(PROTOCOL_VERSION);
-        // The Keeper tells a fact to the Windows it serves: its first reply comes after the
-        // Window is one of them. `ListClis` tells no fact and keeps no state. A Keeper that
-        // finds no git refuses it, which proves the same.
         let _ = window.ask(Request::ListClis);
         window
     }
@@ -133,8 +114,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main`. Returns the folder
-    /// and the commit.
     fn repository(&self, name: &str) -> (PathBuf, String) {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -176,14 +155,12 @@ fn commit_all(folder: &Path, message: &str) -> String {
     git(folder, &["rev-parse", "HEAD"])
 }
 
-/// One end of the Link, as a Window holds it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
 }
 
 impl Window {
-    /// Sends a request and returns its id, without waiting for anything.
     fn send(&mut self, request: Request) -> RequestId {
         let id = RequestId(self.next_id);
         self.next_id += 1;
@@ -191,12 +168,10 @@ impl Window {
         id
     }
 
-    /// The next frame the Keeper sent, whatever it is. Fails the test at the deadline.
     fn next(&mut self) -> Message {
         read_message(&mut self.stream).expect("a frame from the Keeper")
     }
 
-    /// Sends a request and expects its reply as the very next frame.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = self.send(request);
         match self.next() {
@@ -205,7 +180,6 @@ impl Window {
         }
     }
 
-    /// Expects a fact as the very next frame.
     fn fact(&mut self) -> Fact {
         match self.next() {
             Message::Fact(fact) => fact,
@@ -237,9 +211,8 @@ fn added(path: &str) -> ChangedFile {
 
 #[test]
 fn the_scratch_folder_drops_the_configuration_a_shell_hands_git_in_its_environment() {
-    // SAFETY: changing the environment is sound only while no other thread reads it.
-    // This is the first statement of a test, and these tests are run by `cargo
-    // nextest`, which gives each test a process of its own.
+    // SAFETY: the first statement of the test; nextest runs each test in a process of its own, so
+    // no other thread exists.
     unsafe {
         std::env::set_var("GIT_CONFIG_COUNT", "1");
         std::env::set_var("GIT_CONFIG_KEY_0", "alias.status");
@@ -275,7 +248,6 @@ fn the_window_that_asked_is_answered_first_and_then_every_window_is_told_what_ch
     let mut asking = scratch.window();
     let mut other = scratch.window();
 
-    // Opening a folder: the reply, then the list, to both Windows.
     let id = asking.send(Request::OpenFolder { path: repo.clone() });
     let Message::Reply {
         to,
@@ -300,9 +272,8 @@ fn the_window_that_asked_is_answered_first_and_then_every_window_is_told_what_ch
     assert_eq!(asking.fact(), Fact::Workspaces(list.clone()));
     assert_eq!(other.fact(), Fact::Workspaces(list));
 
-    // A worktree made with git, outside the app, is in no fact: no Window has heard of
-    // it. Opening it tells the list that holds it, though the Keeper, which reads the
-    // list from git, finds the same list before and after.
+    // A worktree made with git outside the app is in no fact. Opening it tells the list that holds
+    // it.
     git(
         &repo,
         &["worktree", "add", "--quiet", "-b", "second", "../linked"],
@@ -321,7 +292,6 @@ fn the_window_that_asked_is_answered_first_and_then_every_window_is_told_what_ch
             head: Some(Head::Branch("second".to_owned())),
         }
     );
-    // The list is told for a folder that was open already, too.
     assert_eq!(asking.open(&repo), workspace);
     assert_eq!(asking.fact(), Fact::Workspaces(told.clone()));
     assert_eq!(other.fact(), Fact::Workspaces(told.clone()));
@@ -330,7 +300,6 @@ fn the_window_that_asked_is_answered_first_and_then_every_window_is_told_what_ch
         Ok(Reply::Workspaces(told))
     );
 
-    // Setting the base, from the other Window: its reply, then the fact to both.
     assert_eq!(
         other.ask(Request::SetBase {
             workspace: workspace.clone(),
@@ -344,7 +313,6 @@ fn the_window_that_asked_is_answered_first_and_then_every_window_is_told_what_ch
     assert_eq!(other.fact(), changed);
     assert_eq!(asking.fact(), changed);
 
-    // And the changes are counted from where the base was put.
     assert_eq!(
         asking.ask(Request::GetChanges {
             workspace: workspace.clone(),
@@ -377,7 +345,6 @@ fn the_changes_of_a_branch_and_the_versions_of_its_files_come_in_the_words_of_th
     std::fs::write(repo.join("a.txt"), &six_lines).expect("change a file");
     git(&repo, &["mv", "a.txt", "moved.txt"]);
     let second = commit_all(&repo, "second");
-    // Not committed: something that is not text, and something too large to send.
     std::fs::write(repo.join("image.bin"), [1, 2, 0, 3]).expect("write a file");
     let large = vec![b'a'; MAX_CONTENT as usize + 1];
     std::fs::write(repo.join("large.txt"), &large).expect("write a file");
@@ -450,7 +417,6 @@ fn the_changes_of_a_branch_and_the_versions_of_its_files_come_in_the_words_of_th
         )
     );
 
-    // What is refused keeps its kind, so that a Window can say what to mend.
     assert_eq!(
         read(Some(&first), "a.txt", "../repo/a.txt"),
         Err(Refusal::OutsideWorkspace {
@@ -488,7 +454,6 @@ fn the_changes_of_a_branch_and_the_versions_of_its_files_come_in_the_words_of_th
             path: scratch.0.join("home")
         })
     );
-    // A path counted from wherever the Keeper happens to run names no folder.
     assert_eq!(
         window.ask(Request::OpenFolder {
             path: PathBuf::from("repo"),
@@ -497,7 +462,6 @@ fn the_changes_of_a_branch_and_the_versions_of_its_files_come_in_the_words_of_th
             path: PathBuf::from("repo")
         })
     );
-    // None of the refusals told anybody anything: the stop is taken at once.
     window.stop(keeper);
 }
 
@@ -510,7 +474,6 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
     unsafe { std::env::set_var("PATH", &empty) };
     let keeper = scratch.keeper();
 
-    // `window` has exchanged hellos, or it would not have come back.
     let mut window = scratch.window();
     let workspace = WorkspaceId::new("0".repeat(32));
     for kind in RequestKind::ALL {
@@ -576,8 +539,8 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
                 workspace: workspace.clone(),
                 message: "Commit".to_owned(),
             },
-            // A piece of an agent CLI asks on a connection of its own, which is let go
-            // once it is answered.
+            // A piece of an agent CLI asks on a connection of its own, which is let go once it is
+            // answered.
             RequestKind::Report => {
                 let mut piece = scratch.window();
                 assert_eq!(
@@ -703,8 +666,8 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
 fn an_answer_too_large_for_one_frame_is_refused_with_the_reason_and_the_window_is_served_on() {
     let scratch = Scratch::new();
     let (repo, _) = scratch.repository("repo");
-    // New files whose paths alone are more than a frame holds: 18,000 paths of 950
-    // bytes. The folders are as deep as the longest path of macOS allows.
+    // New files whose paths alone exceed a frame: 18,000 paths of 950 bytes, in folders as deep as
+    // macOS allows.
     let deep = repo
         .join("d".repeat(249))
         .join("e".repeat(249))
@@ -726,7 +689,6 @@ fn an_answer_too_large_for_one_frame_is_refused_with_the_reason_and_the_window_i
     };
     assert!(reason.contains("does not fit in one frame"), "{reason}");
 
-    // The connection is whole: the next request is answered as ever.
     assert!(matches!(
         window.ask(Request::ListWorkspaces),
         Ok(Reply::Workspaces(list)) if list.len() == 1
@@ -738,7 +700,7 @@ fn an_answer_too_large_for_one_frame_is_refused_with_the_reason_and_the_window_i
 fn a_window_that_stops_reading_is_let_go_and_the_others_are_told_all_the_same() {
     let scratch = Scratch::new();
     let (repo, _) = scratch.repository("repo");
-    // More than the buffers of a socket hold on any system, and still text that travels.
+    // More than a socket's buffers hold on any system, and still text that travels.
     std::fs::write(repo.join("long.txt"), vec![b'a'; 3 << 20]).expect("write a file");
     let keeper = scratch.keeper();
     let mut stuck = scratch.window();
@@ -746,7 +708,6 @@ fn a_window_that_stops_reading_is_let_go_and_the_others_are_told_all_the_same() 
     stuck.fact();
     let mut other = scratch.window();
 
-    // One Window asks for more than fits in the buffers and reads none of it.
     stuck.send(Request::ReadFile {
         workspace: workspace.clone(),
         since: None,
@@ -754,8 +715,6 @@ fn a_window_that_stops_reading_is_let_go_and_the_others_are_told_all_the_same() 
         path: PathBuf::from("long.txt"),
     });
 
-    // The other is answered meanwhile, and is told the fact that is owed to both: the
-    // Keeper does not wait for the first for ever.
     assert_eq!(
         other.ask(Request::SetBase {
             workspace: workspace.clone(),
@@ -765,17 +724,16 @@ fn a_window_that_stops_reading_is_let_go_and_the_others_are_told_all_the_same() 
     );
     assert_eq!(other.fact(), Fact::ChangesChanged { workspace });
 
-    // The first is let go. Reading from it here would be taking what it was sent, so
-    // the test writes to it until the Keeper has closed the connection: a hello, which
-    // the Keeper passes over when it reads one.
+    // The test writes a hello, which the Keeper passes over, until the Keeper closes the
+    // connection.
     let hello = Message::Hello(Hello::for_this_process("test-window"));
     let deadline = Instant::now() + DEADLINE;
     while write_message(&mut stuck.stream, &hello).is_ok() {
         assert!(Instant::now() < deadline, "the Window is still attached");
         std::thread::sleep(Duration::from_millis(10));
     }
-    // What was written to it before ends inside the reply it did not take: the fact
-    // may have reached it whole, the reply never.
+    // What the Keeper sent before ends inside the reply this Window never took: a fact may
+    // have arrived whole, the reply never.
     loop {
         match read_message(&mut stuck.stream) {
             Ok(Message::Fact(_)) => {}
@@ -784,7 +742,6 @@ fn a_window_that_stops_reading_is_let_go_and_the_others_are_told_all_the_same() 
         }
     }
 
-    // The Keeper serves on.
     assert!(matches!(
         other.ask(Request::ListWorkspaces),
         Ok(Reply::Workspaces(list)) if list.len() == 1
@@ -800,12 +757,9 @@ fn a_window_of_another_version_is_told_no_fact_and_is_let_go_when_it_asks_for_mo
     let mut newer = scratch.window_speaking(PROTOCOL_VERSION + 1);
     let mut window = scratch.window();
 
-    // A fact goes out to every Window that speaks this version.
     window.open(&repo);
     assert!(matches!(window.fact(), Fact::Workspaces(_)));
 
-    // The other Window asks, which it may not. Its connection ends, and the end is the
-    // first thing it reads: no fact was sent to it before.
     newer.send(Request::ListWorkspaces);
     assert!(matches!(
         read_message(&mut newer.stream),
@@ -814,17 +768,13 @@ fn a_window_of_another_version_is_told_no_fact_and_is_let_go_when_it_asks_for_mo
     window.stop(keeper);
 }
 
-/// The git processes this test process has started and not yet collected.
-///
-/// Only those that run git by name are counted. While a process is started, and for a
-/// moment after one has ended, macOS lists a child under the name of its parent that is
-/// on its way out; such a one is no git process that runs.
+/// The git processes this test process has started and not yet collected. Only those that run git
+/// by name count: macOS lists a child on its way out under the name of its parent.
 fn git_children() -> Vec<u32> {
     let me = std::process::id();
     let is_git = |name: &str| name == "git" || name.ends_with("/git");
     if cfg!(target_os = "linux") {
-        // The name stands between brackets, and the parent is the second field after
-        // the last `)`.
+        // The name stands between brackets, and the parent is the second field after the last `)`.
         std::fs::read_dir("/proc")
             .expect("read /proc")
             .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
@@ -858,8 +808,6 @@ fn git_children() -> Vec<u32> {
     }
 }
 
-/// Whether the system still knows a process by this id: one that runs, or one that has
-/// ended and that nobody has collected.
 fn is_known(pid: u32) -> bool {
     // SAFETY: signal 0 sends nothing; it only asks whether the process is there.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
@@ -889,14 +837,10 @@ fn the_git_process_kept_for_file_contents_has_ended_when_the_keeper_returns() {
     };
     assert!(is_known(kept));
 
-    // When the Keeper has returned, that process has ended and was collected: the
-    // system knows it no more.
     window.stop(keeper);
     assert!(!is_known(kept), "the git process outlived the Keeper");
 }
 
-/// The ids of a thread and of its comment that the reviews tests draw: 32 digits each,
-/// and no two alike, since the Keeper takes an id once whatever it names.
 fn ids(n: u8) -> (ThreadId, CommentId) {
     (
         ThreadId::new(format!("{n:02x}").repeat(16)),
@@ -904,7 +848,6 @@ fn ids(n: u8) -> (ThreadId, CommentId) {
     )
 }
 
-/// Where a new thread sits: line 1 of `a.txt` in the files on disk.
 fn on_the_first_line() -> DraftOn {
     DraftOn::NewThread {
         anchor: Anchor {
@@ -918,7 +861,6 @@ fn on_the_first_line() -> DraftOn {
 }
 
 impl Window {
-    /// The reviews of a workspace.
     fn reviews(&mut self, workspace: &WorkspaceId) -> WorkspaceReviews {
         match self.ask(Request::GetReviews {
             workspace: workspace.clone(),
@@ -956,8 +898,6 @@ fn a_draft_is_made_edited_copied_and_deleted_and_every_window_is_told_of_what_ch
     assert!(matches!(typing.fact(), Fact::Workspaces(_)));
     let mut watching = scratch.window();
 
-    // A workspace has one review, of no agent, from the first time it is asked for, and it
-    // is the same one the next time.
     let reviews = typing.reviews(&workspace);
     assert_eq!(reviews.workspace, workspace);
     assert_eq!(reviews.viewed, Vec::<PathBuf>::new());
@@ -968,8 +908,8 @@ fn a_draft_is_made_edited_copied_and_deleted_and_every_window_is_told_of_what_ch
     let review = review.id.clone();
     assert_eq!(typing.reviews(&workspace).reviews[0].id, review);
 
-    // The first save makes the thread and is told to both Windows; one that changes the
-    // text is told to nobody, so the next reply is the next frame.
+    // The first save makes the thread and is told to both Windows; a save that only changes
+    // the text is told to nobody, so the next reply is the next frame.
     let (thread, comment) = ids(1);
     let changed = Fact::ReviewsChanged {
         workspace: workspace.clone(),
@@ -991,7 +931,6 @@ fn a_draft_is_made_edited_copied_and_deleted_and_every_window_is_told_of_what_ch
     assert_eq!(kept.comments[0].text, "ok");
     assert_eq!(kept.comments[0].round, None);
 
-    // A reply in a thread with nothing sent, and a save in a thread the review lacks.
     let (_, reply) = ids(2);
     assert!(matches!(
         typing.save(&review, &thread, &reply, DraftOn::Thread, "no"),
@@ -1010,7 +949,6 @@ fn a_draft_is_made_edited_copied_and_deleted_and_every_window_is_told_of_what_ch
         })
     );
 
-    // A draft is deleted, and the thread goes with it; another is copied.
     let (second_thread, second) = ids(4);
     assert_eq!(
         typing.save(&review, &second_thread, &second, on_the_first_line(), "x"),
@@ -1048,7 +986,6 @@ fn a_draft_is_made_edited_copied_and_deleted_and_every_window_is_told_of_what_ch
     assert_eq!(typing.fact(), changed);
     assert_eq!(watching.fact(), changed);
 
-    // What was sent is not a draft any more, and a second copy has nothing to send.
     assert_eq!(
         typing.save(&review, &thread, &comment, DraftOn::Thread, "ok!"),
         Err(Refusal::NotADraft {
@@ -1074,7 +1011,6 @@ fn a_draft_is_made_edited_copied_and_deleted_and_every_window_is_told_of_what_ch
     assert_eq!(sent.reviews[0].rounds.len(), 1);
     assert_eq!(sent.reviews[0].threads[0].comments[0].round, Some(1));
 
-    // What the Keeper does not hold.
     for request in [
         Request::CopyReview {
             review: nobody.clone(),
@@ -1119,7 +1055,6 @@ fn a_mark_of_reviewed_a_viewed_file_and_a_commit_are_answered_and_told() {
         workspace: workspace.clone(),
     };
 
-    // Marked reviewed: the review holds the state it was marked at.
     assert_eq!(window.reviews(&workspace).reviews[0].reviewed, None);
     assert_eq!(
         window.ask(Request::MarkReviewed {
@@ -1130,8 +1065,6 @@ fn a_mark_of_reviewed_a_viewed_file_and_a_commit_are_answered_and_told() {
     assert_eq!(window.fact(), changed);
     assert!(window.reviews(&workspace).reviews[0].reviewed.is_some());
 
-    // A file is marked viewed for its content, and loses the mark when it changes; a path
-    // that leads out of the worktree is refused.
     let view = |window: &mut Window, path: &str, viewed| {
         window.ask(Request::SetViewed {
             workspace: workspace.clone(),
@@ -1159,7 +1092,6 @@ fn a_mark_of_reviewed_a_viewed_file_and_a_commit_are_answered_and_told() {
     assert_eq!(window.fact(), changed);
     assert_eq!(window.reviews(&workspace).viewed, Vec::<PathBuf>::new());
 
-    // The commit: the changes of the workspace changed, and the review is as it was.
     let reviewed = window.reviews(&workspace).reviews[0].reviewed.clone();
     let Ok(Reply::Committed { commit }) = window.ask(Request::Commit {
         workspace: workspace.clone(),
@@ -1185,7 +1117,6 @@ fn a_mark_of_reviewed_a_viewed_file_and_a_commit_are_answered_and_told() {
         })
     );
 
-    // A hook that refuses the commit: git's words come back, nothing is committed.
     std::fs::write(repo.join("a.txt"), "again\n").expect("change the file");
     let hook = repo.join(".git/hooks/pre-commit");
     std::fs::write(&hook, "#!/bin/sh\necho no-commits-today >&2\nexit 1\n").expect("hook");
@@ -1233,10 +1164,8 @@ fn a_worktree_that_is_gone_keeps_its_reviews_and_the_text_of_its_drafts_and_refu
     );
     assert!(matches!(window.fact(), Fact::ReviewsChanged { .. }));
 
-    // The worktree is removed with git.
     git(&repo, &["worktree", "remove", "--force", "../linked"]);
 
-    // The text of a draft needs no worktree, and the reviews are read as they were.
     assert_eq!(
         window.save(&review, &thread, &comment, DraftOn::Thread, "kept"),
         Ok(Reply::Done)
@@ -1245,7 +1174,6 @@ fn a_worktree_that_is_gone_keeps_its_reviews_and_the_text_of_its_drafts_and_refu
     assert_eq!(held.reviews[0].threads[0].comments[0].text, "kept");
     assert_eq!(held.viewed, Vec::<PathBuf>::new());
 
-    // What needs the files is refused with the words of the engine.
     let gone = Refusal::Failed {
         reason: "the worktree is gone".to_owned(),
     };

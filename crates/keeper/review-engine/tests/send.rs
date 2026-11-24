@@ -1,6 +1,3 @@
-//! Copying a review as text, through the engine with the real Store and the real
-//! Recorder beneath, on a repository the test makes.
-
 mod support;
 
 use std::path::PathBuf;
@@ -10,7 +7,6 @@ use support::{
 };
 use yaar_review_engine::{CommentId, EngineError, Review, ReviewError, Scope, SentBy, ThreadId};
 
-// REV-05
 #[test]
 fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_the_state() {
     let scratch = Scratch::new();
@@ -33,8 +29,7 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
         .id()
         .clone();
 
-    // Drafts on two threads, and on a third that is resolved through the Store's call:
-    // the engine has no resolve call yet.
+    // The third draft is on a thread resolved below, so it must not be copied.
     for save in [
         new_thread(1, "a.txt", 1, "one changed", "first draft to copy"),
         new_thread(2, "b.txt", 1, "two", "second draft to copy"),
@@ -48,7 +43,6 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
         .set_resolved(&ThreadId::new(id(3)), true)
         .expect("resolve the third thread");
 
-    // The worktree moves on after the drafts were written, and before the copy.
     write(&repo, "a.txt", "one changed\nand a new line\n");
     let states = reviews.states_of(&w).expect("the state store");
     let before_states = states.states().expect("list the states");
@@ -56,7 +50,6 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
 
     let copied = reviews.copy_as_text(&worktree, &review).expect("copy");
 
-    // The text holds the two drafts and not the third.
     assert!(
         copied.text.contains("first draft to copy"),
         "{}",
@@ -66,9 +59,6 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
     assert!(!copied.text.contains("draft on a resolved thread"));
     assert_eq!(copied.round, 1);
 
-    // Read back through a new engine over a new Store of the same file, as after a
-    // restart: both copied comments are sent in round 1, the resolved thread's draft
-    // is still a draft.
     drop(reviews);
     drop(store);
     let store_again = self::store(&scratch);
@@ -86,16 +76,12 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
         (Some(1), Some(1), None)
     );
 
-    // One round, the first, sent by a copy.
     assert_eq!(after.rounds().len(), 1);
     let round = &after.rounds()[0];
-    // A copy records its state before the round: it has one.
     let round_state = round.state.clone().expect("a copied round has its state");
     assert_eq!(round.number, 1);
     assert_eq!(round.sent_by, SentBy::Copied);
 
-    // Its state is a new one, the newest of the store, and holds the worktree as it was
-    // at the copy, the new line included.
     let states = reviews_again.states_of(&w).expect("the state store");
     let listed = states.states().expect("list the states");
     assert!(!before_states.iter().any(|s| s.id.as_str() == round_state));
@@ -122,8 +108,6 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
             .contains("and a new line")
     );
 
-    // As a submit does: the round, the comments and the state are those the one path
-    // every send takes gives.
     let mut expected = Review::from_record(before.record().clone());
     let sent = expected
         .send(Scope::Everything, &round_state, SentBy::Copied)
@@ -134,8 +118,8 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
     );
     assert_eq!(expected.record(), after.record());
 
-    // With nothing new to send a second copy is refused, with no second round and no new
-    // state, though the worktree changed again, which a recording would show.
+    // A second copy with nothing new to send is refused, with no new round and no new state,
+    // though the worktree changed again.
     write(&repo, "b.txt", "two, again\n");
     let refused = reviews_again.copy_as_text(&worktree, &review);
     assert!(

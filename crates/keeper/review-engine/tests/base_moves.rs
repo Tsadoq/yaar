@@ -1,6 +1,5 @@
 //! Threads on the old side when the commit a workspace's changes are counted from moves,
-//! through the engine with the real Store and the real Recorder beneath, on a repository
-//! the test makes.
+//! through the engine with the real Store and Recorder on a repository the test makes.
 
 mod support;
 
@@ -16,13 +15,10 @@ use yaar_review_engine::{
 };
 use yaar_store::Store;
 
-/// `line 1` to `line n`, one to a line.
 fn numbered(n: u32) -> String {
     (1..=n).map(|i| format!("line {i}\n")).collect()
 }
 
-/// What the tests of this file share: a repository with `main` and a branch `b`, the
-/// worktree on `b`, the review of the workspace and the engine.
 struct World {
     scratch: Scratch,
     store: Store,
@@ -30,7 +26,6 @@ struct World {
     repo: PathBuf,
     worktree: Worktree,
     review: ReviewId,
-    /// `main` before it moves.
     m1: CommitId,
 }
 
@@ -63,8 +58,6 @@ impl World {
         }
     }
 
-    /// Puts `main` on a new commit whose files are `files`, with `b` checked out again,
-    /// and gives the commit.
     fn move_main(&self, files: &[(&str, Option<&str>)]) -> CommitId {
         git(&self.repo, &["checkout", "--quiet", "main"]);
         for (path, content) in files {
@@ -78,8 +71,6 @@ impl World {
         moved
     }
 
-    /// Writes thread `n` on `line` of `path` on the old side of `commit`, as a reviewer
-    /// does on a removed line of a change counted from it.
     fn old_thread(&self, n: u128, commit: &CommitId, path: &str, line: u32, text: &str) {
         let save = DraftSave {
             thread: ThreadId::new(id(n)),
@@ -130,7 +121,6 @@ fn place(tree: &CommitId, path: &str, first: u32, last: u32) -> ThreadPlace {
     }
 }
 
-/// `line 1` to `line 6` with `inserted` put before line `at` (counted from 1).
 fn with_before(at: usize, inserted: &[&str]) -> String {
     let mut lines: Vec<String> = (1..=6).map(|i| format!("line {i}")).collect();
     for (n, text) in inserted.iter().enumerate() {
@@ -139,13 +129,10 @@ fn with_before(at: usize, inserted: &[&str]) -> String {
     lines.iter().map(|l| format!("{l}\n")).collect()
 }
 
-// THREAD-09
 #[test]
 fn a_thread_on_a_removed_line_is_carried_to_the_new_base_and_the_others_stay() {
     let world = World::new();
-    // The branch removes line 3, and the reviewer comments on it, on the old side.
     world.old_thread(1, &world.m1, "f", 3, "line 3");
-    // A thread on the new side: it follows the states, not the base.
     write(
         &world.repo,
         "f",
@@ -160,7 +147,6 @@ fn a_thread_on_a_removed_line_is_carried_to_the_new_base_and_the_others_stay() {
         )
         .expect("save the draft");
     let new_side = world.thread(2);
-    // A resolved thread on the old side, and one on the old side placed on a state.
     world.old_thread(3, &world.m1, "f", 3, "line 3");
     world
         .store
@@ -199,8 +185,8 @@ fn a_thread_on_a_removed_line_is_carried_to_the_new_base_and_the_others_stay() {
         .expect("keep");
     let on_a_state = world.thread(4);
     git(&world.repo, &["checkout", "--quiet", "--", "f"]);
-    // A thread on the new side that sits on the very commit the base moves from: only its
-    // side keeps it out, since no recorded state tells it apart from a thread of the base.
+    // A thread on the new side of the very commit the base moves from: only its side keeps it
+    // out, since no recorded state tells it apart from a thread of the base.
     world
         .reviews
         .save_draft(
@@ -224,10 +210,8 @@ fn a_thread_on_a_removed_line_is_carried_to_the_new_base_and_the_others_stay() {
     let new_side_on_the_base = world.thread(5);
     assert_eq!(new_side_on_the_base.anchor.tree, world.m1.as_str());
 
-    // A thread on the old side above the lines `main` gains: its lines stay.
     world.old_thread(6, &world.m1, "f", 1, "line 1");
 
-    // `main` gains two lines above line 3.
     let m2 = world.move_main(&[("f", Some(&with_before(3, &["new 1", "new 2"])))]);
     let moved = world.base_moved(&world.m1, &m2).expect("carry");
 
@@ -247,10 +231,8 @@ fn a_thread_on_a_removed_line_is_carried_to_the_new_base_and_the_others_stay() {
 #[test]
 fn a_thread_whose_lines_did_not_move_is_carried_too_so_that_the_next_move_finds_it() {
     let world = World::new();
-    // Line 1 is above the two lines `main` gains, so its place does not change.
     world.old_thread(1, &world.m1, "f", 1, "line 1");
     let m2 = world.move_main(&[("f", Some(&with_before(3, &["new 1", "new 2"])))]);
-    // A move after it puts a line above line 1.
     let m3 = world.move_main(&[(
         "f",
         Some(&format!("top\n{}", with_before(3, &["new 1", "new 2"]))),
@@ -280,9 +262,7 @@ fn a_thread_carried_once_is_carried_again_from_where_it_sits_and_not_twice_from_
         vec![ThreadId::new(id(1))]
     );
     assert_eq!(world.thread(1).now, Some(place(&m2, "f", 4, 4)));
-    // The same move again finds nothing placed on `m1`.
     assert_eq!(world.base_moved(&world.m1, &m2).expect("carry"), vec![]);
-    // The next move starts from where the thread sits now.
     assert_eq!(
         world.base_moved(&m2, &m3).expect("carry"),
         vec![ThreadId::new(id(1))]
@@ -378,9 +358,8 @@ fn a_thread_on_a_file_outside_the_worktree_is_not_touched() {
         .reviews
         .save_draft(Some(&world.worktree), &world.review, &save)
         .expect("save the draft");
-    // A thread of the old side, placed on the base itself, whose path is absolute: only
-    // its path keeps it out, which a draft cannot give it (it is written on the new side,
-    // with no tree).
+    // A thread of the old side on the base itself, with an absolute path: only its path keeps it
+    // out. A draft cannot make this shape (a draft is written on the new side, with no tree).
     let outside = world.scratch.join("outside.txt");
     world
         .store

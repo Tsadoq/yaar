@@ -1,15 +1,4 @@
-//! How the live diff of Flow is drawn: one list of rows of one height in the element that
-//! holds the pane's key context, as Changes is, with the line `flow-activity` above it
-//! while the step Flow is at has no row in it (a command, or an edit or a write whose file
-//! the list does not hold yet), and `flow-empty` while no turn is known.
-//!
-//! Built by the review pane's second package of slice 5, with `live.rs`. Row `i` is drawn
-//! under `flow-row-<i>`, and the text of a line under `flow-text-<i>-old:<text>` or
-//! `flow-text-<i>-new:<text>`, as Changes draws them under `review-`; a click on a line puts
-//! the reviewer there. A file the turn read and did not change (`crate::PaneRow::Read`) is
-//! drawn as its path with the mark `flow-read-<i>` that says it was read, and no hunk. A
-//! thread of the review is drawn under `flow-thread-<thread id>` and each of its comments
-//! under `flow-comment-<comment id>:draft` or `flow-comment-<comment id>:round-<n>`.
+//! How the live diff of Flow is drawn: one list of rows of one height.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -25,17 +14,14 @@ use yaar_link::{Author, CommentId, FileStatus, Step, ThreadId};
 use crate::draw::ROW_HEIGHT;
 use crate::{Layout, PaneRow, ReviewPane, ShownDiff, Unshown};
 
-/// The width of a column of line numbers: six digits.
 const NUMBER_WIDTH: Pixels = px(56.);
 
-/// The width of the column that holds the sign of a line in the unified view.
 const SIGN_WIDTH: Pixels = px(20.);
 
-/// How much of a line is handed to the text system, in bytes: a line is never wrapped, so
-/// the rest of a very long one would be shaped for nothing, in every frame.
+/// The bytes of a line handed to the text system: a line is never wrapped, so the rest of a
+/// very long one would be shaped for nothing in every frame.
 const DRAWN_BYTES: usize = 1024;
 
-/// Tells the pane which rows the list laid out, once for each frame.
 struct InView(Rc<RefCell<Range<usize>>>);
 
 impl UniformListDecoration for InView {
@@ -55,7 +41,6 @@ impl UniformListDecoration for InView {
 }
 
 impl ReviewPane {
-    /// The live diff, as the list Flow shows in its second form.
     pub(crate) fn render_live(
         &mut self,
         window: &mut Window,
@@ -124,7 +109,6 @@ impl ReviewPane {
             .into_any_element()
     }
 
-    /// Builds the row at `index` of the rows of the live diff.
     fn draw_live_row(&self, index: usize, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let row = div()
@@ -166,12 +150,10 @@ impl ReviewPane {
                         .flex_none()
                         .child("read"),
                 ),
-            // The live diff makes no such row.
             PaneRow::Comparison { .. } | PaneRow::Commit { .. } | PaneRow::ThreadsElsewhere => row,
         }
     }
 
-    /// The row of a thread of the review: where it sits.
     fn draw_live_thread(&self, row: Div, thread: &ThreadId, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let Some(thread) = self
@@ -201,7 +183,6 @@ impl ReviewPane {
         )
     }
 
-    /// The row of a comment of a thread: who wrote it and the first line of its text.
     fn draw_live_comment(&self, row: Div, thread: &ThreadId, comment: &CommentId) -> Div {
         let Some(comment) = self
             .review()
@@ -230,7 +211,6 @@ impl ReviewPane {
         )
     }
 
-    /// Fills the row at `index` with a row of the diff of the file at `path`.
     fn draw_live_diff(
         &self,
         row: Div,
@@ -240,11 +220,9 @@ impl ReviewPane {
         cx: &Context<Self>,
     ) -> Div {
         let theme = cx.theme();
-        // A row of a diff is among the rows only while the pane holds the diff.
         let Some(diff) = self.live.diff_of(path) else {
             return row;
         };
-        // The side the reviewer is on, when this is the row of their line.
         let on = self
             .live
             .position()
@@ -267,7 +245,6 @@ impl ReviewPane {
                 .flex()
                 .justify_end()
                 .text_color(theme.muted_foreground)
-                // Lines are counted from 0 and shown from 1.
                 .child(line.map(|line| (line + 1).to_string()).unwrap_or_default())
         };
         let text = |side: Side, line: u32| {
@@ -313,8 +290,8 @@ impl ReviewPane {
                 }
             }
             (Layout::Split, _) => {
-                // An unchanged line is on both sides and the reviewer is on it as a whole;
-                // a changed row holds two lines, each to be on by itself.
+                // An unchanged line is on both sides and the reviewer is on it as a whole; a
+                // changed row holds two lines, each to be on by itself.
                 let unchanged = matches!(shown, Row::Context { .. });
                 let half = |side: Side, tint: Hsla| {
                     let half = div()
@@ -349,7 +326,6 @@ impl ReviewPane {
     }
 }
 
-/// The name of a side in the selectors of the live diff.
 fn side_name(side: Side) -> &'static str {
     match side {
         Side::Old => "old",
@@ -357,8 +333,6 @@ fn side_name(side: Side) -> &'static str {
     }
 }
 
-/// The ranges of bytes to mark in one line: the words that changed, when the line is part
-/// of a change that both removes and adds.
 fn marks(diff: &ShownDiff, side: Side, line: u32) -> Vec<Range<usize>> {
     let lines = |hunk: &Hunk| match side {
         Side::Old => hunk.old.clone(),
@@ -381,13 +355,10 @@ fn marks(diff: &ShownDiff, side: Side, line: u32) -> Vec<Range<usize>> {
     emphasis.of(side, line).to_vec()
 }
 
-/// One line of the diff shown by the row at `index`, as the element that draws it: its
-/// text, with its changed words marked. The selector of the element carries the text as it
-/// is handed to the text system, which a test reads.
 fn live_line_text(diff: &ShownDiff, index: usize, side: Side, line: u32, mark: Hsla) -> Div {
     let text = diff.text(side, line);
-    // The marks count the bytes of the line as it is in the file: where bytes that are no
-    // text were replaced, the shown text has other bytes, and nothing is marked.
+    // Marks count bytes of the line as in the file; where non-text bytes were replaced, nothing is
+    // marked.
     let marked = match text {
         Cow::Borrowed(_) => marks(diff, side, line),
         Cow::Owned(_) => Vec::new(),
@@ -414,7 +385,6 @@ fn live_line_text(diff: &ShownDiff, index: usize, side: Side, line: u32, mark: H
         .child(StyledText::new(drawn).with_highlights(highlights))
 }
 
-/// What happened to a file, beside its path.
 fn status_words(status: &FileStatus) -> String {
     match status {
         FileStatus::Added => "new".to_owned(),
@@ -424,7 +394,6 @@ fn status_words(status: &FileStatus) -> String {
     }
 }
 
-/// What stands in the place of the lines of a file that has none to show.
 fn unshown_words(why: Unshown) -> &'static str {
     match why {
         Unshown::Loading => "Reading the file",

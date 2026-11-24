@@ -1,35 +1,11 @@
-//! `yaar-script`: a scripted Window, as one command, for the jobs of the workflow that drive
-//! the installed app where no key can be pressed (row PKG-12). Test support: no package ships
-//! it.
+//! `yaar-script`: a scripted Window for driving the installed app. Test support, not shipped.
 //!
 //! ```text
 //! yaar-script worktree-with-agent --repository <folder> --branch <new branch> --agent <claude|pi>
-//!             [--socket <path>] [--deadline <seconds>]
-//! yaar-script stop [--socket <path>] [--deadline <seconds>]
+//! yaar-script stop
 //! ```
-//!
-//! Connects to the Keeper that already listens at `--socket` (default: the socket of
-//! `yaar_link::socket_path()`, where the Keeper of the installed app listens) as a Window
-//! does, with the hello of a Window of this build's version. It never starts a Keeper: when
-//! none listens it says so and exits 2. Then, as a user would with Cmd-Shift-N:
-//!
-//! 1. opens `--repository` as a workspace (the request a Window sends for Open Folder), unless
-//!    the Keeper lists it already;
-//! 2. sends `CreateWorktree` for that repository, from the branch its workspace is on, on the
-//!    new branch `--branch`, with the agent `--agent`, and a terminal of 80 by 24;
-//! 3. waits for the reply `WorktreeCreated`, then for the Keeper's fact that a session of
-//!    that agent runs in the new workspace.
-//!
-//! Each wait lasts at most `--deadline` seconds (default 60). On success it prints one line,
-//! `worktree=<absolute folder> workspace=<id> session=<id>`, and exits 0. A refusal prints the
-//! Keeper's sentence and exits 1; a deadline passed prints which wait ran out and what had
-//! arrived, and exits 1. A command line it does not take prints the usage above and exits 2.
-//!
-//! `stop` is the quit that also stops the agents: it connects as above (exit 2 when no Keeper
-//! listens), says hello, sends the Link's stop (`Message::Shutdown`, whose shape no version
-//! changes), and waits until the socket no longer answers (a connect refused or the socket
-//! gone), for at most `--deadline` seconds (default 20). Done, it prints `stopped` and exits
-//! 0; past the deadline it says so and exits 1.
+//! Both take `--socket` and `--deadline <seconds>`. Exits 0, 1 on a refusal or a passed deadline, 2
+//! on a bad command line or no Keeper.
 
 use std::any::Any;
 use std::io::ErrorKind;
@@ -41,28 +17,22 @@ use std::time::{Duration, Instant};
 use yaar_link::{Head, Reply, Repository, Request, TerminalSize, Workspace, WorkspaceAgents};
 use yaar_system_tests::Client;
 
-/// What the command line says, and what the help prints when it does not.
 const USAGE: &str = "usage:
   yaar-script worktree-with-agent --repository <folder> --branch <new branch> --agent <claude|pi>
               [--socket <path>] [--deadline <seconds>]
   yaar-script stop [--socket <path>] [--deadline <seconds>]";
 
-/// How long each wait of `worktree-with-agent` lasts when `--deadline` is not given.
 const WORKTREE_DEADLINE: Duration = Duration::from_secs(60);
 
-/// How long `stop` waits for the socket to go quiet when `--deadline` is not given.
 const STOP_DEADLINE: Duration = Duration::from_secs(20);
 
-/// The size of the terminal the agent is started in, as a Window asks for one.
 const TERMINAL: TerminalSize = TerminalSize {
     columns: 80,
     rows: 24,
 };
 
-/// What a command asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
-    /// `worktree-with-agent`.
     WorktreeWithAgent {
         repository: PathBuf,
         branch: String,
@@ -70,15 +40,12 @@ enum Command {
         socket: Option<PathBuf>,
         deadline: Duration,
     },
-    /// `stop`.
     Stop {
         socket: Option<PathBuf>,
         deadline: Duration,
     },
 }
 
-/// Why a command did not hold, and the status the process ends with: 1 when the Keeper
-/// refused or a wait ran out, 2 when the command line was not taken or no Keeper listens.
 struct Failure {
     status: u8,
     sentence: String,
@@ -100,7 +67,6 @@ impl Failure {
     }
 }
 
-/// Reads the command line, without the program's name.
 fn parse(args: &[String]) -> Result<Command, String> {
     let Some((name, flags)) = args.split_first() else {
         return Err("no command given".to_owned());
@@ -171,10 +137,9 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // The scripted client panics with what it saw when a wait runs out; `waiting` turns that
-    // into a sentence, so the panic's own report would only say it twice.
+    // The panic hook is silenced: the scripted client panics with what it saw when a wait runs out,
+    // and `waiting` turns that into a sentence, so the default report would only say it twice.
     std::panic::set_hook(Box::new(|_| {}));
-    // A panic outside `waiting` is still one sentence and a status of this program's own.
     let done = catch_unwind(AssertUnwindSafe(|| run(command))).unwrap_or_else(|payload| {
         Err(Failure::unmet(format!(
             "the scripted client failed: {}",
@@ -193,7 +158,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// Runs the command the command line asked for.
 fn run(command: Command) -> Result<String, Failure> {
     match command {
         Command::WorktreeWithAgent {
@@ -215,7 +179,6 @@ fn run(command: Command) -> Result<String, Failure> {
     }
 }
 
-/// What a panic of the scripted client said.
 fn said(payload: &(dyn Any + Send)) -> String {
     payload
         .downcast_ref::<String>()
@@ -228,15 +191,11 @@ fn said(payload: &(dyn Any + Send)) -> String {
         .unwrap_or_else(|| "no reason given".to_owned())
 }
 
-/// Runs one call of the scripted client, which panics when what it waits for does not
-/// come, and says which wait it was.
 fn waiting<T>(what: &str, call: impl FnOnce() -> T) -> Result<T, Failure> {
     catch_unwind(AssertUnwindSafe(call))
         .map_err(|payload| Failure::unmet(format!("{what} did not come: {}", said(&*payload))))
 }
 
-/// Connects to the Keeper that listens at `socket`, as a Window does. None listening is
-/// said at once, and not after the scripted client's own wait for one.
 fn attach(socket: &Path) -> Result<Client, Failure> {
     let no_keeper = |why: String| {
         Failure::unreachable(format!("no Keeper listens at {}: {why}", socket.display()))
@@ -245,16 +204,13 @@ fn attach(socket: &Path) -> Result<Client, Failure> {
     catch_unwind(|| Client::attach(socket)).map_err(|payload| no_keeper(said(&*payload)))
 }
 
-/// Sends one request and waits for its reply for at most `deadline`. A refusal is the
-/// Keeper's sentence.
 fn ask(
     client: &mut Client,
     what: &str,
     request: Request,
     deadline: Duration,
 ) -> Result<Reply, Failure> {
-    // The send is guarded too: it panics when the Keeper has closed the connection, as one
-    // that is leaving does between two requests.
+    // The send panics too when a leaving Keeper has closed the connection between two requests.
     waiting(what, || {
         let id = client.send(request);
         client.wait_for_reply(id, deadline)
@@ -262,7 +218,6 @@ fn ask(
     .map_err(|refusal| Failure::unmet(format!("the Keeper refused: {refusal}")))
 }
 
-/// The repository, and the workspace in it, at `folder`, among those the Keeper lists.
 fn listed<'a>(
     repositories: &'a [Repository],
     folder: &Path,
@@ -296,8 +251,6 @@ fn workspaces(client: &mut Client, deadline: Duration) -> Result<Vec<Repository>
     }
 }
 
-/// Opens `repository` as a workspace unless the Keeper lists it, makes a worktree of it
-/// on `branch` with `agent` in it, and says where the worktree is and which session runs.
 fn worktree_with_agent(
     socket: &Path,
     repository: &Path,
@@ -364,9 +317,8 @@ fn worktree_with_agent(
             .iter()
             .any(|session| session.agent == agent && session.terminal.is_some())
     };
-    // The fact may have come while the reply was awaited, and then it is kept; one that has
-    // not come is waited for. Asking first covers a session that started before this
-    // client was told of anything.
+    // The fact may have come while the reply was awaited. Asking first covers a session started
+    // before this client was told of anything.
     let listing = match ask(
         &mut client,
         "the list of agent sessions",
@@ -414,7 +366,6 @@ fn worktree_with_agent(
     ))
 }
 
-/// Sends the Link's stop and waits until nothing answers at `socket`.
 fn stop(socket: &Path, deadline: Duration) -> Result<String, Failure> {
     let mut client = attach(socket)?;
     waiting("sending the stop", || client.stop_everything())?;
@@ -501,14 +452,12 @@ mod tests {
         }
     }
 
-    /// A Keeper's socket that says hello to whoever comes and then closes the connection, as
-    /// a Keeper that is leaving does between two requests. Returns once it has closed.
     fn leaving_keeper(socket: &Path) -> std::thread::JoinHandle<()> {
         let listener = std::os::unix::net::UnixListener::bind(socket).expect("bind");
         std::thread::spawn(move || {
             let mine = yaar_link::Hello::for_this_process("a-keeper-that-leaves");
-            // The first connection is the probe that asks whether a Keeper listens at all
-            // and says nothing; the one that follows is the Window's.
+            // The first connection is the probe that asks whether a Keeper listens; the next is the
+            // Window's.
             for stream in listener.incoming() {
                 let mut stream = stream.expect("accept");
                 if yaar_link::handshake(&mut stream, &mine).is_ok() {

@@ -1,62 +1,7 @@
 #!/bin/bash
-# Row PKG-08 on Linux: the installed app starts from the app menu with no terminal, and the
-# desktop entry asks for no terminal.
-#
-#   .github/scripts/linux-launch.sh <user>
-#
-# Run as root after the install line installed the package. In this order:
-#   1. Libraries, before anything else is installed, so that nothing the test adds can hide
-#      a dependency the package lacks: each of the five installed programs' `ldd` lists no
-#      "not found"; the packages libwayland-client0 and libvulkan1 are installed; a file
-#      /usr/share/vulkan/icd.d/*.json exists; fc-match finds DejaVu Sans.
-#   2. The entry: /usr/share/applications/io.github.tsadoq.yaar.desktop holds Terminal=false,
-#      Type=Application, Exec=yaar-review, and `desktop-file-validate` (package
-#      desktop-file-utils, installed now) reports nothing; Exec's program resolves to
-#      /usr/bin/yaar-review in the system's search path
-#      (`env -i PATH=/usr/local/bin:/usr/bin:/bin command -v yaar-review`).
-#   3. The start: installs xvfb, xauth, x11-utils and libglib2.0-bin; starts `Xvfb :99` in the
-#      background, detached as serve-site.sh detaches its server, and waits for
-#      /tmp/.X11-unix/X99; as <user>, with an environment that holds HOME, USER, DISPLAY=:99
-#      and the PATH above and nothing else (env -i), runs `gio launch <the desktop entry>`
-#      (if GLib refuses for want of a session bus: the same under `dbus-run-session`, package
-#      dbus), as a desktop's menu starts an app; waits up to 30 s until a process of <user>
-#      whose /proc/<pid>/exe is /usr/bin/yaar-review runs, and one whose exe is
-#      /usr/libexec/yaar-review/yaar-keeper.
-#   4. Asserts, each a fact that a dead or windowless app cannot give:
-#      - within 30 s, `xwininfo -root -tree` (DISPLAY=:99) lists a top-level window whose
-#        `xprop WM_CLASS` holds "io.github.tsadoq.yaar", and `xwininfo -id <it>` says "Map
-#        State: IsViewable" (the app mapped its window);
-#      - `yaar-review --keeper-status` as <user> (same env -i environment) says started=false
-#        (the app's own start started the Keeper) and names the Keeper's pid of step 3, whose
-#        /proc/<pid>/exe is /usr/libexec/yaar-review/yaar-keeper;
-#      - after that, the Window's pid of step 3 is still alive (`kill -0`), and the window of
-#        the first point is still listed.
-#      Recorded, not asserted (in a container's step no process has a terminal and env -i
-#      sets no TERM, so these hold however the app was started): `ps -o tty= -p <pid>` and
-#      whether /proc/<pid>/environ holds TERM.
-#   5. Ends the app: SIGTERM to the Window's pid, waits for it to end (10 s), then for the
-#      Keeper to leave by itself (it lingers 5 s; waits 20 s), then stops Xvfb by its pid.
-# Prints what it saw at each step; on failure, the processes of <user>, their terminals and
-# `xwininfo -root -tree`.
-#
-# Exit codes: 0 all hold; 1 one does not; 2 usage error.
-#
-# What the header leaves: a window is looked for among the children of the root window
-# (`xwininfo -root -children`), the places a window without a window manager has; Xvfb is
-# started with -ac, because the app runs as another user than the one that started the
-# server; the process of the app is found by /proc/<pid>/exe, read as the user (a container's
-# root has no CAP_SYS_PTRACE and cannot read another user's), and a process that is a zombie
-# nobody reaped counts as gone; `gio launch` is tried plain
-# first and, when it fails, under dbus-run-session, which the step then says (it installs
-# the package dbus only in that case, so that linux-login-path.sh finds the program
-# dbus-run-session exactly when the start needed it); step 2 also fails on a NoDisplay or Hidden
-# that is true (blanks around the key and the '=' allowed, as GLib reads them) and on any
-# OnlyShowIn or NotShowIn in the group [Desktop Entry], which hide the app from the menu that
-# "from the app menu" is about; step 3
-# fails, naming its pid, when a Keeper of <user> from an earlier step still runs after the
-# 20 s it waits for it to leave, because the Keeper that step 4 then names could be that one
-# and not the one the app's own start made; a command that stops the script without a sentence
-# of its own is named in one, and the exit code is 1.
+# Starts the installed app from its desktop entry on a virtual display: linux-launch.sh <user>.
+# Xvfb -ac: the app runs as another user. `gio launch` is retried under dbus-run-session when GLib
+# has no session bus; dbus is installed only then, which linux-login-path.sh relies on.
 set -euo pipefail
 
 NAME=linux-launch.sh
@@ -103,9 +48,8 @@ alive() {
   return 0
 }
 
-# The pids of the user's processes whose program is $1. Read as the user: a container's root
-# has no CAP_SYS_PTRACE, and without it /proc/<pid>/exe of another user's process cannot be
-# read, root or not.
+# The pids of the user's processes whose program is $1. Read as the user: a container's root has
+# no CAP_SYS_PTRACE and cannot read another user's /proc/<pid>/exe.
 pids_of() {
   local pid
   sudo -n -u "$USER_NAME" sh -c '
@@ -116,7 +60,6 @@ pids_of() {
   done
 }
 
-# What a failure shows: the user's processes with their terminals and the windows.
 diagnose() {
   echo "$NAME: the processes of $USER_NAME:" >&2
   ps -u "$USER_NAME" -o pid=,ppid=,tty=,stat=,args= >&2 || echo "  (ps failed)" >&2
@@ -137,8 +80,6 @@ fail() {
   exit 1
 }
 
-# A command that set -e stopped on says so in a sentence, with the code this script's header
-# names, instead of leaving the failing tool's own status.
 cleanup() {
   local status=$1 cmd=$2 pid
   if [ "$status" -ne 0 ] && [ "$SAID" -eq 0 ]; then
@@ -155,12 +96,10 @@ cleanup() {
 }
 trap 'cleanup "$?" "$BASH_COMMAND"' EXIT
 
-# Runs a command as the user with the environment a desktop's menu gives and nothing else.
 as_menu() {
   sudo -n -u "$USER_NAME" env -i HOME="$HOME_DIR" USER="$USER_NAME" DISPLAY=:99 PATH="$MENU_PATH" "$@"
 }
 
-# ------------------------------------------------------------------------------ 1. libraries
 STEP=1
 for prog in "${PROGRAMS[@]}"; do
   [ -x "$prog" ] || fail "$prog is not installed or not executable"
@@ -175,10 +114,8 @@ for pkg in libwayland-client0 libvulkan1; do
 done
 ls /usr/share/vulkan/icd.d/*.json > "$SCRATCH/icd" 2> /dev/null || fail "no /usr/share/vulkan/icd.d/*.json: no Vulkan driver came with the package"
 echo "$NAME: 1. libwayland-client0 and libvulkan1 are installed; Vulkan drivers: $(tr '\n' ' ' < "$SCRATCH/icd")"
-# The header names fc-match, which a user's system without the package fontconfig does not
-# have (the .deb does not depend on it, and installing it here would hide a dependency): the
-# font is looked for as the package that brings it lists it, and fc-match is asked too when it
-# is there.
+# fc-match is not required (installing fontconfig would hide a missing dependency): the font is
+# looked up in the package's file list.
 [ "$(dpkg-query -W -f='${db:Status-Abbrev}' fonts-dejavu-core 2> /dev/null)" = "ii " ] || fail "the package fonts-dejavu-core is not installed: the .deb does not depend on it"
 FONT_FILE=$(dpkg -L fonts-dejavu-core | grep -m 1 '/DejaVuSans\.ttf$') || fail "fonts-dejavu-core lists no DejaVuSans.ttf"
 [ -f "$FONT_FILE" ] || fail "$FONT_FILE, which fonts-dejavu-core lists, is not there"
@@ -193,18 +130,14 @@ else
   echo "$NAME: 1. fc-match is not on this system; DejaVu Sans is the file $FONT_FILE"
 fi
 
-# ------------------------------------------------------------------------------ 2. the entry
 STEP=2
 apt-get install -y --no-install-recommends desktop-file-utils > "$SCRATCH/apt-dfu" 2>&1 || fail "installing desktop-file-utils failed: $(tail -3 "$SCRATCH/apt-dfu")"
 [ -f "$DESKTOP" ] || fail "$DESKTOP is not installed"
 for line in Terminal=false Type=Application Exec=yaar-review; do
   grep -qx "$line" "$DESKTOP" || fail "$DESKTOP holds no line '$line': $(grep -E '^(Terminal|Type|Exec)=' "$DESKTOP" | tr '\n' ' ')"
 done
-# An entry the menu hides starts from `gio launch` all the same: the menu is what the row is
-# about. The keys are read as GLib's key-file reader reads them: in the group [Desktop Entry]
-# only, with blanks allowed around the key and around the '=' (`NoDisplay = true` hides the
-# app as `NoDisplay=true` does), a boolean being "true" or "1"; OnlyShowIn and NotShowIn hide
-# it from the menus of some desktops, whatever they name.
+# Read as GLib reads a key file: group [Desktop Entry] only, blanks around key and '=', booleans
+# "true" or "1".
 HIDES=$(awk '
   /^[ \t]*\[/ { group = ($0 ~ /^\[Desktop Entry\][ \t]*$/); next }
   !group { next }
@@ -232,12 +165,10 @@ RESOLVED=$(env -i PATH="$MENU_PATH" sh -c 'command -v "$1"' sh "$EXEC") || fail 
 [ "$RESOLVED" = /usr/bin/yaar-review ] || fail "Exec=$EXEC resolves to $RESOLVED on PATH=$MENU_PATH, not to /usr/bin/yaar-review"
 echo "$NAME: 2. $DESKTOP: Terminal=false, Type=Application, Exec=$EXEC, not hidden, valid, resolves to $RESOLVED"
 
-# ------------------------------------------------------------------------------ 3. the start
 STEP=3
 apt-get install -y --no-install-recommends xvfb xauth x11-utils libglib2.0-bin > "$SCRATCH/apt-x" 2>&1 || fail "installing xvfb, xauth, x11-utils and libglib2.0-bin failed: $(tail -3 "$SCRATCH/apt-x")"
-# A Keeper that an earlier step started lingers after its last Window; the one this start is
-# about must be the app's own, so the old one is waited for first (5 s of linger, 20 s here)
-# and one that stays fails the step.
+# An earlier step's Keeper lingers 5 s after its last Window: wait for it, so the Keeper met is the
+# app's own.
 DEADLINE=$(($(date +%s) + 20))
 while :; do
   pids=$(pids_of "$KEEPER_EXE")
@@ -248,7 +179,6 @@ while :; do
   sleep 0.2
 done
 [ ! -e /tmp/.X11-unix/X99 ] || fail "/tmp/.X11-unix/X99 is there already: the display :99 is not free"
-# Detached from the step, as serve-site.sh detaches its server.
 if command -v setsid > /dev/null 2>&1; then
   setsid Xvfb :99 -ac -screen 0 1280x800x24 < /dev/null > "$SCRATCH/xvfb.log" 2>&1 &
 else
@@ -274,7 +204,6 @@ if ! as_menu gio launch "$DESKTOP" > "$SCRATCH/gio" 2>&1; then
   as_menu dbus-run-session -- gio launch "$DESKTOP" > "$SCRATCH/gio" 2>&1 || fail "gio launch failed, also under dbus-run-session: $(tr '\n' ' ' < "$SCRATCH/gio")"
 fi
 echo "$NAME: 3. gio launch ${DBUS:+under $DBUS }returned: $(tr '\n' ' ' < "$SCRATCH/gio")"
-# gio returns before the app has started: wait for the two processes.
 DEADLINE=$(($(date +%s) + 30))
 while :; do
   pids=$(pids_of "$WINDOW_EXE")
@@ -287,9 +216,7 @@ while :; do
 done
 echo "$NAME: 3. the Window runs, pid $WINDOW_PID, and the Keeper, pid $KEEPER_PID"
 
-# ------------------------------------------------------------------------------ 4. the facts
 STEP=4
-# A top-level window of the class, mapped.
 find_window() {
   local id
   DISPLAY=:99 xwininfo -root -children 2> /dev/null | sed -n 's/^ *\(0x[0-9a-f][0-9a-f]*\) .*/\1/p' > "$SCRATCH/ids" || return 1
@@ -328,10 +255,8 @@ alive "$WINDOW_PID" || fail "the Window, pid $WINDOW_PID, is gone after the Keep
 [ "$(sudo -n -u "$USER_NAME" readlink "/proc/$WINDOW_PID/exe")" = "$WINDOW_EXE" ] || fail "/proc/$WINDOW_PID/exe is not $WINDOW_EXE"
 STILL=$(find_window) || fail "the window of class $CLASS is no longer listed after the Keeper answered"
 echo "$NAME: 4. after the Keeper answered the Window is alive and its window is still listed: $STILL"
-# Recorded, not asserted.
 echo "$NAME: 4. recorded: tty of the Window '$(ps -o tty= -p "$WINDOW_PID" | tr -d ' ')'; TERM in its environment: $(if sudo -n -u "$USER_NAME" cat "/proc/$WINDOW_PID/environ" | tr '\0' '\n' | grep '^TERM=' > /dev/null; then echo yes; else echo no; fi)"
 
-# ------------------------------------------------------------------------------ 5. the end
 STEP=5
 kill -TERM "$WINDOW_PID"
 DEADLINE=$(($(date +%s) + 10))

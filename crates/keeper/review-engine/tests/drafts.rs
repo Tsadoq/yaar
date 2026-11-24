@@ -1,5 +1,5 @@
-//! The engine's calls for the review of a workspace and its drafts, through the engine
-//! with the real Store and the real Recorder beneath, on a repository the test makes.
+//! The engine's calls for the review of a workspace and its drafts, through the engine with
+//! the real Store and Recorder on a repository the test makes.
 
 mod support;
 
@@ -177,7 +177,6 @@ fn a_new_thread_on_the_files_on_disk_sits_on_the_state_recorded_for_it() {
         Some(b"one\ntwo changed\nthree\n".to_vec())
     );
 
-    // A second thread on files that did not change is on the same state: none is added.
     write(&repo, "a.txt", "one\ntwo changed\nthree\n");
     reviews
         .save_draft(
@@ -231,7 +230,6 @@ fn a_thread_on_a_removed_line_names_a_commit_of_the_repository_and_keeps_it_read
         (anchor.tree.as_str(), anchor.side),
         (commit.as_str(), Side::Old)
     );
-    // No state was needed for it, and the commit reads with the repository gone.
     let states = reviews.states_of(&w).expect("the state store");
     assert!(states.states().expect("list").is_empty());
     std::fs::remove_dir_all(&repo).expect("remove the repository");
@@ -265,7 +263,6 @@ fn a_new_thread_on_the_files_on_disk_with_no_worktree_is_refused_and_a_text_save
     reviews
         .save_draft(Some(&worktree), &review, &first)
         .expect("save with the worktree");
-    // Each keystroke after it carries the whole text, and no worktree.
     for text in ["he", "hey"] {
         let more = DraftSave {
             text: text.to_string(),
@@ -297,7 +294,6 @@ fn a_bad_anchor_is_refused_and_nothing_is_kept() {
         .id()
         .clone();
 
-    // Two lines of text for one line.
     let refused = reviews.save_draft(
         Some(&worktree),
         &review,
@@ -328,7 +324,6 @@ fn a_sent_comment_is_not_edited_or_deleted_and_a_reply_follows_it_in_its_thread(
         .save_draft(Some(&worktree), &review, &first)
         .expect("save");
 
-    // A reply to a comment not sent yet is no reply.
     let reply = DraftSave {
         thread: first.thread.clone(),
         comment: comment(2),
@@ -342,7 +337,6 @@ fn a_sent_comment_is_not_edited_or_deleted_and_a_reply_follows_it_in_its_thread(
 
     reviews.copy_as_text(&worktree, &review).expect("copy");
 
-    // A sent comment keeps its text and stays.
     let edit = DraftSave {
         text: "changed".to_string(),
         ..first.clone()
@@ -358,7 +352,6 @@ fn a_sent_comment_is_not_edited_or_deleted_and_a_reply_follows_it_in_its_thread(
     let kept = reviews.review(&review).expect("read");
     assert_eq!(kept.threads()[0].comments[0].text, "first");
 
-    // The reply is a draft in the same thread.
     assert_eq!(
         reviews.save_draft(None, &review, &reply).expect("reply"),
         Saved::Made
@@ -372,7 +365,6 @@ fn a_sent_comment_is_not_edited_or_deleted_and_a_reply_follows_it_in_its_thread(
         ("too early", None)
     );
 
-    // The reply is a draft: it is edited, deleted, and the thread stays with the sent one.
     reviews
         .save_draft(
             None,

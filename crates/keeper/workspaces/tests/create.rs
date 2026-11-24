@@ -1,6 +1,3 @@
-//! Component tests: a worktree made from a branch for an agent, through the calls the
-//! Keeper makes, in real repositories the tests make and with a real database.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -12,8 +9,6 @@ use yaar_workspaces::{
     Workspaces,
 };
 
-/// A repository `lair/repo` with `main` at one commit, opened, in a scratch folder whose
-/// database is the Keeper's.
 struct World {
     scratch: Scratch,
     lair: PathBuf,
@@ -46,12 +41,10 @@ fn world() -> World {
 }
 
 impl World {
-    /// The folder the app puts worktrees in, beside the repository.
     fn worktrees(&self) -> PathBuf {
         self.lair.join("repo.worktrees")
     }
 
-    /// `plan_worktree`, `add` and `open_added`, as the Keeper calls them.
     fn create(&self, from: &str, branch: &str, folder: Option<&Path>) -> Created {
         let planned = self
             .workspaces
@@ -78,8 +71,8 @@ impl World {
     }
 }
 
-/// Everything a refusal must leave as it was: the seven reads of the repository, the names
-/// below the scratch folder (but for the database and the home), and what the Store holds.
+/// Everything a refusal must leave as it was: the repository's reads, the names below the
+/// scratch folder (but for the database and the home), and what the Store holds.
 #[derive(Debug, PartialEq, Eq)]
 struct Snapshot {
     reads: Vec<Vec<u8>>,
@@ -181,7 +174,7 @@ fn snapshot(scratch: &Scratch, repo: &Path) -> Snapshot {
     }
 }
 
-/// Two objects no ref reaches, planted in the repository before the first read.
+/// Two objects no ref reaches, planted before the first read.
 fn plant(world: &World) -> Vec<String> {
     write(
         world.scratch.path(),
@@ -217,15 +210,12 @@ fn base(name: &str) -> Base {
     }
 }
 
-// WS-05.
 #[test]
 fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_named_and_has_that_branch_as_its_base()
  {
     let world = world();
     let main = world.main_commit();
 
-    // "A worktree created on a new branch from a branch name": the three steps of the
-    // Keeper, with no folder named.
     let planned = world
         .workspaces
         .plan_worktree(&world.repository, "main", "task/one", None)
@@ -235,8 +225,6 @@ fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_nam
     let added = planned.add().expect("add");
     let created = world.workspaces.open_added(&planned, added).expect("open");
 
-    // "Lies beside the repository", where it keeps its worktrees: a slash in the branch's
-    // name makes a dash in the folder's.
     assert_eq!(created.folder, one);
     let listed = git(&world.repo, &["worktree", "list", "--porcelain"]);
     assert!(
@@ -252,7 +240,6 @@ fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_nam
     );
     assert_eq!(created.repository, world.repository);
 
-    // "And has the branch it was made from as its base": as the user would have set it.
     assert_eq!(created.base, base("main"));
     drop(world.workspaces);
     let again = workspaces(&world.scratch);
@@ -287,15 +274,12 @@ fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_nam
         vec![on_branch]
     );
 
-    // A second one lies in the folder the first one made: the folder the linked worktrees
-    // share.
     let world = World {
         workspaces: again,
         ..world
     };
     let two = world.create("main", "two", None);
     assert_eq!(two.folder, world.worktrees().join("two"));
-    // The base is the branch it was made from, whichever that is.
     git(&world.repo, &["branch", "side"]);
     let from_side = world.create("side", "from-side", None);
     assert_eq!(from_side.base, base("side"));
@@ -304,7 +288,6 @@ fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_nam
         Some(base("side"))
     );
 
-    // A repository whose linked worktree lies elsewhere puts the next one there.
     let other = world.scratch.join("other");
     init(&other.join("repo"));
     git(&other.join("repo"), &["config", "user.name", "A Test"]);
@@ -336,8 +319,7 @@ fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_nam
         .plan_worktree(&other_id, "main", "y", None)
         .expect("plan");
     assert_eq!(next.folder(), elsewhere.join("y"));
-    // Linked worktrees in two folders share none: rule 2, the folder beside the main
-    // worktree, and not the folder of the first, the last or the most of them.
+    // Linked worktrees in two folders share none: the folder beside the main worktree wins.
     let elsewhere_too = world.scratch.join("elsewhere-too");
     std::fs::create_dir_all(&elsewhere_too).expect("a folder");
     git(
@@ -359,7 +341,6 @@ fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_nam
         other.join("repo.worktrees").join("w")
     );
 
-    // "Or in the folder the user named for the repository": a folder not there yet.
     let places = world.scratch.join("places");
     world
         .workspaces
@@ -385,22 +366,18 @@ fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_nam
     );
     assert_eq!(three.base, base("main"));
 
-    // The folder named comes before the folder the linked worktrees share, which it now is
-    // for none: `places` holds one, and `repo.worktrees` two.
+    // A named folder is used as given. With none named, the linked worktrees now lie in two folders
+    // (`places` and `repo.worktrees`), so the folder beside the repository is used.
     assert_eq!(
         world.planned_folder("four", Some(&places)),
         places.join("four")
     );
-    // With no folder named the rule is back: the linked worktrees lie in two folders now,
-    // so the folder beside the repository.
     assert_eq!(
         world.planned_folder("five", None),
         world.worktrees().join("five")
     );
 }
 
-// A repository whose worktrees lie in the folder it names `<repository>.worktrees` first
-// gets it made by the creation, and the next creation finds it there.
 #[test]
 fn the_folder_beside_the_repository_is_made_by_the_creation_and_not_by_the_plan() {
     let world = world();
@@ -414,8 +391,6 @@ fn the_folder_beside_the_repository_is_made_by_the_creation_and_not_by_the_plan(
     assert!(world.worktrees().is_dir());
 }
 
-// A bare repository keeps its worktrees where they all lie, and otherwise beside its git
-// folder.
 #[test]
 fn a_bare_repository_puts_its_worktrees_where_they_lie_and_otherwise_beside_its_git_folder() {
     let scratch = Scratch::new();
@@ -459,7 +434,6 @@ fn a_bare_repository_puts_its_worktrees_where_they_lie_and_otherwise_beside_its_
         .expect("open")
         .repository;
 
-    // Its one linked worktree lies in `trees`: so does the next.
     let planned = workspaces
         .plan_worktree(&repository, "main", "w2", None)
         .expect("plan");
@@ -474,7 +448,6 @@ fn a_bare_repository_puts_its_worktrees_where_they_lie_and_otherwise_beside_its_
         Refusal::FolderInsideRepository(bare.join("inside"))
     );
 
-    // Two folders now: beside the git folder.
     let elsewhere = scratch.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("a folder");
     git(
@@ -494,8 +467,8 @@ fn a_bare_repository_puts_its_worktrees_where_they_lie_and_otherwise_beside_its_
     assert_eq!(planned.folder(), lair.join("app.git.worktrees").join("w4"));
 }
 
-// Every refusal of the table, one by one, with the reads of the repository, the names below
-// the scratch folder and the Store as they were; the barrier is that the call returned.
+// Each refusal leaves the repository, the scratch folder and the Store as they were; the
+// barrier is that the call returned.
 #[test]
 fn each_refusal_makes_nothing_and_leaves_the_repository_the_folder_beside_it_and_the_store_as_they_were()
  {
@@ -557,7 +530,6 @@ fn each_refusal_makes_nothing_and_leaves_the_repository_the_folder_beside_it_and
     }
 }
 
-// `feature/x` and `feature-x` lie in one folder: the second is refused for it.
 #[test]
 fn two_branches_that_give_one_folder_meet_the_refusal_of_a_folder_that_is_there() {
     let world = world();
@@ -580,14 +552,12 @@ fn two_branches_that_give_one_folder_meet_the_refusal_of_a_folder_that_is_there(
 #[test]
 fn a_repository_whose_every_worktree_is_gone_is_unknown() {
     let world = world();
-    // Moves the repository's folder away without git's knowing.
     let moved = world.scratch.join("moved");
     std::fs::rename(&world.repo, &moved).expect("move");
     let outcome = world
         .workspaces
         .plan_worktree(&world.repository, "main", "next", None);
-    // The repository's only worktree is the folder the Store knows, and nothing lies
-    // there now: no worktree of it can be read.
+    // The repository's only worktree is the folder the Store knows, and nothing lies there now.
     match outcome {
         Err(WorkspaceError::Refused(Refusal::UnknownRepository(id))) => {
             assert_eq!(id, world.repository)
@@ -632,8 +602,7 @@ fn a_worktree_that_was_opened_and_is_taken_away_leaves_no_folder_and_no_branch()
     let after = world.snapshot();
     assert_eq!(after.reads, before.reads);
     assert_eq!(after.listing, before.listing);
-    // The Store keeps the record of the workspace, as for any worktree that is gone: it is
-    // not listed, and the repository lists the one worktree it has.
+    // The Store keeps the workspace's record, as for any gone worktree; it is not listed.
     let listed = world.workspaces.repositories().expect("repositories");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].workspaces.len(), 1);
@@ -643,8 +612,6 @@ fn a_worktree_that_was_opened_and_is_taken_away_leaves_no_folder_and_no_branch()
     );
 }
 
-// The base the worktree was made from is gone between the add and the opening: the
-// opening fails, and the worktree and its branch go.
 #[test]
 fn an_opening_that_fails_takes_the_worktree_and_its_branch_away() {
     let world = world();
@@ -670,7 +637,6 @@ fn an_opening_that_fails_takes_the_worktree_and_its_branch_away() {
     assert_eq!(listed.matches("worktree ").count(), 1, "{listed}");
 }
 
-// The user's hook runs: the worktree is made as the user's git makes it.
 #[test]
 fn the_user_s_hook_runs_in_the_new_worktree() {
     let world = world();
@@ -688,7 +654,6 @@ fn the_user_s_hook_runs_in_the_new_worktree() {
     assert_eq!(Path::new(ran.trim()), created.folder);
 }
 
-// A remote branch as the base is kept by its short name, as every branch base is.
 #[test]
 fn a_branch_of_a_remote_is_a_base_by_its_short_name() {
     let scratch = Scratch::new();
@@ -705,7 +670,6 @@ fn a_branch_of_a_remote_is_a_base_by_its_short_name() {
     assert_eq!(created.base, base("origin/main"));
 }
 
-// check_worktrees_folder
 fn linked_worktree(world: &World, name: &str) -> PathBuf {
     let folder = world.scratch.join(name);
     git(
@@ -803,7 +767,6 @@ fn a_repository_the_store_does_not_hold_is_unknown_to_the_check() {
     );
 }
 
-// At creation the folder is asked again, and what is at it.
 #[test]
 fn a_folder_named_that_is_a_file_or_has_no_parent_either_is_refused_at_creation_and_nothing_is_made()
  {
@@ -827,7 +790,6 @@ fn a_folder_named_that_is_a_file_or_has_no_parent_either_is_refused_at_creation_
         refused(plan(&parent.join("places"))),
         Refusal::NoSuchFolder(parent.clone())
     );
-    // A parent that is a file is no place for a folder either.
     assert_eq!(
         refused(plan(&file.join("places"))),
         Refusal::NoSuchFolder(file.clone())
@@ -843,13 +805,11 @@ fn a_folder_named_that_is_a_file_or_has_no_parent_either_is_refused_at_creation_
 fn a_folder_named_under_a_worktree_that_came_to_exist_after_the_setting_is_refused_at_creation() {
     let world = world();
     let planted = plant(&world);
-    // The folder is under a folder where no worktree lies yet, so setting it is fine.
     let named = world.scratch.join("around").join("places");
     world
         .workspaces
         .check_worktrees_folder(&world.repository, &named)
         .expect("the folder is fine when it is set");
-    // A worktree then comes to lie around it.
     let around = linked_worktree(&world, "around");
     assert_eq!(named, around.join("places"));
     assert!(!named.exists());
@@ -891,8 +851,8 @@ fn a_hook_that_fails_in_a_folder_named_that_was_not_there_leaves_no_folder() {
         matches!(outcome, Err(WorkspaceError::Git(_))),
         "{outcome:?}"
     );
-    // Barrier: the hook ran, and in the folder named, so the add made `places` and the
-    // worktree in it before the failure took them away.
+    // Barrier: the hook ran in the named folder, so the add made `places` and the worktree before
+    // the failure took them away.
     let ran = std::fs::read_to_string(world.scratch.join("hook-ran")).expect("the hook ran");
     assert_eq!(Path::new(ran.trim()), planned.folder());
     assert!(!places.exists(), "the folder the add made is gone");

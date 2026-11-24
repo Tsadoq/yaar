@@ -1,40 +1,14 @@
 #!/bin/bash
-# PERF-05: scrolling a diff of 2,200 lines, unified and split: the app draws at the refresh
-# rate of the display, and at most 1% of the frames take longer than two refresh intervals.
+# Scrolling a diff of 2,200 lines, unified and split: fps at least 95% of the refresh rate and at
+# most 1% of the gaps between frames over two refresh intervals.
 #
-#   packaging/checklists/scroll.sh
-#   packaging/checklists/scroll.sh --analyse <input log> <capture log> <refresh Hz>
+# packaging/checklists/scroll.sh
+# packaging/checklists/scroll.sh --analyse <input log> <capture log> <refresh Hz>
 #
-# NOT RUN BY ANY AGENT. It posts real scroll-wheel events to the system and records the
-# screen, so it runs only on the owner's word: it asks for the word "go" before it posts
-# anything, and fakeinput refuses to post unless the app is the frontmost one.
-#
-# What it does, for the unified view and then for the split view: asks you to put the app on
-# a diff of 2,200 lines in that view with the review pane in front, starts adecap.app on the
-# app's Window (it logs the display time of every frame of that window whose pixels changed),
-# moves the pointer to the pane (75% across the window, 55% down), and posts pixel scroll
-# events with fakeinput at the display's refresh rate: 8 s down at 30 pixels an event, 8 s
-# up, 6 s down at 6 pixels. From the capture it counts, for each of the three phases and
-# in total, the frames, the frames a second, and the gaps between consecutive frames longer
-# than two refresh intervals. The verdict of a view: frames a second at least 95% of the
-# refresh rate, and at most 1% of the gaps long.
-#
-# What it needs of the owner: his "go"; mains power, an unlocked screen, nobody at the
-# keyboard; Accessibility for the terminal that runs this; Screen Recording for adecap.app;
-# the packaged app running on a workspace with a diff of 2,200 lines (the review pane's
-# unified and split views are the app's own setting); the window not covered. The
-# measuring tools are the phase 4 kit's, read and never rebuilt: fakeinput and adecap.app in
-# YAAR_KIT (default ~/ade-phase4-2026-11-12/gpui-measure), or YAAR_FAKEINPUT and YAAR_ADECAP
-# outright. The window's place is read through System Events (Accessibility).
-#
-# --analyse reads the logs of an earlier run and the refresh rate in Hz and prints the
-# figures above; it posts nothing and opens nothing.
-#
-# Where it writes: ~/yaar-checklists/<YYYY-MM-DD>/scroll-<HHMMSS>/ with the input log and
-# the capture log of each view, and results.txt.
-#
-# Exit codes: 0 both views are within the limits; 1 one is not, or the run could not be done
-# (a sentence says which); 2 usage error.
+# RUN BY HAND ONLY: it posts real scroll events and records the screen, so it asks for "go".
+# Needs Accessibility and Screen Recording, mains power, the app on a 2,200-line diff in view, and
+# the tools that YAAR_FAKEINPUT and YAAR_ADECAP name (or YAAR_KIT, a folder that holds them under
+# tools/). --analyse posts nothing. Exit: 0 within limits, 1 not or not done, 2 usage.
 set -euo pipefail
 
 CK_NAME=scroll.sh
@@ -102,7 +76,7 @@ is_front() {
   [ "$(ck_front_pid)" = "$APP_PID" ]
 }
 
-# window_box: "x y w h" of the app's first window, in points.
+# x y w h of the app's first window, in points.
 window_box() {
   local raw
   raw=$(osascript -e "tell application \"System Events\" to tell (first process whose unix id is $APP_PID) to get {position, size} of window 1") \
@@ -111,7 +85,6 @@ window_box() {
 }
 
 OVER=0
-# view <name> <what to set>
 view() {
   local name=$1
   printf '%s\nPress Return when it is so: ' "$2"

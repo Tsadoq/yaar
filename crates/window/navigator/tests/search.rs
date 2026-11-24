@@ -1,11 +1,5 @@
-//! `look` and `inside` on real files: executables, links and a folder the tests make under
-//! the temporary folder, as the Navigator's search for a server reads them. What `order` does
-//! with what was found is shown with no file, in the unit tests of `search.rs`.
-//!
-//! Three tests start a Navigator on the stand-in language server, through scripts of their
-//! own that stand for rustup's proxy and a copy on the machine (the proxy first, with no
-//! question and no install asked for), and that log what they were given (a variable of the
-//! servers' environment put into the args and the environment, or passing a candidate over).
+//! `look` and `inside` on real files. Three tests start a Navigator on the stand-in through
+//! scripts that stand for rustup's proxy and a machine copy.
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -22,7 +16,6 @@ fn builtin() -> Registry {
     registry
 }
 
-/// A folder of the test's own, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -57,7 +50,6 @@ impl Drop for Scratch {
     }
 }
 
-/// A relative path that leads from the folder the process stands in to `target`.
 fn relative_to_here(target: &Path) -> PathBuf {
     let here = std::env::current_dir().unwrap().canonicalize().unwrap();
     let mut path: PathBuf = here.components().skip(1).map(|_| "..").collect();
@@ -71,7 +63,6 @@ fn relative_to_here(target: &Path) -> PathBuf {
     path
 }
 
-/// The program of each candidate, and its server's place in the row.
 fn programs(candidates: &[Candidate]) -> Vec<(usize, PathBuf)> {
     candidates
         .iter()
@@ -96,7 +87,6 @@ fn look_finds_the_projects_own_by_its_paths_with_the_platform_put_in() {
     let row = registry.row("lang").unwrap();
     let one = scratch.executable("bin/linux-x64/one");
     let other = scratch.executable("bin/other/one");
-    // A folder of the name, and a file that is not executable, are no program.
     scratch.file("bin/darwin-arm64/one", 0o644);
 
     let found = look(
@@ -125,7 +115,6 @@ fn look_finds_the_projects_own_by_its_paths_with_the_platform_put_in() {
         "not executable: not found"
     );
 
-    // No platform: the variable is empty, and no path with it names a file.
     let found = look(row, &scratch.0, &[], &[], &scratch.path("servers"), None);
     assert_eq!(programs(&found.project), [(0, other)]);
     assert!(found.registered.is_empty() && found.machine.is_empty() && found.downloaded.is_empty());
@@ -142,10 +131,8 @@ fn look_finds_each_copy_on_the_machine_in_every_folder_of_the_search_path_in_its
     let uno_c = scratch.executable("c/uno");
     let two_c = scratch.executable("c/two");
     scratch.file("a/uno", 0o600);
-    // A folder of the path that is not there, and ones that are not absolute paths: a
-    // path that does lead to `a` from where the process stands is followed by nothing,
-    // since a relative folder would make whatever the process stands in a source of
-    // servers.
+    // Relative entries are never followed: a relative folder would make whatever the process stands
+    // in a source of servers.
     let search = [
         scratch.path("missing"),
         b,
@@ -178,7 +165,6 @@ fn look_finds_each_copy_on_the_machine_in_every_folder_of_the_search_path_in_its
     assert_eq!(found.machine[3].args, ["--two"]);
 }
 
-/// A user's row of a server named `lang` with the commands written one to a line.
 fn registered(commands: &[&str]) -> Registry {
     let servers: String = commands
         .iter()
@@ -210,7 +196,6 @@ fn look_resolves_each_registered_command_and_leaves_out_one_that_is_not_there() 
         "[\"onlyrelative\"]",
     ]);
     let row = registry.row("lang").unwrap();
-    // A folder reached only by a relative path is no folder of the search path.
     scratch.executable("viarelative/onlyrelative");
     let search = [
         scratch.path("none"),
@@ -235,7 +220,6 @@ fn look_resolves_each_registered_command_and_leaves_out_one_that_is_not_there() 
             .iter()
             .all(|c| c.kind == CandidateKind::Registered)
     );
-    // The command's own arguments, not yet expanded; none for a bare program.
     assert_eq!(found.registered[0].args, ["--flag", "{root}"]);
     assert_eq!(found.registered[1].args, Vec::<String>::new());
     assert_eq!(found.registered[2].args, ["x"]);
@@ -280,7 +264,6 @@ fn look_leaves_out_a_registered_program_that_is_not_an_executable_file() {
 
 #[test]
 fn what_look_finds_is_ordered_as_a_user_row_asks() {
-    // The two halves meet: a row's candidates, found on disk, come out in FR-060's order.
     let scratch = Scratch::new("meet");
     let user = "[lang]\n\
         [[lang.server]]\nname = \"mine\"\ncommand = [\"mine\"]\nproject = [\"p/mine\"]\nmachine = [\"mine\"]\n";
@@ -304,7 +287,6 @@ fn what_look_finds_is_ordered_as_a_user_row_asks() {
         .into_iter()
         .map(|c| (c.kind, c.program))
         .collect();
-    // `bin/mine` is the registered command and also the first `mine` of the path: once.
     assert_eq!(
         tried,
         [
@@ -315,8 +297,6 @@ fn what_look_finds_is_ordered_as_a_user_row_asks() {
     );
 }
 
-/// A row with a download calls `download::installed`. The folder is written as
-/// `download.rs` documents it.
 #[test]
 fn look_finds_the_version_the_app_downloaded_for_each_server_that_has_one() {
     let scratch = Scratch::new("downloaded");
@@ -341,7 +321,6 @@ fn look_finds_the_version_the_app_downloaded_for_each_server_that_has_one() {
     assert_eq!(found.downloaded[0].kind, CandidateKind::Downloaded);
     assert_eq!(found.downloaded[0].args, ["server"]);
 
-    // Nothing downloaded for the others: no folder, no candidate.
     let rust = registry.row("rust").unwrap();
     let found = look(
         rust,
@@ -354,8 +333,6 @@ fn look_finds_the_version_the_app_downloaded_for_each_server_that_has_one() {
     assert_eq!(found.downloaded, vec![]);
 }
 
-// inside
-
 #[test]
 fn a_program_inside_a_worktree_of_the_repository_is_inside() {
     let scratch = Scratch::new("inside");
@@ -364,7 +341,6 @@ fn a_program_inside_a_worktree_of_the_repository_is_inside() {
     let inside_first = scratch.executable("repo/tools/ls");
     let inside_second = scratch.executable("repo-second/node_modules/.bin/ls");
     let outside = scratch.executable("elsewhere/ls");
-    // A folder whose name starts with the worktree's name is no part of it.
     let neighbour = scratch.executable("repository/ls");
 
     let worktrees = [first.as_path(), second.as_path()];
@@ -382,11 +358,8 @@ fn a_link_is_followed_on_both_sides_before_the_program_is_placed() {
     let real = scratch.executable("repo/tools/real");
     let outside = scratch.executable("elsewhere/outside");
     std::fs::create_dir_all(scratch.path("bin")).unwrap();
-    // A link outside the repository to a file inside it: inside. A link inside the
-    // repository to a file outside it: outside, whatever its own place.
     std::os::unix::fs::symlink(&real, scratch.path("bin/to-inside")).unwrap();
     std::os::unix::fs::symlink(&outside, scratch.path("repo/tools/to-outside")).unwrap();
-    // The worktree itself named by a link.
     std::os::unix::fs::symlink(&repo, scratch.path("repo-link")).unwrap();
 
     assert!(inside(&scratch.path("bin/to-inside"), &[repo.as_path()]));
@@ -406,9 +379,6 @@ fn a_program_that_is_not_there_is_placed_by_the_path_it_is_given() {
     assert!(!inside(&scratch.path("gone/ls"), &[repo.as_path()]));
 }
 
-// Rust's project copy: rustup's own rust-analyzer (NAV-18)
-
-/// An environment of the servers naming each variable of `pairs`.
 fn environment(pairs: &[(&str, &Path)]) -> Vec<(OsString, OsString)> {
     pairs
         .iter()
@@ -416,7 +386,6 @@ fn environment(pairs: &[(&str, &Path)]) -> Vec<(OsString, OsString)> {
         .collect()
 }
 
-/// What the candidates of the rust row are, as `kind program`, in the order they are tried.
 fn tried_for_rust(
     scratch: &Scratch,
     root: &Path,
@@ -449,7 +418,6 @@ fn rustups_rust_analyzer_found_through_the_cargo_home_is_the_projects_own_and_tr
     let late = scratch.executable("late/rust-analyzer");
     let worktree = scratch.path("worktree");
     std::fs::create_dir_all(&worktree).unwrap();
-    // Another copy of the proxy lies in the home folder: the second place, tried after it.
     let home = scratch.path("home");
     let in_home = scratch.executable("home/.cargo/bin/rust-analyzer");
 
@@ -471,8 +439,6 @@ fn rustups_rust_analyzer_found_through_the_cargo_home_is_the_projects_own_and_tr
         "the project's own first, in the order the row names, then the machine's in the \
          search path's order"
     );
-    // The proxy lies outside the worktree: no question is asked for it (`inside` is what
-    // the Navigator asks), and it was not read as a path in the worktree.
     assert!(!inside(&proxy, &[worktree.as_path()]));
     assert!(!worktree.join(proxy.strip_prefix("/").unwrap()).exists());
 }
@@ -487,7 +453,6 @@ fn with_no_cargo_home_the_proxy_in_the_home_folder_is_the_projects_own() {
     std::fs::create_dir_all(&worktree).unwrap();
     let search = [scratch.path("early")];
 
-    // `CARGO_HOME` is not set: the entry that names it is passed over, and the next is used.
     let tried = tried_for_rust(
         &scratch,
         &worktree,
@@ -502,7 +467,6 @@ fn with_no_cargo_home_the_proxy_in_the_home_folder_is_the_projects_own() {
         ]
     );
 
-    // `CARGO_HOME` set to a folder that holds no proxy: it is passed over as well.
     let empty = scratch.path("empty_cargo_home");
     std::fs::create_dir_all(&empty).unwrap();
     let tried = tried_for_rust(
@@ -527,11 +491,9 @@ fn with_no_proxy_the_machines_copy_is_first_and_no_candidate_names_a_variable() 
     let worktree = scratch.path("worktree");
     std::fs::create_dir_all(&worktree).unwrap();
     let search = [scratch.path("early")];
-    // Neither variable is set.
     let tried = tried_for_rust(&scratch, &worktree, &search, &[]);
     assert_eq!(tried, [(CandidateKind::Machine, early.clone())]);
 
-    // Both are set, to folders that hold no proxy.
     let home = scratch.path("home");
     let cargo_home = scratch.path("cargo_home");
     let tried = tried_for_rust(
@@ -557,9 +519,8 @@ fn a_variable_that_is_not_set_or_is_empty_passes_its_entry_over_and_the_next_one
     assert_eq!(errors, vec![]);
     let row = registry.row("lang").unwrap();
     let set = scratch.path("set");
-    // What an unset or an empty variable would make of the first two entries and of the first
-    // two names, were it put in as nothing: each lands on a file that is there, so an entry
-    // that is tried instead of passed over shows in the result.
+    // Were an unset or empty variable put in as nothing, the first two entries and names would land
+    // on these files, so an entry tried instead of passed over would show in the result.
     scratch.executable("worktree/in/one");
     scratch.executable("path/nothing");
     let in_set = scratch.executable("set/bin/one");
@@ -595,7 +556,6 @@ fn a_project_entry_that_is_absolute_once_expanded_is_not_joined_to_the_worktree(
     let worktree = scratch.path("worktree");
     let in_root = scratch.executable("worktree/in/one");
     let relative = scratch.executable("worktree/in/two");
-    // The same names under the worktree, which a joined path would find instead.
     scratch.executable("worktree/tools/one");
     let tools = scratch.path("tools");
 
@@ -615,14 +575,12 @@ fn a_project_entry_that_is_absolute_once_expanded_is_not_joined_to_the_worktree(
             (0, relative.clone())
         ]
     );
-    // Only the one that lies outside asks no question: the others lie in the worktree.
     let worktrees = [worktree.as_path()];
     assert!(!inside(&outside, &worktrees));
     assert!(inside(&in_root, &worktrees));
     assert!(inside(&relative, &worktrees));
 }
 
-/// A `/bin/sh` script of the test's own at `path`.
 fn script(path: &Path, body: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
@@ -643,8 +601,6 @@ fn a_navigator_tries_rustups_proxy_before_the_machines_copy_with_no_question_and
             ("src/lib.rs", "pub fn f() {}\n"),
         ],
     );
-    // Both copies write one line to one file and end at once, so that the file's first line
-    // is the copy that was tried first. The proxy writes what it was told about installing.
     let log = scratch.root.join("rust.log");
     let proxy = scratch.root.join("cargo").join("bin").join("rust-analyzer");
     let machine = scratch.root.join("bin").join("rust-analyzer");
@@ -659,7 +615,6 @@ fn a_navigator_tries_rustups_proxy_before_the_machines_copy_with_no_question_and
     );
 
     let mut config = scratch.config(yaar_navigator::BUILTIN);
-    // The scratch's environment says it already; only the row may.
     config
         .environment
         .retain(|(name, _)| name != "RUSTUP_AUTO_INSTALL");
@@ -671,15 +626,13 @@ fn a_navigator_tries_rustups_proxy_before_the_machines_copy_with_no_question_and
     );
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(config);
-    // No answer has been given on the servers inside the repository.
     running.ask(Ask::Consents(vec![]));
     running.show(&repo, &ws, &repository);
 
-    // A trial run that ended with success lets the server start, and shows its process: the
-    // proxy's trial has written its line by then.
+    // A trial run that succeeds lets the server start; the proxy's trial has written its line by
+    // then.
     let started = running.wait_state(&ws, "rust", None, DEADLINE, |state| state.pid.is_some());
     assert_eq!(started.program, Some(proxy));
-    // The line stays in the file once it is there, so it is waited for.
     let written = wait_for("the first line of the copies' log", || {
         let written = lines_of(&log);
         (!written.is_empty()).then_some(written)
@@ -689,7 +642,6 @@ fn a_navigator_tries_rustups_proxy_before_the_machines_copy_with_no_question_and
         Some("proxy 0"),
         "the proxy is the first copy tried, with no install asked for: {written:?}"
     );
-    // No question was shown on the way: the proxy lies outside the repository.
     for told in &running.told {
         if let Told::Servers(list) = told {
             assert!(
@@ -703,11 +655,6 @@ fn a_navigator_tries_rustups_proxy_before_the_machines_copy_with_no_question_and
     running.end();
 }
 
-// A variable in a server's `args` and `environment`, put in when it starts
-
-/// A copy of the stand-in at `folder/name` that first appends one line, its arguments and
-/// then what it holds as `PROBE`, to `ran`, and then is the stand-in: what it was started
-/// with, and what it was started in.
 fn probing_standin(folder: &Path, name: &str, ran: &Path) {
     script(
         &folder.join(name),
@@ -719,8 +666,6 @@ fn probing_standin(folder: &Path, name: &str, ran: &Path) {
     );
 }
 
-/// Looks at `look` again until it gives something, up to `DEADLINE`: a fact that stays true
-/// once it is, as a line of a file another program writes.
 fn wait_for<T>(what: &str, mut look: impl FnMut() -> Option<T>) -> T {
     let until = std::time::Instant::now() + support::DEADLINE;
     loop {
@@ -736,7 +681,6 @@ fn wait_for<T>(what: &str, mut look: impl FnMut() -> Option<T>) -> T {
     }
 }
 
-/// The lines of `file`, none while it is not there.
 fn lines_of(file: &Path) -> Vec<String> {
     std::fs::read_to_string(file)
         .map(|text| text.lines().map(str::to_owned).collect())
@@ -773,8 +717,8 @@ fn a_variable_in_the_args_and_the_environment_of_a_server_is_put_in_from_the_ser
         state.state == State::Ready
     });
 
-    // The script writes its line before it becomes the stand-in, which may be after the
-    // state that showed its process.
+    // The script writes its line before it becomes the stand-in, which may be after the state that
+    // showed its process.
     let started = format!("--log {}|its value", log.display());
     wait_for("the line of the started server", || {
         lines_of(&ran).contains(&started).then_some(())
@@ -810,15 +754,14 @@ fn a_variable_in_the_args_or_the_environment_that_the_servers_environment_lacks_
     let mut running = Running::start(scratch.config(table));
     running.show(&repo, &ws, &repository);
 
-    // The third server is tried after the first two failed to start, so its being ready is
-    // the barrier for what they did not do.
+    // The third server is tried after the first two failed to start: its being ready is the
+    // barrier.
     let state = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
     });
     assert_eq!(state.server.as_deref(), Some("good"));
     assert_eq!(state.program, Some(bin.join("good-lsp")));
     for ran in [&args_ran, &environment_ran] {
-        // Their trial run (`--version`) has no variable; they were never started.
         let lines = lines_of(ran);
         assert!(
             lines.iter().all(|line| line.starts_with("--version|")),

@@ -1,41 +1,7 @@
 #!/bin/bash
-# The step "The index and the checksums verify with the key the site publishes" of
-# assemble-release: what a user's apt and a user who checks by hand will verify.
-#
-#   .github/scripts/verify-signed.sh <final-dir>
-#
-# With a keyring made in a temporary folder from <final-dir>/site/apt/yaar-review.asc alone:
-# `gpgv` accepts site/apt/dists/stable/InRelease, site/apt/dists/stable/Release.gpg against
-# Release, and release/SHA256SUMS.asc against release/SHA256SUMS; the key's fingerprint
-# equals packaging/apt/project-key.fingerprint; every Packages file's hash is the one
-# InRelease names; every .deb the Packages files name is in the pool with the size and SHA-256
-# they name. And the site's install.sh is the one a user may run: it holds neither
-# "@BASE_URL@" nor "@TEAM_ID@", its DEFAULT_BASE_URL is the line of packaging/site/base-url,
-# and its team id is the line of packaging/macos/team-id.
-#
-# Exit codes: 0 all verify; 1 one does not; 2 usage error.
-#
-# Beyond the header's list, and each a fault named on its own line of standard error, as
-# release-files-check.sh does (all that is wrong at once; exit 1):
-#   - every signature is by the key whose fingerprint the repository holds (gpgv's VALIDSIG
-#     names it), the key file holds exactly one key, and the keyring is read in a folder of
-#     the script's own, never the GNUPGHOME of the job, which holds the secret key;
-#   - the text gpgv returns for InRelease is the Release file beside it, and InRelease is that
-#     one clear-signed block and no other text before or after it (gpgv accepts such text,
-#     apt refuses it);
-#   - the hashes are read from that verified text: every file it names (MD5Sum, SHA1, SHA256
-#     and SHA512 sections, whichever it holds; SHA256 it must hold) is there with the size and
-#     hash named, and every Packages file under dists/stable is named in its SHA256 section;
-#   - every .deb of the pool is named by a Packages file, and each .deb of release/ is in the
-#     pool with its own bytes;
-#   - the key's fingerprint line, the base address and the team id are each the one line of
-#     their file under its comments, and a missing line is a fault: a release is signed with
-#     a key whose fingerprint is on record, and the install script names the team that signs
-#     the app;
-#   - install.sh has exactly one top-level line DEFAULT_BASE_URL= and one TEAM_ID=, each the
-#     whole of what it should be, and index.html holds no placeholder.
-# It reads the repository it lies in (packaging/apt/project-key.fingerprint,
-# packaging/site/base-url, packaging/macos/team-id). A missing tool is a fault, never a pass.
+# Verifies the signed apt index, the checksums and install.sh of an assembled release with only
+# the key the site publishes. .github/scripts/verify-signed.sh <final-dir>
+# Exit 1: a fault, each named on standard error.
 set -euo pipefail
 
 NAME=verify-signed.sh
@@ -58,8 +24,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/yaar-verify-signed.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
-# Neither the job's own GNUPGHOME (it holds the secret key) nor the user's: a folder of this
-# script's, holding no key at all but the one made below.
+# A keyring of its own: the job's GNUPGHOME holds the secret key.
 GNUPGHOME=$TMP/gnupg
 export GNUPGHOME
 mkdir -m 700 "$GNUPGHOME"
@@ -69,7 +34,6 @@ APT=$SITE/apt
 DISTS=$APT/dists/stable
 REL=$FINAL/release
 
-# The first line of a file that is not blank and not a comment.
 first_line() {
   awk '/^[ \t]*(#|$)/ { next } { print; exit }' "$1"
 }
@@ -80,7 +44,6 @@ size_of() {
   wc -c < "$1" | awk '{ print $1 }'
 }
 
-# What the repository records.
 WANT=
 FPR_FILE=$ROOT/packaging/apt/project-key.fingerprint
 if [ ! -f "$FPR_FILE" ]; then
@@ -122,7 +85,6 @@ else
   fi
 fi
 
-# The key the site publishes, alone.
 KEYRING=$TMP/site-key.gpg
 HAVE_KEYRING=0
 ASC=$APT/yaar-review.asc
@@ -144,8 +106,8 @@ else
   fi
 fi
 
-# verify_sig <what> <gpgv arguments>: the signature verifies and is by the project's key. It
-# records a fault and returns 0 either way, so that every check runs.
+# verify_sig <what> <gpgv args>: the signature must verify and be by the project's key; a
+# failure records a fault, and it returns 0 either way so that every check runs.
 verify_sig() {
   local what=$1
   shift
@@ -167,8 +129,7 @@ if [ "$HAVE_KEYRING" -eq 1 ]; then
   if [ -f "$DISTS/InRelease" ]; then
     if gpgv --keyring "$KEYRING" --status-fd 3 --output "$TMP/InRelease.text" "$DISTS/InRelease" 3> "$TMP/status" 2> "$TMP/gpgv.err"; then
       INRELEASE_TEXT=$TMP/InRelease.text
-      # gpgv verifies the signed block wherever it lies in the file; apt reads a file that is
-      # that block and nothing else (it refuses other text around it as NOSPLIT).
+      # gpgv accepts the signed block anywhere in the file; apt refuses other text around it.
       if ! awk '
         { line[NR] = $0 }
         $0 == "-----BEGIN PGP SIGNED MESSAGE-----" { begun++ }
@@ -197,7 +158,7 @@ if [ "$HAVE_KEYRING" -eq 1 ]; then
   fi
 fi
 
-# The hashes InRelease names, read from the text gpgv returned, never from the file as it lies.
+# Hashes are read from the text gpgv returned, never from the file as it lies.
 if [ -n "$INRELEASE_TEXT" ]; then
   awk '
     /^[^ \t]/ { sec = ""; if ($1 == "MD5Sum:") sec = "md5"; else if ($1 == "SHA1:") sec = "sha1"; else if ($1 == "SHA256:") sec = "sha256"; else if ($1 == "SHA512:") sec = "sha512"; next }
@@ -221,7 +182,6 @@ if [ -n "$INRELEASE_TEXT" ]; then
       fault "$DISTS/$path has not the $alg hash that InRelease names: it was changed after it was signed"
     fi
   done < "$TMP/named"
-  # Every Packages file there is must be one InRelease names.
   ALL_PACKAGES=$(find "$DISTS" -type f -name 'Packages*' | LC_ALL=C sort) || { fault "the files under $DISTS cannot be listed"; ALL_PACKAGES=; }
   while IFS= read -r pf; do
     [ -n "$pf" ] || continue
@@ -231,8 +191,6 @@ if [ -n "$INRELEASE_TEXT" ]; then
   done <<< "$ALL_PACKAGES"
 fi
 
-# Every .deb a Packages file names is in the pool with the size and SHA-256 it names, and
-# every .deb of the pool is named.
 NPACK=0
 : > "$TMP/indexed"
 PACKAGES_FILES=$(find "$DISTS" -type f -name Packages 2> /dev/null | LC_ALL=C sort) || { fault "the files under $DISTS cannot be listed"; PACKAGES_FILES=; }
@@ -292,7 +250,6 @@ if [ -d "$REL" ]; then
   done
 fi
 
-# The install script a user pipes into bash, and the page.
 INSTALL=$SITE/install.sh
 if [ ! -f "$INSTALL" ]; then
   fault "$INSTALL is missing"
@@ -301,7 +258,6 @@ else
     n=$(awk -v ph="$ph" 'index($0, ph) { c++ } END { print c + 0 }' "$INSTALL") || { fault "$INSTALL cannot be read"; n=0; }
     [ "$n" = 0 ] || fault "$INSTALL still holds the placeholder $ph, on $n line(s): the script is not one a user may run"
   done
-  # The one top-level assignment of each, whole.
   assigned() { # variable, wanted line
     awk -v var="$1" -v want="$2" '
       index($0, var "=") == 1 { n++; if ($0 == want) good++ }

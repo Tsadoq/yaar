@@ -1,5 +1,3 @@
-//! The engine over the Store and the Recorder: what the Keeper calls.
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
@@ -20,105 +18,62 @@ use crate::takeover::{Takeover, takeover};
 use crate::viewed::{ViewedFiles, fingerprint};
 use crate::workspace::with_review_of_no_agent;
 
-/// Where a new thread sits, as the Window names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAnchor {
-    /// The version the lines are read in: the full id of a commit, a recorded state's or
-    /// one of the real repository's, never the id of a git tree object. None for lines of
-    /// the files on disk, for which the engine records the state of the worktree first
-    /// and puts the thread on it. A thread whose path is absolute has no version, and a
-    /// tree named with such a path is not read: the path decides.
+    /// Full id of a commit, never a git tree id. None for the files on disk: the engine records the
+    /// worktree's state first. Ignored for an absolute path.
     pub tree: Option<String>,
-    /// The path of the file in that version, relative to the folder of the worktree: on
-    /// the old side of a renamed file its old path, on the new side its path now. An
-    /// absolute path names a file outside the worktree, or one inside it that git ignores:
-    /// see [`Reviews::save_draft`].
     pub path: PathBuf,
-    /// The side of the diff the lines were on.
     pub side: Side,
-    /// The first line, counted from 1.
     pub first: u32,
-    /// The last line, counted from 1.
     pub last: u32,
-    /// The text of the lines as the reviewer saw them, joined by line feeds.
     pub text: String,
 }
 
-/// What a draft that is saved belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DraftOn {
-    /// It is the first comment of a new thread that sits here.
     NewThread(NewAnchor),
-    /// It is a comment of a thread that exists: an edit of a draft, or a reply.
     Thread,
 }
 
-/// One save of a draft, as typed: the whole text, with the ids the Window drew.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DraftSave {
-    /// The thread: new when `on` starts one.
     pub thread: ThreadId,
-    /// The comment.
     pub comment: CommentId,
-    /// What it belongs to.
     pub on: DraftOn,
-    /// The whole text.
     pub text: String,
 }
 
-/// What a save of a draft did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Saved {
-    /// It made the comment, and with it the thread when it started one: the reviews
-    /// changed for every Window.
     Made,
-    /// It changed the text of a draft that was kept.
     Text,
 }
 
-/// A review copied as text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Copied {
-    /// The text, for the clipboard.
     pub text: String,
-    /// The number of the round the copied comments were sent in.
     pub round: u32,
 }
 
-/// The reviews of one workspace, and its files marked viewed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceView {
-    /// Its reviews: at least one.
     pub reviews: Vec<Review>,
-    /// The files marked viewed whose content has not changed since, ordered by path;
-    /// empty when no worktree was given.
     pub viewed: Vec<PathBuf>,
 }
 
-/// Why the engine did not do what was asked.
 #[derive(Debug)]
 pub enum EngineError {
-    /// The review refused the change; the error says why.
     Refused(ReviewError),
-    /// The Store holds no review by this id.
     UnknownReview(ReviewId),
-    /// A path leads out of the worktree.
     OutsideWorktree(PathBuf),
-    /// A new thread on the files on disk, or a send, needs the worktree, and there is none:
-    /// it is gone.
     NoWorktree,
-    /// The Store failed.
     Store(StoreError),
-    /// A state could not be recorded.
     Record(RecordError),
-    /// git failed while a state was read.
     Git(GitError),
-    /// The system gave no random number for the id of a new review.
     Random(std::io::Error),
-    /// The Store holds no review of this session: it holds no such session, or the
-    /// session was never told to the engine as started.
     NoReviewOfSession(SessionId),
-    /// What was to hand out a review that rides with a message failed: nothing was sent.
+    /// Nothing was sent.
     HandOut(std::io::Error),
 }
 
@@ -167,68 +122,37 @@ impl From<GitError> for EngineError {
     }
 }
 
-/// The reviews of every workspace, kept in the Store, with the states of each worktree
-/// recorded in a store of its own under one folder.
-///
-/// It may be used from several threads at once. Each call that changes something reads
-/// it from the Store, applies the rules of [`Review`], and keeps the change through the
-/// Store's calls; a change the rules refuse changes nothing. Those reads and writes are
-/// made one call at a time, [`Reviews::of_workspace`] included, since it may keep a review
-/// and take marks away: two calls never read the same thing and both write it back. A
-/// state is recorded before that turn is taken, never during it, so that a recording,
-/// which can take a second or more, holds up no other call.
-///
-/// The workspace of a call that names a review is the review's own, as the Store holds
-/// it. The state store of a workspace is `<states>/<workspace id>.git`, opened at its
-/// first use and kept.
+/// The reviews of every workspace, kept in the Store; the states of each worktree live in
+/// `<states>/<workspace id>.git`. Each change is read and written under one turn; a state is
+/// recorded before the turn is taken, since a recording can take a second.
 #[derive(Debug)]
 pub struct Reviews {
     pub(crate) store: Store,
     git: Git,
-    // The folder of the state stores; the clean-up reads it (`expiry.rs`).
     pub(crate) states: PathBuf,
-    // The state store of each workspace, once opened. The clean-up of a gone worktree's
-    // store takes its entry out (`expiry.rs`).
     pub(crate) opened: Mutex<BTreeMap<WorkspaceId, Arc<StateStore>>>,
-    // Held by each call while it reads what it changes and keeps the change.
     writing: Mutex<()>,
-    // What tells whether files changed since the newest state, and hears of each state
-    // taken; none records at every new thread, as slice 3 did.
     watch: Option<Arc<dyn StateWatch>>,
-    // Where the time a state is recorded at, and the time now, are read.
     pub(crate) clock: Arc<dyn Clock>,
 }
 
-/// What tells the engine whether the files of a worktree changed since its newest state,
-/// so that a new thread on unchanged files sits on that state and records none; and hears
-/// of every state the engine takes, so that what changed is counted from it.
+/// Tells whether a worktree's files changed since its newest state; hears of every state taken.
 pub trait StateWatch: fmt::Debug + Send + Sync {
-    /// Whether the files of `workspace` may have changed since its newest state: true when
-    /// it cannot tell.
+    /// True when it cannot tell.
     fn changed_since_state(&self, workspace: &WorkspaceId) -> bool;
 
-    /// A state of `workspace` was taken now.
     fn state_taken(&self, workspace: &WorkspaceId, state: &StateId);
 }
 
-/// What a turn that ended leaves: the state recorded at its end, and what changed since
-/// the last review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnEnded {
-    /// The state recorded at the end of the turn.
     pub state: StateId,
-    /// The state the reviewer last marked reviewed in the session's review; none before
-    /// the first mark.
     pub since: Option<String>,
-    /// What changed since the last review: the paths that differ from `since` to `state`,
-    /// or, before the first mark, from the start the caller gave to `state`; none with no
-    /// start either, as where nothing was committed.
+    /// From `since`, or from the caller's start before the first mark; None with neither.
     pub changed: Option<Vec<ChangedPath>>,
 }
 
 impl Reviews {
-    /// The reviews kept in `store`, with the states of each worktree recorded through
-    /// `git` in a folder under `states`, which lies in the app's folder.
     pub fn new(store: Store, git: Git, states: PathBuf) -> Reviews {
         Reviews {
             store,
@@ -241,31 +165,19 @@ impl Reviews {
         }
     }
 
-    /// The same engine, with the time read from `clock`: the time each state is recorded
-    /// at, which every state store it opens from now on is handed, and the time now, which
-    /// [`Reviews::expire`] counts a state's age to. The Keeper hands the system's clock; a
-    /// test of the set time hands one of its own that it moves forward. Call it before the
-    /// first state store is opened.
+    /// Call before the first state store is opened: the clock stamps every store opened afterwards.
     pub fn with_clock(self, clock: Arc<dyn Clock>) -> Reviews {
         let mut engine = self;
         engine.clock = clock;
         engine
     }
 
-    /// The same engine, told by `watch` whether files changed since the newest state: a
-    /// new thread on the files on disk then records a state only when they did, and every
-    /// state the engine takes is told to `watch`.
     pub fn watching(self, watch: Arc<dyn StateWatch>) -> Reviews {
         let mut engine = self;
         engine.watch = Some(watch);
         engine
     }
 
-    /// `session` starts: it keeps its review, takes one over, or gets a new one, by
-    /// [`crate::takeover`] over the reviews and the sessions the Store holds for its
-    /// workspace, and that is kept, under the engine's turn, before this returns. Gives
-    /// the session's review. The session itself is the caller's to keep in the Store
-    /// before.
     pub fn session_started(&self, session: &SessionRecord) -> Result<ReviewId, EngineError> {
         let _turn = self.turn();
         let reviews: Vec<Review> = self
@@ -293,11 +205,8 @@ impl Reviews {
         }
     }
 
-    /// A turn of `session` ended in `worktree`: records the state of the worktree, and
-    /// gives it with what changed since the last review of the session's review, counted
-    /// from `start` before the first mark. The turn's record is the caller's to keep.
-    /// Refused with [`EngineError::NoReviewOfSession`] for a session that has no review,
-    /// and then nothing is recorded.
+    /// Refused with [`EngineError::NoReviewOfSession`] for a session with no review, recording
+    /// nothing.
     pub fn turn_ended(
         &self,
         worktree: &Worktree,
@@ -318,18 +227,15 @@ impl Reviews {
                 .ok_or_else(|| EngineError::NoReviewOfSession(session.clone()))?;
             (kept.workspace, review.id)
         };
-        // The recording can take a second: no turn is held while it runs.
         let state = self.record_state(&workspace, worktree)?.id;
 
-        // What the review marked reviewed is read after the recording, so that a mark made
-        // while it ran counts.
+        // Read after the recording, so a mark made while it ran counts.
         let since = self.review(&review)?.reviewed().map(str::to_owned);
         let states = self.states_of(&workspace)?;
         let changed = match (&since, start) {
             (Some(reviewed), _) => Some(states.changed_paths(reviewed, state.as_str())?),
-            // The commit of the real repository is copied into the state store when it lacks
-            // it, and compared with the state, in one call of the store, so that no clean-up
-            // of the store can take the copy away between the two.
+            // Copied into the state store and compared in one call, so no clean-up can take the
+            // copy away between the two.
             (None, Some(start)) => {
                 Some(states.compare(Some(worktree), start.as_str(), Some(state.as_str()))?)
             }
@@ -342,11 +248,9 @@ impl Reviews {
         })
     }
 
-    /// The reviews of a workspace, whole, and its files marked viewed. A workspace with no
-    /// review of an agent session gets its review of no agent here, kept at once, when it
-    /// has none: one, also when several calls ask at once. Marks of files whose content
-    /// changed since they were marked are taken away, and that is kept, before the view is
-    /// given; with no `worktree`, as for a worktree that is gone, no file is viewed.
+    /// A workspace with no review at all gets its review of no agent here, kept at once, so calls
+    /// that race make only one. Viewed marks of files changed since marking are cleared; with no
+    /// `worktree` no file is viewed.
     pub fn of_workspace(
         &self,
         workspace: &WorkspaceId,
@@ -363,8 +267,6 @@ impl Reviews {
         let known = reviews.len();
         reviews = with_review_of_no_agent(workspace, reviews, || fresh);
         if reviews.len() > known {
-            // The review is kept before it is given, so that its id is the same at the
-            // next reading.
             let added = reviews.last().expect("a review was added");
             self.store.put_review(added.record())?;
         }
@@ -377,7 +279,6 @@ impl Reviews {
                     .into_iter()
                     .map(|record| (record.path, record.content)),
             );
-            // A file that cannot be read counts as no file.
             let cleared = marks.settle(|path| worktree.content_on_disk(path).ok().flatten());
             for path in cleared {
                 self.store.set_viewed(workspace, &path, None)?;
@@ -387,7 +288,6 @@ impl Reviews {
         Ok(WorkspaceView { reviews, viewed })
     }
 
-    /// One review, whole, as kept.
     pub fn review(&self, review: &ReviewId) -> Result<Review, EngineError> {
         self.store
             .review(review)?
@@ -395,35 +295,17 @@ impl Reviews {
             .ok_or_else(|| EngineError::UnknownReview(review.clone()))
     }
 
-    /// Keeps one save of a draft of `review`.
-    ///
-    /// A comment the review holds has its text changed, [`Saved::Text`]: the save made at
-    /// each keystroke, which needs no worktree, records nothing and does not wait for the
-    /// drive. A sent comment is refused, as the rules of [`Review`] say.
-    ///
-    /// A comment the review does not hold is made: with [`DraftOn::Thread`] a reply; with
-    /// [`DraftOn::NewThread`] the first comment of a new thread, whose anchor, when it
-    /// names no tree, is put on the state of `worktree` recorded now (refused with
-    /// [`EngineError::NoWorktree`] when none is given), and when it names a commit has that
-    /// commit kept in the state store first when a worktree is given. That is a change
-    /// every Window is told of, [`Saved::Made`], and it waits for the drive. A save that
-    /// finds, once its state is recorded, that a save of the same comment made the thread
-    /// meanwhile changes the text instead.
-    ///
-    /// A new thread whose anchor's path is absolute sits on a file outside the worktree, or
-    /// one git ignores, reached through go to definition or a reference (FR-075): it names
-    /// no tree, needs no worktree, records no state and keeps no commit; it is kept with the
-    /// empty version, which the Keeper gives the Window as none, and is never carried
-    /// through a diff (`following.rs`). It is kept on the new side whatever side the save
-    /// gave: such a file has one. Its lines and text are checked as any anchor's.
+    /// Saves a draft: a comment the review holds has its text changed ([`Saved::Text`], the
+    /// keystroke save: records nothing, does not wait for the drive), else it is made
+    /// ([`Saved::Made`]). A new thread with no tree sits on the state of `worktree` recorded now.
+    /// An absolute anchor path has no version and is kept on the new side.
     pub fn save_draft(
         &self,
         worktree: Option<&Worktree>,
         review: &ReviewId,
         save: &DraftSave,
     ) -> Result<Saved, EngineError> {
-        // The version of a new thread is found without the turn, since recording a state
-        // takes long; it is only looked for once the turn has shown that it is needed.
+        // Found without the turn: recording a state takes long.
         let mut version: Option<String> = None;
         loop {
             let turn = self.turn();
@@ -446,8 +328,6 @@ impl Reviews {
                         version = Some(self.version_of(worktree, current.workspace(), at)?);
                         continue;
                     };
-                    // A file outside the worktree has no old version to be on, so its
-                    // thread is on the new side whatever the save gave.
                     let side = if is_outside(&at.path) {
                         Side::New
                     } else {
@@ -475,7 +355,6 @@ impl Reviews {
         }
     }
 
-    /// Deletes a draft of a review, and its thread when nothing is left of it.
     pub fn delete_draft(&self, review: &ReviewId, comment: &CommentId) -> Result<(), EngineError> {
         let _turn = self.turn();
         let mut current = self.review(review)?;
@@ -484,9 +363,6 @@ impl Reviews {
         Ok(())
     }
 
-    /// Marks the change reviewed: records the state of `worktree`, the worktree of the
-    /// review's workspace, as it is now and makes it the reviewed state of the review,
-    /// from which the next review starts. No commit is made. Gives the state.
     pub fn mark_reviewed(
         &self,
         worktree: &Worktree,
@@ -502,10 +378,7 @@ impl Reviews {
         Ok(state.id)
     }
 
-    /// What counts as changed since the last review: the paths that differ between the
-    /// reviewed state and the state of `worktree`, the worktree of the review's workspace,
-    /// recorded now. None before the first mark. A commit, made through the app or not,
-    /// changes nothing of it, since it changes no file.
+    /// None before the first mark; a commit changes no file, so changes nothing here.
     pub fn changed_since_review(
         &self,
         worktree: &Worktree,
@@ -520,9 +393,6 @@ impl Reviews {
         Ok(Some(states.changed_paths(reviewed, now.id.as_str())?))
     }
 
-    /// Marks a file of a workspace viewed for its content now, or takes the mark away.
-    /// `path` is relative to the folder of the worktree; one that leads out of it is
-    /// refused.
     pub fn set_viewed(
         &self,
         workspace: &WorkspaceId,
@@ -548,8 +418,6 @@ impl Reviews {
         Ok(())
     }
 
-    /// The state store of a workspace, where its states are recorded: what reads a state
-    /// back.
     pub fn states_of(&self, workspace: &WorkspaceId) -> Result<Arc<StateStore>, EngineError> {
         let mut opened = self.opened.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(found) = opened.get(workspace) {
@@ -565,8 +433,8 @@ impl Reviews {
         Ok(store)
     }
 
-    // Records the state of `worktree` in the state store of `workspace` and tells the watch
-    // of it: every state the engine takes goes through here.
+    // Every state the engine takes goes through here, so the watch hears of it and threads are
+    // carried to it.
     pub(crate) fn record_state(
         &self,
         workspace: &WorkspaceId,
@@ -576,37 +444,32 @@ impl Reviews {
         if let Some(watch) = &self.watch {
             watch.state_taken(workspace, &state.id);
         }
-        // Every thread of the workspace is carried to each state the engine takes, one
-        // state at a time.
         self.followed(workspace, &state.id);
         Ok(state)
     }
 
-    // The turn: held while a call reads what it changes and keeps the change.
     pub(crate) fn turn(&self) -> MutexGuard<'_, ()> {
         self.writing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    // The version a new thread's lines are read in: the commit the window named, kept in
-    // the state store so that it reads with the repository gone, the state of the files on
-    // disk, recorded now, or, for a file outside the worktree, the empty version.
+    // The version a new thread's lines are read in: the named commit kept in the state store (it
+    // reads with the repository gone), the state of the files on disk recorded now, or empty for a
+    // file outside the worktree.
     fn version_of(
         &self,
         worktree: Option<&Worktree>,
         workspace: &WorkspaceId,
         at: &NewAnchor,
     ) -> Result<String, EngineError> {
-        // A file outside the worktree has no version, and nothing is recorded or kept for it.
         if is_outside(&at.path) {
             return Ok(String::new());
         }
         match (&at.tree, worktree) {
             (None, None) => Err(EngineError::NoWorktree),
             (None, Some(worktree)) => {
-                // Files nobody changed since the newest state are that state: a thread
-                // goes on it, and nothing is recorded, unless there is no state yet. The
-                // watcher tells of a write a moment after it, and a Window may have read
-                // the new lines by then, so the state must hold the lines too.
+                // The watcher reports a write a moment after it and a Window may have read the new
+                // lines by then, so the state must hold them (`holds_lines`); files nobody changed
+                // since the newest state are that state.
                 let unchanged = self
                     .watch
                     .as_ref()
@@ -636,14 +499,11 @@ impl Reviews {
     }
 }
 
-/// Whether an anchor's path names a file outside the worktree, or one inside it that git
-/// ignores: the Window gives such a file by its absolute path. Its thread has no version
-/// and is never carried through a diff.
+/// A file outside the worktree or one git ignores: no version, never carried through a diff.
 pub(crate) fn is_outside(path: &Path) -> bool {
     path.is_absolute()
 }
 
-// Whether the file `content` has, on the lines the anchor names, the text the anchor holds.
 fn holds_lines(content: &[u8], at: &NewAnchor) -> bool {
     let Ok(content) = std::str::from_utf8(content) else {
         return false;
@@ -663,7 +523,6 @@ fn holds_lines(content: &[u8], at: &NewAnchor) -> bool {
         .is_some_and(|held| held.join("\n") == at.text)
 }
 
-// 32 lowercase hexadecimal digits from the random numbers of the system.
 pub(crate) fn random_id() -> Result<String, EngineError> {
     let mut bytes = [0u8; 16];
     std::fs::File::open("/dev/urandom")

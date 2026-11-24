@@ -1,37 +1,7 @@
 #!/bin/sh
-# Shows what serve-site.sh must do when the machine it runs on is not as quick or as
-# tidy as the one it was written on. The install jobs rest on it: a server that does not
-# answer in time, or answers "not modified" to a site that changed, fails a job for a reason
-# that has nothing to do with the app.
-#
-#   .github/scripts/serve-site-check.sh
-#
-# Needs what serve-site.sh needs (python3, curl, ps), on Linux or macOS. It serves fake
-# files from 127.0.0.1 on a port the system hands it, makes its folders in a scratch folder
-# (RUNNER_TEMP and TMPDIR of the runs are in it), and reads nothing of the user's. Three
-# cases, each on its own port; the first two stand in for a python3 that is slow, by a
-# sitecustomize.py on PYTHONPATH of the server's own process:
-#   1. The reverse lookup of 127.0.0.1 takes 15 s (what python3's own server asks the
-#      resolver at its bind, and what GitHub's Mac answered slowly once): `start` must still
-#      serve within its 10 s, and a GET of /install.sh and of /download/ must answer 200
-#      with the files' bytes.
-#   2. The server's process hangs before it binds: `start` must fail, in its 10 s, with the
-#      sentence "did not answer 200 within 10 s" and the server's log, and the process it
-#      started must be gone when it returns, so that nothing holds the port for the steps
-#      after.
-#   3. The site is switched to one whose files are older than the ones served before (a new
-#      deployment need not be newer to the second): a GET with the Last-Modified of the first
-#      answer as If-Modified-Since must answer 200 with the new bytes, not 304, since apt
-#      sends exactly that header and a 304 keeps the old index of the repository.
-# Controls: the sitecustomize really slows the lookup and really hangs (read in a python3
-# of its own, before the cases), and case 3 has a first answer whose Last-Modified is a
-# real date.
-#
-# Exit codes: 0 holds; 1 does not.
-#
-# What the header leaves: a process of the cases is found by the process id that the
-# sitecustomize writes to a file before it does anything else, never by name; the processes
-# of a failed case are ended at the end, whatever happens, and the scratch folder removed.
+# Shows what serve-site.sh does on a slow or untidy machine: a late or hung server, a changed site.
+# .github/scripts/serve-site-check.sh   Needs python3, curl, ps. A sitecustomize.py on the server's
+# PYTHONPATH stands in for a slow python3; processes are found by the pid it writes, not by name.
 set -eu
 
 NAME=serve-site-check.sh
@@ -97,7 +67,6 @@ free_port() {
   python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
-# True while the process is there and is not a zombie.
 alive() {
   kill -0 "$1" 2> /dev/null || return 1
   state=$(ps -o stat= -p "$1" 2> /dev/null) || return 1
@@ -121,7 +90,6 @@ printf 'a package\n' > "$SCRATCH/release/package.txt"
 touch -t 202601010000 "$SCRATCH/release/package.txt"
 printf 'a sum\n' > "$SCRATCH/release/SHA256SUMS"
 
-# --- The controls: the stand-in is what the cases say it is.
 [ "$(YAAR_CHECK_LOOKUP_DELAY=15 PYTHONPATH="$SCRATCH/slow" python3 -c 'import socket; print(socket.gethostbyaddr.__module__)')" = sitecustomize ] \
   || fail "control: the sitecustomize did not reach the python3 it was put in front of"
 started=$(date +%s)
@@ -135,10 +103,10 @@ started=$(date +%s)
 YAAR_CHECK_HANG=2 PYTHONPATH="$SCRATCH/slow" python3 -c 'pass'
 [ "$(($(date +%s) - started))" -ge 2 ] || fail "control: a python3 with the hang set did not wait"
 
-# --- 1. A slow reverse lookup does not keep the server from starting.
 port=$(free_port)
 PORTS="$PORTS $port"
 : > "$SCRATCH/pids"
+# python3's own server does a reverse lookup of 127.0.0.1 when it binds.
 began=$(date +%s)
 if ! YAAR_CHECK_PIDS="$SCRATCH/pids" YAAR_CHECK_LOOKUP_DELAY=15 PYTHONPATH="$SCRATCH/slow" \
   "$SERVE" start "$SCRATCH/site-a" "$SCRATCH/release" "$port" > "$SCRATCH/out" 2>&1; then
@@ -150,7 +118,6 @@ fi
 "$SERVE" stop "$port" > /dev/null || fail "case 1: the server could not be stopped"
 echo "$NAME: case 1: the server serves within 10 s though the reverse lookup of 127.0.0.1 takes 15 s"
 
-# --- 2. A server that cannot start is ended by start, whose sentence says so.
 port=$(free_port)
 PORTS="$PORTS $port"
 : > "$SCRATCH/pids"
@@ -170,7 +137,6 @@ while read -r pid; do
 done < "$SCRATCH/pids"
 echo "$NAME: case 2: a server that cannot start is ended by start, which says why"
 
-# --- 3. A site older than the one before it is served whole to a client that has the first.
 port=$(free_port)
 PORTS="$PORTS $port"
 "$SERVE" start "$SCRATCH/site-a" "$SCRATCH/release" "$port" > /dev/null || fail "case 3: start did not serve"
@@ -178,6 +144,7 @@ url="http://127.0.0.1:$port/apt/dists/stable/InRelease"
 curl -s --max-time 3 -D "$SCRATCH/headers" -o "$SCRATCH/first" "$url" || fail "case 3: the first GET failed"
 modified=$(sed -n 's/^[Ll]ast-[Mm]odified: *//p' "$SCRATCH/headers" | tr -d '\r')
 [ -n "$modified" ] || fail "case 3: the first answer has no Last-Modified"
+# apt sends If-Modified-Since: a 304 here would keep the old index.
 "$SERVE" switch "$SCRATCH/site-b" "$port" > /dev/null || fail "case 3: switch did not point the server at the second site"
 code=$(curl -s --max-time 3 -o "$SCRATCH/second" -w '%{http_code}' -H "If-Modified-Since: $modified" "$url") || fail "case 3: the second GET failed"
 [ "$code" = 200 ] || fail "case 3: a GET after the site changed, with If-Modified-Since: $modified, answered $code and not 200"

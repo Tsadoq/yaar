@@ -1,13 +1,8 @@
-//! The watch for runs of bytes in what a program writes, across the reads that cut it.
-
-/// Looks for each of the runs of bytes it was given in a stream that arrives in pieces.
 pub(crate) struct Scanner {
     marks: Vec<Vec<u8>>,
-    /// The last bytes before the next read, as many as the longest mark less one: a mark
-    /// that began in an earlier read and ends in the next one lies in these and that
-    /// read, and no longer part of the past is needed to find it.
+    /// The last `longest mark - 1` bytes: a mark split across reads lies in the tail plus the next
+    /// read.
     tail: Vec<u8>,
-    /// The tail and the read being scanned, kept to avoid making it for each read.
     window: Vec<u8>,
 }
 
@@ -21,9 +16,8 @@ impl Scanner {
         }
     }
 
-    /// The indexes of the marks that `read` completes, one for each time one is found,
-    /// in the order of their last bytes and, for two ending at one byte, of their index.
-    /// A mark that lies wholly in what came before is not told again.
+    /// Indexes of the marks `read` completes, ordered by last byte, then index. A mark wholly in
+    /// earlier reads is not reported again.
     pub(crate) fn scan(&mut self, read: &[u8]) -> Vec<usize> {
         let longest = self.marks.iter().map(Vec::len).max().unwrap_or(0);
         if longest == 0 {
@@ -73,19 +67,16 @@ mod tests {
     #[test]
     fn a_mark_cut_between_reads_is_found_when_its_last_byte_comes_and_only_then() {
         let mut scanner = scanner(&[b"abcd"]);
-        // One byte at a time: the tail carries it through three reads.
         assert_eq!(scanner.scan(b"xa"), Vec::<usize>::new());
         assert_eq!(scanner.scan(b"b"), Vec::<usize>::new());
         assert_eq!(scanner.scan(b"c"), Vec::<usize>::new());
         assert_eq!(scanner.scan(b"d"), [0]);
-        // What lies in the tail is not found again by the read after.
         assert_eq!(scanner.scan(b"e"), Vec::<usize>::new());
         assert_eq!(scanner.scan(b"fg"), Vec::<usize>::new());
     }
 
     #[test]
     fn a_mark_wholly_in_the_tail_is_not_told_again_by_the_next_read() {
-        // The tail is the last three bytes, `abc`, and the next read adds one more.
         let mut scanner = scanner(&[b"abc", b"wxyz"]);
         assert_eq!(scanner.scan(b"abc"), [0]);
         assert_eq!(scanner.scan(b"d"), Vec::<usize>::new());

@@ -1,60 +1,26 @@
-//! Switchboard (`H-EVENTS, H-SESSION`).
-//!
-//! Owns: what hooks and extensions report, held while no window is attached; and for each
-//! agent session its CLI, terminal, review and state.
-//!
-//! Surface:
-//! - [`Switchboard`], which takes the events the Adapters made of what the CLIs reported,
-//!   and what the Keeper saw itself (a process that is gone, a review marked reviewed),
-//!   keeps every session with its state and its open turn, and gives what changed as
-//!   [`Change`]s, in order;
-//! - [`State`], what a session is doing, and [`shown`], the one state a workspace with
-//!   several sessions shows;
-//! - [`Known`], a session as the Switchboard holds it; [`SessionId`] and [`TurnId`], the
-//!   app's names for a session and a turn;
-//! - [`Resumable`], the offer to resume a session the Keeper's stop cut off, with its
-//!   Adapter's command for it, made by a [`ResumeCommand`]:
-//!   [`Switchboard::remember_resumable`] and [`Switchboard::resumable`].
-//!
-//! The Switchboard decides nothing for the user and answers nothing a CLI asks: it
-//! listens. It keeps sessions in memory; the Keeper keeps what must outlive it in the
-//! Store, from the changes this gives. It knows neither the Link nor the Store, and no CLI
-//! by name: an Adapter's name is a text to it.
+//! Tracks agent sessions from what hooks and extensions report and gives what changed as ordered
+//! [`Change`]s. In memory only.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use yaar_agent::{CliSession, Event, Phase, Reported, TurnEnd};
 
-/// What a session is doing.
-///
-/// The order of the variants is the order in which a workspace with several sessions
-/// shows them, the first first: see [`shown`]. Idle is last, so that the four states the
-/// sidebar marks keep their order among themselves whatever else runs.
+/// Variant order is the display priority of [`shown`], first first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum State {
-    /// The agent waits at a permission prompt for the user's answer.
     WaitsForPermission,
-    /// The agent finished a turn that the reviewer has not marked reviewed since.
     Unreviewed,
-    /// The agent works on a turn.
     Works,
-    /// The session ended, or its process is gone.
     NotRunning,
-    /// The agent runs and waits for the user, with nothing unreviewed.
     Idle,
 }
 
-/// The state a workspace shows for its sessions: the first of these that holds for any
-/// of them, waits for permission, finished a turn and not reviewed, works, not running;
-/// idle only when every one is idle. None for no session.
 pub fn shown(states: impl IntoIterator<Item = State>) -> Option<State> {
-    // `State` is ordered as the sidebar shows it, so the least is the first that holds.
     states.into_iter().min()
 }
 
-/// The app's name for one agent session: 32 lowercase hexadecimal digits, drawn once when
-/// the session first reported in. A session the CLI resumes keeps it.
+/// 32 lowercase hex digits, drawn when the session first reports in; a CLI resume keeps it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SessionId(pub String);
 
@@ -64,7 +30,6 @@ impl fmt::Display for SessionId {
     }
 }
 
-/// The app's name for one turn: 32 lowercase hexadecimal digits, drawn when it started.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TurnId(pub String);
 
@@ -74,134 +39,81 @@ impl fmt::Display for TurnId {
     }
 }
 
-/// One session as the Switchboard holds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Known {
-    /// The app's id of it.
     pub id: SessionId,
-    /// The name of the Adapter of its CLI.
     pub agent: String,
-    /// The CLI's own name for it.
     pub cli: CliSession,
-    /// The terminal it runs in, by the id the app gave it.
     pub terminal: Option<String>,
-    /// The folder its CLI works in, as the last report that named one said.
     pub folder: Option<PathBuf>,
-    /// The process of the CLI; none when no report named one.
     pub pid: Option<u32>,
-    /// What it is doing.
     pub state: State,
-    /// Its open turn, with the number of steps told in it so far; none between turns.
+    /// The open turn with the number of steps told in it so far; None between turns.
     pub turn: Option<(TurnId, u32)>,
 }
 
-/// The offer to resume one session that was running when the Keeper stopped: what the
-/// Window's control for it carries, and what that control runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resumable {
-    /// The app's id of the session.
     pub session: SessionId,
-    /// The name of the Adapter of its CLI.
     pub agent: String,
-    /// The CLI's own name for it: what its command brings back.
     pub cli: CliSession,
-    /// What a terminal runs in the user's shell to bring it back: its Adapter's command,
-    /// as the caller of [`Switchboard::resumable`] made it.
     pub command: String,
 }
 
-/// What makes the command that brings a session back, as [`Switchboard::resumable`] is
-/// given it: from the name of its Adapter, its CLI's id and its CLI's own record of it, the
-/// Adapter's `yaar_agent::Adapter::resume`; none for an Adapter the caller does not have.
+/// None for an Adapter the caller has no command for.
 pub type ResumeCommand = dyn Fn(&str, &CliSession, Option<&Path>) -> Option<String>;
 
-/// What changed, in the order it happened. The Keeper keeps it and tells the Windows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
-    /// A session reported in for the first time, or a session that had ended was resumed
-    /// by its CLI.
     Started {
-        /// The session.
         session: SessionId,
-        /// The name of the Adapter of its CLI.
         agent: String,
-        /// The CLI's own name for it.
         cli: CliSession,
-        /// The terminal it runs in.
         terminal: Option<String>,
-        /// The folder its CLI works in, as its report named it.
         folder: Option<PathBuf>,
-        /// Whether it is a session that ran before, resumed.
         resumed: bool,
     },
-    /// A session's state is now this.
     State {
-        /// The session.
         session: SessionId,
-        /// Its state.
         state: State,
     },
-    /// A turn started.
     TurnStarted {
-        /// The session.
         session: SessionId,
-        /// The turn.
         turn: TurnId,
     },
-    /// The agent took one more step in its open turn: a file read, a file written, or a
-    /// shell command that began.
     Step {
-        /// The session.
         session: SessionId,
-        /// The turn.
         turn: TurnId,
-        /// The number of the step in the turn, from 1.
         number: u32,
-        /// The event that was the step: [`Event::FileRead`], [`Event::FileWritten`] or
-        /// [`Event::Command`] that began.
         event: Event,
     },
-    /// A shell command of the session ended; it is no step, but who wrote what during it
-    /// is judged by when it ran. Also told for a command that began and was never
-    /// reported ended, before the end of its turn or of its session: a command denied at
-    /// its permission prompt, or interrupted, gets no report of its end.
+    /// A shell command ended; it is no step. Also told for one that never reported its end,
+    /// before its turn or session ends.
     CommandEnded {
-        /// The session.
         session: SessionId,
     },
-    /// The open turn ended.
     TurnEnded {
-        /// The session.
         session: SessionId,
-        /// The turn.
         turn: TurnId,
-        /// How.
         how: TurnEnd,
     },
-    /// The session ended, as its CLI reported or as its process went.
     Ended {
-        /// The session.
         session: SessionId,
     },
 }
 
-/// A session with what the Switchboard keeps beside what it tells.
 #[derive(Debug)]
 struct Entry {
     known: Known,
-    /// A permission prompt is open.
     waiting: bool,
-    /// The last turn ended and the review was not marked reviewed since.
     unreviewed: bool,
-    /// A shell command began in the open turn and was not reported ended.
     command_open: bool,
-    /// The Keeper's stop cut the session off and no report of it has been heard since: it
-    /// is offered to resume, with its CLI's own record of it, when it had one.
+    /// Some while the Keeper's stop cut the session off and no report followed; the inner value
+    /// is the CLI's own record of the session, when it had one.
     offer: Option<Option<PathBuf>>,
 }
 
 impl Entry {
-    /// A session as the Store kept it: not running, and no report of it heard yet.
     fn kept(id: SessionId, agent: &str, cli: CliSession) -> Entry {
         Entry {
             known: Known {
@@ -225,8 +137,6 @@ impl Entry {
         self.known.state != State::NotRunning
     }
 
-    /// Tells the state the facts give, when it is not the one told last. For a session
-    /// that runs.
     fn settle(&mut self, changes: &mut Vec<Change>) {
         let state = if self.waiting {
             State::WaitsForPermission
@@ -250,7 +160,7 @@ impl Entry {
         }
     }
 
-    /// Whatever followed a permission prompt is its answer: the wait is over.
+    /// A step after a permission prompt is its answer: the wait is over.
     fn stop_waiting(&mut self, changes: &mut Vec<Change>) {
         if self.waiting {
             self.waiting = false;
@@ -258,8 +168,6 @@ impl Entry {
         }
     }
 
-    /// Ends the open turn, if one is open, after the command it left open. Tells no state:
-    /// the caller does, for it knows where the session goes from here.
     fn close_turn(&mut self, how: TurnEnd, changes: &mut Vec<Change>) {
         if self.command_open {
             self.command_open = false;
@@ -277,8 +185,7 @@ impl Entry {
         }
     }
 
-    /// The session is not running from here: its open turn and command end first, and it
-    /// goes from whatever it was to not running with no state between.
+    /// Ends the open turn and command first, then goes to not running with no state between.
     fn stop(&mut self, changes: &mut Vec<Change>) {
         self.close_turn(TurnEnd::Interrupted, changes);
         self.waiting = false;
@@ -289,33 +196,25 @@ impl Entry {
     }
 }
 
-/// Every agent session the Keeper has heard of since it started, with its state.
 #[derive(Debug, Default)]
 pub struct Switchboard {
     sessions: Vec<Entry>,
 }
 
 impl Switchboard {
-    /// A Switchboard that knows no session.
     pub fn new() -> Switchboard {
         Switchboard::default()
     }
 
-    /// A session the Keeper kept from an earlier run, as it is in the Store: not running.
-    /// Its CLI may resume it, and then it keeps its id.
     pub fn remember(&mut self, session: SessionId, agent: &str, cli: CliSession) {
         if self.find(agent, &cli).is_none() {
             self.sessions.push(Entry::kept(session, agent, cli));
         }
     }
 
-    /// A session the Keeper kept from an earlier run that was running when that Keeper
-    /// stopped, as the Store says: not running, as [`Switchboard::remember`] holds it, and
-    /// offered to resume ([`Switchboard::resumable`]) until a report of it is heard, which
-    /// starts it as its CLI resuming it. `cli_record` is its CLI's own record of it, as its
-    /// reports last named it ([`yaar_agent::Reported::cli_record`]), which its command may
-    /// need.
-    /// A session this Switchboard holds already is left as it is.
+    /// Holds a session kept from an earlier run as not running, and offers it to resume until a
+    /// report of it is heard; `cli_record` is its CLI's own record, which the command may need.
+    /// A session already held is left as it is.
     pub fn remember_resumable(
         &mut self,
         session: SessionId,
@@ -330,13 +229,8 @@ impl Switchboard {
         }
     }
 
-    /// The offers to resume: each session remembered with
-    /// [`Switchboard::remember_resumable`] that no report has been heard of since, in the
-    /// order they were remembered, with the command `command` gives for its Adapter's name,
-    /// its CLI's id and its CLI's own record of it. A session for whose Adapter `command` gives
-    /// none, as one of a CLI the Keeper has no Adapter for, is not offered. A session that
-    /// ran again and ended, by its CLI's word or as its process went, is not offered: only
-    /// a stop of the Keeper cuts a session off.
+    /// The offers to resume, in the order remembered. A session heard of since is not offered,
+    /// nor one whose Adapter `command` gives no command for.
     pub fn resumable(&self, command: &ResumeCommand) -> Vec<Resumable> {
         self.sessions
             .iter()
@@ -354,22 +248,8 @@ impl Switchboard {
             .collect()
     }
 
-    /// Takes one event of the Adapter named `agent`, and gives what it changed, in order.
-    /// `draw` gives a new id, for a session or a turn, each time it is called.
-    ///
-    /// A session first heard of is [`Change::Started`], idle. A turn that starts makes it
-    /// work; a permission it waits for, and its answer, turn waiting on and off; any step
-    /// after a permission it waited for is the answer; a turn that ends, by the CLI's word
-    /// or by the mark of an interrupt, leaves it finished and not reviewed; the session's
-    /// end, not running. An event of a session that has ended is taken as its CLI resuming
-    /// it, unreviewed when its last turn was not reviewed and idle otherwise. A step
-    /// outside a turn opens none: it is told with no turn, as nothing.
-    ///
-    /// Ends that came unreported. A turn that starts while one is open ends the open one
-    /// as interrupted first, as when the mark of an interrupt was missed. A turn's end with
-    /// no turn open changes nothing. Before any end of a turn, and before the end of the
-    /// session, a shell command that began and was not reported ended is
-    /// [`Change::CommandEnded`].
+    /// `draw` gives a fresh id per call. An event of an ended session is a resume; a step outside a
+    /// turn opens none. A turn start while one is open interrupts it.
     pub fn take(
         &mut self,
         agent: &str,
@@ -379,15 +259,12 @@ impl Switchboard {
         let mut changes = Vec::new();
         let mut first_heard = false;
         let found = self.find(agent, &reported.session);
-        // Any report of a session ends its offer, the end of one that is not running too:
-        // the CLI has brought it back or has been told it is over, and either way the Keeper's
-        // stop is no longer the last thing that happened to it.
+        // Any report ends the offer, even the end of a session that is not running.
         if let Some(at) = found {
             self.sessions[at].offer = None;
         }
         let at = match found {
-            // The end of a session that is not running tells nothing new, and is no
-            // resume: its process went first, or the end came twice.
+            // No resume: its process went first, or the end came twice.
             Some(at) if reported.event == Event::SessionEnded && !self.sessions[at].running() => {
                 return changes;
             }
@@ -402,11 +279,7 @@ impl Switchboard {
         };
         let entry = &mut self.sessions[at];
 
-        // A session that does not run and is heard of starts: for the first time when the
-        // Switchboard has not met it, as a resume when it has or the Store kept it. It
-        // starts idle, and a resume keeps the mark of a turn nobody reviewed: it is
-        // unreviewed until the review is marked reviewed. What it waited for when it ended
-        // is gone.
+        // A resume keeps the unreviewed mark of a turn nobody reviewed; what it waited for is gone.
         if !entry.running() {
             let resumed = !first_heard;
             let state = if entry.unreviewed {
@@ -496,9 +369,6 @@ impl Switchboard {
         changes
     }
 
-    /// The process `pid` of a CLI is gone, with no end reported: every session of it is
-    /// not running, and its open turn, if any, ends as interrupted, after its open shell
-    /// command, if any, as [`Change::CommandEnded`].
     pub fn gone(&mut self, pid: u32) -> Vec<Change> {
         let mut changes = Vec::new();
         for entry in &mut self.sessions {
@@ -509,8 +379,6 @@ impl Switchboard {
         changes
     }
 
-    /// The review of `session` was marked reviewed: a session that finished a turn not
-    /// yet reviewed is idle now.
     pub fn reviewed(&mut self, session: &SessionId) -> Vec<Change> {
         let mut changes = Vec::new();
         if let Some(entry) = self.sessions.iter_mut().find(|e| e.known.id == *session) {
@@ -522,7 +390,6 @@ impl Switchboard {
         changes
     }
 
-    /// The session by its id.
     pub fn session(&self, session: &SessionId) -> Option<Known> {
         self.sessions
             .iter()
@@ -530,7 +397,6 @@ impl Switchboard {
             .map(|entry| entry.known.clone())
     }
 
-    /// Every session, in the order they were first heard of.
     pub fn sessions(&self) -> Vec<Known> {
         self.sessions
             .iter()
@@ -538,7 +404,6 @@ impl Switchboard {
             .collect()
     }
 
-    /// The processes of the sessions that run: those the Keeper watches for their end.
     pub fn pids(&self) -> Vec<u32> {
         let mut pids = Vec::new();
         for entry in self.sessions.iter().filter(|entry| entry.running()) {
@@ -558,8 +423,6 @@ impl Switchboard {
     }
 }
 
-// The unit tests of the steps of a turn, row SWB-04: its own file, beside those of the
-// sessions below.
 #[cfg(test)]
 mod steps;
 
@@ -570,7 +433,6 @@ mod tests {
 
     const AGENT: &str = "claude";
 
-    /// The id the nth call of `draw` gives.
     fn drawn(n: u32) -> String {
         format!("{n:032x}")
     }
@@ -654,7 +516,6 @@ mod tests {
         }
     }
 
-    /// A Switchboard with a `draw` that counts, so that a test knows each id it will see.
     struct Desk {
         board: Switchboard,
         draws: u32,
@@ -676,7 +537,6 @@ mod tests {
             })
         }
 
-        /// One event of the session `cli`, from the process 100.
         fn hear(&mut self, cli: &str, event: Event) -> Vec<Change> {
             self.from(cli, 100, event)
         }
@@ -697,14 +557,12 @@ mod tests {
             self.known(cli).id
         }
 
-        /// The state, read the way the Keeper reads it.
         fn state(&self, cli: &str) -> State {
             let id = self.id(cli);
             self.board.session(&id).expect("the session").state
         }
     }
 
-    /// A desk with the session `cli` started and in its first turn, the ids 1 and 2.
     fn in_a_turn(cli: &str) -> (Desk, SessionId, TurnId) {
         let mut desk = Desk::new();
         desk.hear(cli, started());
@@ -758,7 +616,6 @@ mod tests {
                 now(&id, State::Works)
             ]
         );
-        // A session known to the Switchboard is not started twice, and draws no new id.
         assert_eq!(desk.hear("a", started()), []);
         assert_eq!(desk.draws, 2);
     }
@@ -770,7 +627,6 @@ mod tests {
         let id = desk.id("a");
         assert_eq!(desk.state("a"), State::Idle);
 
-        // Works from the turn's start.
         let turn = turn_drawn(2);
         assert_eq!(
             desk.hear("a", Event::TurnStarted),
@@ -785,7 +641,6 @@ mod tests {
         assert_eq!(desk.state("a"), State::Works);
         assert_eq!(desk.known("a").turn, Some((turn.clone(), 0)));
 
-        // Waits at a permission prompt; a second report of it changes nothing.
         assert_eq!(
             desk.hear("a", permission(true)),
             [now(&id, State::WaitsForPermission)]
@@ -793,7 +648,6 @@ mod tests {
         assert_eq!(desk.state("a"), State::WaitsForPermission);
         assert_eq!(desk.hear("a", permission(true)), []);
 
-        // The answer yes is the write that follows: the wait ends before the step.
         assert_eq!(
             desk.hear("a", written("p.txt")),
             [
@@ -808,7 +662,6 @@ mod tests {
         );
         assert_eq!(desk.state("a"), State::Works);
 
-        // Finished and not reviewed from the turn's end.
         assert_eq!(
             desk.hear("a", turn_ended(TurnEnd::Finished)),
             [
@@ -819,7 +672,6 @@ mod tests {
         assert_eq!(desk.state("a"), State::Unreviewed);
         assert_eq!(desk.known("a").turn, None);
 
-        // Idle once the review is marked reviewed; marking it again changes nothing.
         assert_eq!(desk.board.reviewed(&id), [now(&id, State::Idle)]);
         assert_eq!(desk.state("a"), State::Idle);
         assert_eq!(desk.board.reviewed(&id), []);
@@ -831,7 +683,6 @@ mod tests {
         desk.hear("a", permission(true));
         assert_eq!(desk.hear("a", permission(false)), [now(&id, State::Works)]);
         assert_eq!(desk.state("a"), State::Works);
-        // An answer with no wait to end changes nothing.
         assert_eq!(desk.hear("a", permission(false)), []);
         assert_eq!(desk.state("a"), State::Works);
     }
@@ -877,8 +728,6 @@ mod tests {
         assert_eq!(desk.known("a").turn, None);
         assert!(desk.board.pids().is_empty());
 
-        // A session that ends in the middle of a turn ends the turn as interrupted first,
-        // and goes from works to not running without a state between.
         let mut other = Desk::new();
         other.hear("b", started());
         other.hear("b", Event::TurnStarted);
@@ -913,8 +762,6 @@ mod tests {
         desk.from("d", 30, started());
         let (b, c) = (desk.id("b"), desk.id("c"));
 
-        // Both sessions of the process go, in the order they were heard of; the one in a
-        // turn ends it as interrupted first.
         assert_eq!(
             desk.board.gone(20),
             [
@@ -930,7 +777,6 @@ mod tests {
         assert_eq!(desk.state("a"), State::Idle);
         assert_eq!(desk.state("d"), State::Idle);
 
-        // Nothing is left to say about it, nor about a process no session runs in.
         assert_eq!(desk.board.gone(20), []);
         assert_eq!(desk.board.gone(99), []);
     }
@@ -1030,7 +876,6 @@ mod tests {
         desk.hear("a", command(Phase::Began));
         desk.hear("a", turn_ended(TurnEnd::Interrupted));
         desk.hear("a", Event::TurnStarted);
-        // No command is open any more: this end gives nothing before it.
         assert_eq!(
             desk.hear("a", turn_ended(TurnEnd::Finished)),
             [
@@ -1059,7 +904,6 @@ mod tests {
             ]
         );
         assert_eq!(desk.state("a"), State::Works);
-        // The new turn counts its steps from the start.
         assert_eq!(desk.known("a").turn, Some((turn_drawn(3), 0)));
     }
 
@@ -1080,7 +924,6 @@ mod tests {
                 now(&id, State::Works),
             ]
         );
-        // The wait is over for good: a turn's end leaves it unreviewed.
         assert_eq!(
             desk.hear("a", turn_ended(TurnEnd::Finished)).last(),
             Some(&now(&id, State::Unreviewed))
@@ -1089,8 +932,8 @@ mod tests {
 
     #[test]
     fn a_turn_started_while_the_session_waits_with_no_turn_open_works() {
-        // The hook socket and the terminal's mark are separate channels: a permission
-        // prompt can be heard with no turn open, after an interrupt already ended it.
+        // The hook socket and the terminal's mark are separate channels: a permission prompt can be
+        // heard with no turn open, after an interrupt already ended it.
         let mut desk = Desk::new();
         desk.hear("a", started());
         let id = desk.id("a");
@@ -1115,9 +958,6 @@ mod tests {
 
     #[test]
     fn a_step_heard_with_no_turn_open_ends_the_wait_it_answers() {
-        // A prompt heard with no turn open (after an interrupt ended the turn) is answered
-        // by a step all the same: the session is idle again, not waiting until the next
-        // turn starts.
         let steps = [
             ("a write", written("p.txt")),
             ("a read", read("p.txt")),
@@ -1148,7 +988,6 @@ mod tests {
         assert_eq!(desk.hear("a", turn_ended(TurnEnd::Interrupted)), []);
         assert_eq!(desk.state("a"), State::WaitsForPermission);
 
-        // It still waits: the answer to the prompt ends the wait, and nothing else did.
         assert_eq!(desk.hear("a", written("p.txt")), [now(&id, State::Idle)]);
     }
 
@@ -1159,7 +998,6 @@ mod tests {
         assert_eq!(desk.hear("a", turn_ended(TurnEnd::Finished)), []);
         assert_eq!(desk.state("a"), State::Idle);
 
-        // Nor does a second end of a turn already ended, or the mark after a `Stop`.
         desk.hear("a", Event::TurnStarted);
         desk.hear("a", turn_ended(TurnEnd::Finished));
         assert_eq!(desk.hear("a", turn_ended(TurnEnd::Interrupted)), []);
@@ -1188,7 +1026,6 @@ mod tests {
         assert_eq!(desk.known("a").turn, Some((turn.clone(), 3)));
         assert_eq!(desk.hear("a", read("c.txt")), [step(4, read("c.txt"))]);
 
-        // The next turn starts again at 1.
         desk.hear("a", turn_ended(TurnEnd::Finished));
         desk.hear("a", Event::TurnStarted);
         assert_eq!(
@@ -1212,7 +1049,6 @@ mod tests {
         assert_eq!(desk.state("a"), State::Idle);
         assert_eq!(desk.known("a").turn, None);
 
-        // A command that began outside a turn was not told, so no end of it is made up.
         let id = desk.id("a");
         desk.hear("a", Event::TurnStarted);
         assert_eq!(
@@ -1231,7 +1067,6 @@ mod tests {
         desk.hear("a", Event::SessionEnded);
         assert_eq!(desk.state("a"), State::NotRunning);
 
-        // The turn it left unreviewed comes back with it.
         let resumed = Reported {
             terminal: Some("terminal-new".to_string()),
             folder: Some(PathBuf::from("/work/other")),
@@ -1266,7 +1101,6 @@ mod tests {
 
     #[test]
     fn a_session_that_ended_at_a_permission_prompt_does_not_wait_when_it_resumes() {
-        // Once by its own end, once by its process being gone.
         for ended_by_its_process in [false, true] {
             let (mut desk, id, turn) = in_a_turn("a");
             desk.hear("a", permission(true));
@@ -1279,8 +1113,6 @@ mod tests {
             assert_eq!(ending.last(), Some(&now(&id, State::NotRunning)));
             assert!(ending.contains(&ends(&id, &turn, TurnEnd::Interrupted)));
 
-            // The prompt died with the process: nothing asks for an answer now. The turn it
-            // interrupted is unreviewed, which is all it shows.
             assert_eq!(
                 desk.hear("a", started()),
                 [
@@ -1298,7 +1130,6 @@ mod tests {
             assert_eq!(desk.state("a"), State::Unreviewed);
             assert_eq!(desk.board.reviewed(&id), [now(&id, State::Idle)]);
             assert_eq!(desk.state("a"), State::Idle);
-            // A turn that follows is an ordinary one, not one that waits.
             let again = desk.hear("a", Event::TurnStarted);
             assert_eq!(again.last(), Some(&now(&id, State::Works)));
             assert_eq!(desk.board.reviewed(&id), []);
@@ -1327,7 +1158,6 @@ mod tests {
         );
         assert_eq!(desk.state("a"), State::Unreviewed);
 
-        // A prompt with no turn, asked and answered, leaves it unreviewed.
         assert_eq!(
             desk.hear("a", permission(true)),
             [now(&id, State::WaitsForPermission)]
@@ -1338,7 +1168,6 @@ mod tests {
         );
         assert_eq!(desk.state("a"), State::Unreviewed);
 
-        // Only the mark of reviewed takes it out of there.
         assert_eq!(desk.board.reviewed(&id), [now(&id, State::Idle)]);
         assert_eq!(desk.state("a"), State::Idle);
     }
@@ -1355,7 +1184,6 @@ mod tests {
         );
         assert_eq!(desk.state("a"), State::Idle);
 
-        // One whose turn was reviewed before it ended is idle too.
         desk.hear("a", Event::TurnStarted);
         desk.hear("a", turn_ended(TurnEnd::Finished));
         desk.board.reviewed(&id);
@@ -1406,7 +1234,6 @@ mod tests {
         );
         assert!(desk.board.pids().is_empty());
 
-        // Another Adapter's session of the same CLI name is another session.
         assert!(matches!(
             desk.take("other", reported("c", 5, started()))[0],
             Change::Started { resumed: false, .. }
@@ -1430,8 +1257,6 @@ mod tests {
         assert_eq!(desk.board.sessions().len(), 2);
     }
 
-    /// The command maker of the tests: one word for the Adapter, the CLI's id and the record
-    /// it was given, so that a test sees what the offer carried. None for the agent `none`.
     fn resume_words(agent: &str, cli: &CliSession, record: Option<&Path>) -> Option<String> {
         if agent == "none" {
             return None;
@@ -1473,9 +1298,6 @@ mod tests {
         let sa = SessionId("sa".to_string());
         let sb = SessionId("sb".to_string());
 
-        // Running before the stop: A and B in the order they were remembered, never C, which
-        // ended before it. Each carries what its Adapter's command makes of its agent, its
-        // CLI's id and its CLI's record, and the session and CLI ids themselves.
         assert_eq!(
             offered(&desk.board),
             [
@@ -1494,7 +1316,6 @@ mod tests {
             ]
         );
 
-        // A report of A is heard: it runs again, by its CLI's resume, and is offered no more.
         desk.hear(
             "a-1",
             Event::SessionStarted {
@@ -1503,12 +1324,10 @@ mod tests {
         );
         assert_eq!(sessions_offered(&desk.board), std::slice::from_ref(&sb));
 
-        // A's process goes: not offered again, whatever it does after.
         let changes = desk.board.gone(100);
         assert!(changes.contains(&ended(&sa)), "{changes:?}");
         assert_eq!(sessions_offered(&desk.board), std::slice::from_ref(&sb));
 
-        // An agent the command maker has no command for is not offered.
         desk.board
             .remember_resumable(SessionId("sd".to_string()), "none", cli("d-1"), None);
         assert_eq!(sessions_offered(&desk.board), [sb]);
@@ -1523,8 +1342,6 @@ mod tests {
         desk.board
             .remember(SessionId("sc".to_string()), "claude", cli("c-1"));
 
-        // Held already, whether its CLI reported it or the Store kept it: no offer, and
-        // the id it holds stays.
         desk.board
             .remember_resumable(SessionId("x".to_string()), "claude", cli("h"), None);
         desk.board
@@ -1533,7 +1350,6 @@ mod tests {
         assert_eq!(desk.board.session(&heard).expect("heard").cli, cli("h"));
         assert_eq!(desk.board.sessions().len(), 2);
 
-        // Remembered twice with another record: the first offer stands.
         desk.board.remember_resumable(
             SessionId("sa".to_string()),
             "pi",
@@ -1551,7 +1367,6 @@ mod tests {
         assert_eq!(offers[0].session, SessionId("sa".to_string()));
         assert_eq!(offers[0].command, "pi resume p /s/one.jsonl");
 
-        // Remembered as not running later: the offer is not taken back.
         desk.board
             .remember(SessionId("later".to_string()), "pi", cli("p"));
         assert_eq!(offered(&desk.board).len(), 1);
@@ -1594,8 +1409,6 @@ mod tests {
         };
         let sb = SessionId("sb".to_string());
 
-        // Whatever the first report is: an event of a turn, or the end of the session,
-        // which changes nothing else for a session that is not running.
         for event in [Event::TurnStarted, read("/x"), permission(true)] {
             let desk = first(event);
             assert_eq!(sessions_offered(&desk.board), std::slice::from_ref(&sb));
@@ -1603,7 +1416,6 @@ mod tests {
         let desk = first(Event::SessionEnded);
         assert_eq!(sessions_offered(&desk.board), std::slice::from_ref(&sb));
 
-        // The same CLI id under another Adapter's name is another session.
         let mut desk = Desk::new();
         desk.board = after_a_restart();
         desk.take("pi", reported("a-1", 7, started()));
@@ -1619,7 +1431,6 @@ mod tests {
         let sa = SessionId("sa".to_string());
         let sb = SessionId("sb".to_string());
         assert_eq!(sessions_offered(&desk.board), [sa.clone(), sb.clone()]);
-        // Asking again gives the same: the offers are read, not taken.
         assert_eq!(sessions_offered(&desk.board), [sa.clone(), sb.clone()]);
 
         desk.hear("a-1", started());
@@ -1677,7 +1488,6 @@ mod tests {
         desk.hear("a", Event::TurnStarted);
         assert_eq!(desk.board.reviewed(&id), []);
         assert_eq!(desk.state("a"), State::Works);
-        // The turn that follows leaves it unreviewed again.
         assert_eq!(
             desk.hear("a", turn_ended(TurnEnd::Finished)).last(),
             Some(&now(&id, State::Unreviewed))
@@ -1705,10 +1515,8 @@ mod tests {
         assert_eq!(desk.board.session(&SessionId("nobody".to_string())), None);
     }
 
-    /// A long walk through events of three sessions, in an order a real CLI would not keep
-    /// to, checks what must hold whatever arrives: the states told are the states held,
-    /// no state is told twice in a row, a turn ends the turn that is open, and a command
-    /// is ended before its turn is.
+    /// A random walk over three sessions: told states equal held states, none is told twice in a
+    /// row, and a command ends before its turn.
     #[test]
     fn whatever_arrives_the_states_told_are_the_states_held() {
         let events = [
@@ -1803,13 +1611,10 @@ mod tests {
             };
             check(&mut desk, changes);
         }
-        // The walk is no use if it never got to a state.
         assert_eq!(seen.len(), ORDER.len(), "{seen:?}");
     }
 
-    // SWB-02
-
-    /// The order of the row's sentence, written out so that the test does not lean on the
+    /// The display order of the states, written out so that the test does not lean on the
     /// order the type derives.
     const ORDER: [State; 5] = [
         State::WaitsForPermission,

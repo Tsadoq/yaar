@@ -1,8 +1,3 @@
-//! Component tests: the time a state is recorded at, the deletion of the states and kept
-//! commits a caller names, the packing that removes what nothing reaches, and the room the
-//! stores take on disk, through the surface the rest of the Keeper uses, in real
-//! repositories the tests make.
-
 mod support;
 
 use std::collections::BTreeSet;
@@ -23,22 +18,19 @@ use yaar_recorder::{
     Worktree, sizes,
 };
 
-/// 2026-01-01T00:00:00Z, which the clock of every test starts at.
+/// 2026-01-01T00:00:00Z, where every test's clock starts.
 const BASE: u64 = 1_767_225_600;
 
-/// How long a test waits for work that must end, which a deadlock never does.
+/// A deadlock never ends, so work that must end is bounded.
 const DEADLINE: Duration = Duration::from_secs(120);
 
-/// How long a loop of calls may go on with none of its steps ending, which a deadlock never
-/// does. How long the whole loop takes is the machine's to say, so only a stop is bounded.
 const STEP_DEADLINE: Duration = Duration::from_secs(120);
 
-/// How long a clean-up that ought to be waiting is given to show that it is not. Nothing a
-/// passing run does has to end within it: a clean-up that runs on in that time is a failure,
-/// one that is slower than this on a busy machine is missed, never wrongly blamed.
+/// How long a clean-up that ought to be waiting is given to show that it is not. One that
+/// ends within it fails the test; one slower than this on a busy machine is missed, never
+/// wrongly blamed.
 const SETTLE: Duration = Duration::from_secs(3);
 
-/// A clock that starts at [`BASE`] and moves only when the test moves it.
 #[derive(Debug)]
 struct TestClock {
     base: SystemTime,
@@ -64,7 +56,6 @@ impl Clock for TestClock {
     }
 }
 
-/// The seconds `time` lies after the epoch.
 fn seconds(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .expect("after 1970")
@@ -83,13 +74,10 @@ fn open_store(folder: &Path, clock: &Arc<TestClock>) -> StateStore {
     StateStore::open_with(&found(), folder, clock.clone()).expect("open the store")
 }
 
-/// A store whose every git is started through `program`.
 fn open_store_through(program: &Path, folder: &Path, clock: &Arc<TestClock>) -> StateStore {
     StateStore::open_with(&Git::at(program), folder, clock.clone()).expect("open the store")
 }
 
-/// Pseudo-random bytes from a xorshift of a seed: incompressible, and none of two seeds
-/// share a run.
 struct Noise(u64);
 
 impl Noise {
@@ -107,7 +95,6 @@ impl Noise {
     }
 }
 
-/// Writes `turn.bin` anew with 64 KiB nothing else holds, and records the worktree.
 fn record_with_noise(
     store: &StateStore,
     repo: &Path,
@@ -118,7 +105,6 @@ fn record_with_noise(
     store.record(worktree).expect("record")
 }
 
-/// A repository with a tracked text file and an untracked `turn.bin`, one commit.
 fn repository(scratch: &Scratch, name: &str) -> PathBuf {
     let repo = scratch.join(name);
     init(&repo);
@@ -128,8 +114,6 @@ fn repository(scratch: &Scratch, name: &str) -> PathBuf {
     repo
 }
 
-/// Puts two objects in the repository that no ref reaches: a blob, and a commit that
-/// `git stash create` made and left unnamed. The tracked file is as it was after.
 fn plant(scratch: &Scratch, repo: &Path, name: &str) -> [String; 2] {
     let file = scratch.join(&format!("planted-{name}.txt"));
     std::fs::write(&file, format!("a blob nothing names in {name}\n")).expect("write the file");
@@ -141,7 +125,6 @@ fn plant(scratch: &Scratch, repo: &Path, name: &str) -> [String; 2] {
     [blob, commit]
 }
 
-/// What a read-only look at a repository gives, by the seven reads of the plan.
 #[derive(Debug, PartialEq, Eq)]
 struct Reads {
     status: Vec<u8>,
@@ -185,7 +168,6 @@ fn reads(repo: &Path) -> Reads {
     }
 }
 
-/// Every file below `folder` with its size, by its path relative to `folder`, in order.
 fn files_below(folder: &Path) -> Vec<(String, u64)> {
     fn walk(root: &Path, folder: &Path, into: &mut Vec<(String, u64)>) {
         for child in std::fs::read_dir(folder).expect("read the folder") {
@@ -205,7 +187,6 @@ fn files_below(folder: &Path) -> Vec<(String, u64)> {
     found
 }
 
-/// A repository as `reads` and `plant` leave it: the two planted objects are still there.
 fn assert_unchanged(repo: &Path, before: &Reads, planted: &[String; 2]) {
     assert!(
         &reads(repo) == before,
@@ -216,16 +197,13 @@ fn assert_unchanged(repo: &Path, before: &Reads, planted: &[String; 2]) {
     }
 }
 
-/// A repository with the two objects planted in it and its reads taken, before the
-/// program under test is started: what a clean-up must leave as it found it.
 struct Watched {
     repo: PathBuf,
     planted: [String; 2],
     before: Reads,
 }
 
-/// Plants the two objects in `repo` and takes its reads. Called after the test's own
-/// commits and before anything of the Recorder runs.
+/// Called after the test's own commits and before anything of the Recorder runs.
 fn watch(scratch: &Scratch, repo: &Path) -> Watched {
     let planted = plant(scratch, repo, "watched");
     let before = reads(repo);
@@ -237,14 +215,11 @@ fn watch(scratch: &Scratch, repo: &Path) -> Watched {
 }
 
 impl Watched {
-    /// The reads are as they were, and both planted objects are still there.
     fn assert_unchanged(&self) {
         assert_unchanged(&self.repo, &self.before, &self.planted);
     }
 }
 
-/// What the files under `path` take on disk, as the test counts it: the blocks of every
-/// entry, `path` itself included, links not followed.
 fn blocks_of(path: &Path) -> u64 {
     let meta = std::fs::symlink_metadata(path).expect("the entry");
     let mut total = meta.blocks() * 512;
@@ -256,7 +231,6 @@ fn blocks_of(path: &Path) -> u64 {
     total
 }
 
-/// What `du -sk` says `path` takes, in bytes.
 fn du_bytes(path: &Path) -> u64 {
     let output = Command::new("du")
         .arg("-sk")
@@ -274,7 +248,6 @@ fn du_bytes(path: &Path) -> u64 {
     kib * 1024
 }
 
-/// The loose objects of a store, by id.
 fn loose_objects(store: &Path) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
     for fan in std::fs::read_dir(store.join("objects")).expect("read the objects") {
@@ -294,7 +267,6 @@ fn loose_objects(store: &Path) -> BTreeSet<String> {
     found
 }
 
-/// Whether the store holds the object.
 fn holds(store: &Path, id: &str) -> bool {
     Command::new("git")
         .arg("-C")
@@ -305,12 +277,10 @@ fn holds(store: &Path, id: &str) -> bool {
         .success()
 }
 
-/// The names of the refs of the store with what they name, as git lists them.
 fn refs_of(store: &Path) -> String {
     git(store, &["for-each-ref"])
 }
 
-/// Every file of a state with its content, by its path.
 fn files_of(store: &StateStore, state: &RecordedState) -> Vec<(PathBuf, Vec<u8>)> {
     store
         .paths(state.id.as_str())
@@ -326,12 +296,10 @@ fn files_of(store: &StateStore, state: &RecordedState) -> Vec<(PathBuf, Vec<u8>)
         .collect()
 }
 
-/// The steps a loop of calls has ended, counted by every thread that takes part in it.
 #[derive(Clone, Default)]
 struct Progress(Arc<AtomicUsize>);
 
 impl Progress {
-    /// Notes that one step ended.
     fn step(&self) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
@@ -341,9 +309,6 @@ impl Progress {
     }
 }
 
-/// Runs `work` on a thread of its own and waits for its end as long as a step of it ends
-/// within [`STEP_DEADLINE`]: a deadlock is a failure that says so, not a test that never
-/// ends, and a slow machine is not a failure.
 fn ends_in_time(what: &str, work: impl FnOnce(&Progress) + Send + 'static) {
     let (done, ended) = channel();
     let progress = Progress::default();
@@ -378,15 +343,12 @@ fn the_sizes_of_the_recorded_states_are_what_they_take_on_disk_and_the_clean_up_
     let (worktree_a, worktree_b) = (open(&repo_a), open(&repo_b));
     let mut noise = Noise(0x9E37_79B9_7F4A_7C15);
 
-    // Three states in a, one in b, each holding 64 KiB no other holds.
     let before_cleaning = {
         let a = open_store(&states.join("a.git"), &clock);
         let b = open_store(&states.join("b.git"), &clock);
         let [a1, a2, a3] =
             [(); 3].map(|()| record_with_noise(&a, &repo_a, &worktree_a, &mut noise));
         record_with_noise(&b, &repo_b, &worktree_b, &mut noise);
-        // A comparison of the files on disk with the first state writes a tree and a blob
-        // that no ref names.
         std::fs::write(repo_a.join("turn.bin"), noise.kib(64)).expect("write turn.bin");
         let loose_before = loose_objects(a.folder());
         let changed = a
@@ -409,12 +371,9 @@ fn the_sizes_of_the_recorded_states_are_what_they_take_on_disk_and_the_clean_up_
         };
         let (blobs_1_3, blob_2) = ([blob_of(&a1), blob_of(&a3)], blob_of(&a2));
         (a1, a2, a3, blobs_1_3, blob_2, unnamed)
-        // Both stores are dropped here: what the sizes read is on disk.
     };
     let (a1, a2, a3, blobs_1_3, blob_2, unnamed) = before_cleaning;
 
-    // "The disk space reported ... for each workspace and in total, is what they take on
-    // disk": the test's own walk of the folders, and `du`, a second count by a program.
     let reported = sizes(&states).expect("sizes");
     let names: Vec<OsString> = reported
         .stores
@@ -442,7 +401,6 @@ fn the_sizes_of_the_recorded_states_are_what_they_take_on_disk_and_the_clean_up_
         "each state holds 64 KiB of its own: {size_a}, {size_b}"
     );
 
-    // "The clean-up removes at once what nothing refers to."
     let a = open_store(&states.join("a.git"), &clock);
     let kept_files = files_of(&a, &a2);
     assert!(
@@ -462,7 +420,6 @@ fn the_sizes_of_the_recorded_states_are_what_they_take_on_disk_and_the_clean_up_
     );
     a.pack().expect("pack");
 
-    // At once, with no wait.
     assert_eq!(a.states().expect("states"), vec![a2.clone()]);
     assert_eq!(
         files_of(&a, &a2),
@@ -510,8 +467,8 @@ fn a_reader_of_a_state_that_stays_reads_the_same_bytes_after_the_clean_up() {
     let mut noise = Noise(7);
     let first = record_with_noise(&store, &repo, &worktree, &mut noise);
     let second = record_with_noise(&store, &repo, &worktree, &mut noise);
-    // The one process that hands out contents is started, and has read.
     let path = Path::new("turn.bin");
+    // This first read starts the contents reader, so the pack runs while it lives.
     let before = store
         .content(second.id.as_str(), path)
         .expect("read")
@@ -593,7 +550,6 @@ fn a_state_is_dated_by_the_clock_its_store_was_opened_with() {
         ],
         "each state with the clock's second, the oldest first"
     );
-    // Author and committer are the same time: git's own tools show the one date.
     let both = git(
         store.folder(),
         &["log", "-1", "--format=%at %ct", third.id.as_str()],
@@ -671,7 +627,6 @@ fn files_recorded_again_within_the_hour_are_the_newest_state_and_past_it_a_new_o
         ]
     );
 
-    // Counted from the newest state: an hour after the new one the files are new again.
     clock.move_by(Duration::from_secs(61 * 60));
     let again = store.record(&worktree).expect("record");
     assert_ne!(again.id, past.id);
@@ -808,8 +763,8 @@ fn the_pack_removes_the_complete_head_when_its_commit_went_and_the_next_recordin
     let repo = repository(&scratch, "repo");
     let mut noise = Noise(17);
     std::fs::write(repo.join("committed.bin"), noise.kib(16)).expect("write");
-    // Only that file: `turn.bin` stays untracked, so that the test's own rewriting of it
-    // leaves the repository's reads as they were.
+    // `turn.bin` stays untracked, so the test's rewriting of it leaves the repository's reads as
+    // they were.
     git(&repo, &["add", "committed.bin"]);
     git(&repo, &["commit", "--quiet", "-m", "two"]);
     let watched = watch(&scratch, &repo);
@@ -910,8 +865,8 @@ fn a_store_that_is_a_link_is_listed_by_its_name_with_the_links_own_blocks() {
         let store = open_store(&states.join("real.git"), &clock);
         record_with_noise(&store, &repo, &worktree, &mut noise);
     }
-    // A store the user moved to another disk, which the folder names by a link, and a
-    // file of nobody's among the stores.
+    // A store the user moved to another disk, which the folder names by a link, and a file of
+    // nobody's among the stores.
     let outside = scratch.join("outside");
     std::fs::create_dir_all(&outside).expect("make the folder");
     std::fs::write(outside.join("big.bin"), noise.kib(256)).expect("write");
@@ -945,8 +900,6 @@ fn a_store_that_is_a_link_is_listed_by_its_name_with_the_links_own_blocks() {
     );
 }
 
-/// A repository with two commits of different files, a state of the files now, and the
-/// store: what a comparison against a commit of the repository needs.
 struct Stressed {
     repo: PathBuf,
     worktree: Arc<Worktree>,
@@ -960,8 +913,6 @@ fn stressed(scratch: &Scratch) -> Stressed {
     let repo = repository(scratch, "repo");
     let mut noise = Noise(29);
     std::fs::write(repo.join("old.bin"), noise.kib(8)).expect("write");
-    // `turn.bin` stays untracked, so that the tests' own rewriting of it leaves the
-    // repository's reads as they were.
     git(&repo, &["add", "old.bin"]);
     git(&repo, &["commit", "--quiet", "-m", "two"]);
     let old_commit = git(&repo, &["rev-parse", "HEAD"]);
@@ -983,7 +934,6 @@ fn stressed(scratch: &Scratch) -> Stressed {
     }
 }
 
-/// Deletes the kept commit and packs, `rounds` times, as the clean-up at once does.
 fn clean_up_repeatedly(store: &StateStore, commit: &str, rounds: usize, progress: &Progress) {
     let ids: BTreeSet<String> = [commit.to_owned()].into();
     for _ in 0..rounds {
@@ -1009,9 +959,8 @@ fn a_comparison_never_fails_while_the_store_is_cleaned_beside_it() {
         .compare(Some(&worktree), &old_commit, Some(state.id.as_str()))
         .expect("compare");
     assert!(!against_commit.is_empty());
-    // The files on disk, changed since the state: a comparison with them writes a tree
-    // and a blob that no ref names, which a pack would remove if it could fall between
-    // their writing and their reading.
+    // A comparison with the files on disk writes a tree and a blob that no ref names, which a pack
+    // would remove if it could fall between their writing and their reading.
     std::fs::write(repo.join("turn.bin"), Noise(31).kib(4)).expect("write turn.bin");
     let against_disk = store
         .compare(Some(&worktree), state.id.as_str(), None)
@@ -1023,9 +972,6 @@ fn a_comparison_never_fails_while_the_store_is_cleaned_beside_it() {
             let (store, commit, progress) = (store.clone(), old_commit.clone(), progress.clone());
             std::thread::spawn(move || clean_up_repeatedly(&store, &commit, 50, &progress))
         };
-        // Two threads compare while it runs: the first against a commit of the repository
-        // that the store copies and the clean-up lets go, the second against the files on
-        // disk.
         let with_commit = {
             let (store, worktree) = (store.clone(), worktree.clone());
             let (commit, state) = (old_commit.clone(), state.id.to_string());
@@ -1111,8 +1057,8 @@ fn a_ref_moved_after_the_delete_read_the_store_is_not_deleted_and_no_other_ref_i
     let worktree = open(&repo);
     let clock = TestClock::new();
     let folder = scratch.join("states/one.git");
-    // A git that, once armed, moves one ref of the store just before the store's own
-    // `update-ref --stdin` runs: another handle recording meanwhile.
+    // A git that, once armed, moves one ref of the store just before the store's own `update-ref
+    // --stdin` runs: another handle recording meanwhile.
     let armed = scratch.join("move-a-ref");
     let moving = scratch.join("bin/git-moving");
     program(
@@ -1143,8 +1089,8 @@ fn a_ref_moved_after_the_delete_read_the_store_is_not_deleted_and_no_other_ref_i
         )
     };
     let (ref_1, ref_2) = (name_of(&first), name_of(&second));
-    // The second state's ref now names the first state's commit, as if it had been deleted
-    // and the number taken again by a state of another handle.
+    // The second state's ref now names the first state's commit, as if it had been deleted and its
+    // number taken again by a state of another handle.
     std::fs::write(&armed, format!("{ref_2} {}\n", first.id)).expect("arm the git");
 
     let both: BTreeSet<String> = [&first, &second]
@@ -1165,8 +1111,7 @@ fn a_ref_moved_after_the_delete_read_the_store_is_not_deleted_and_no_other_ref_i
     watched.assert_unchanged();
 }
 
-/// Makes a named pipe and opens it for reading and writing, so that neither end waits for
-/// the other to open: a read waits for a byte, a write leaves one.
+/// Opened for reading and writing, so neither end waits for the other to open.
 fn pipe(path: &Path) -> File {
     let made = Command::new("mkfifo").arg(path).status().expect("mkfifo");
     assert!(made.success(), "mkfifo {path:?}");
@@ -1177,26 +1122,17 @@ fn pipe(path: &Path) -> File {
         .expect("open the pipe")
 }
 
-/// What [`clean_up_beside_a_call`] leaves for the test to read afterwards.
 struct Beside<T> {
-    /// What the call answered once it was let go.
     answer: T,
     repo: PathBuf,
     store: Arc<StateStore>,
-    /// The repository's three commits, the oldest first.
     commits: [String; 3],
     watched: Watched,
 }
 
-/// A repository of three commits and a store whose git stops once, at the command whose name
-/// is `stop_at`: `call` is made on a thread of its own, holds a commit of the store and is
-/// stopped at that command, before it has read; the commits `released` are then deleted and
-/// packed beside it, and must not be gone while it waits. Once it is let go it reads what it
-/// held, and the clean-up ends after it. The commits `kept` are kept in the store first.
-///
-/// What the test waits on is the git's own word that the call has arrived and the call's
-/// answer. The one wait that is not on a fact is [`SETTLE`], which shows a negative: a
-/// clean-up that is blocked leaves nothing to look at.
+/// `call` runs on its own thread, holds a commit of the store and is stopped at the git command
+/// `stop_at` before it reads. The `released` commits are deleted and packed beside it and must not
+/// be gone while it waits. The one wait not on a fact is [`SETTLE`], which shows a negative.
 fn clean_up_beside_a_call<T: Send + 'static>(
     scratch: &Scratch,
     stop_at: &str,
@@ -1214,7 +1150,6 @@ fn clean_up_beside_a_call<T: Send + 'static>(
     let commits = [first, second, third];
     let watched = watch(scratch, &repo);
     let worktree = Arc::new(open(&repo));
-    // This git stops, once armed, at the command, tells the test and waits for it to say go.
     let armed = scratch.join("stop-the-call");
     let (reached_path, go_path) = (scratch.join("reached"), scratch.join("go"));
     let stopping = scratch.join("bin/git-stopping");
@@ -1247,7 +1182,6 @@ fn clean_up_beside_a_call<T: Send + 'static>(
         let (store, worktree, commits) = (store.clone(), worktree.clone(), commits.clone());
         std::thread::spawn(move || call(&store, &worktree, &commits))
     };
-    // The call holds what it reads, in the store and named by a ref, and has not read.
     let (told, arrived) = channel();
     std::thread::spawn(move || {
         let mut byte = [0u8; 1];
@@ -1258,8 +1192,7 @@ fn clean_up_beside_a_call<T: Send + 'static>(
         .expect("the call reached the command")
         .expect("read the pipe");
 
-    // The clean-up starts now. It must not end while the call is between holding the commits
-    // and reading them.
+    // It must not end while the call is between holding the commits and reading them.
     let (cleaned, ended) = channel();
     let cleaner = {
         let store = store.clone();
@@ -1304,8 +1237,8 @@ fn a_clean_up_waits_for_a_read_that_holds_a_version_until_it_has_read() {
         &[],
         &[1],
         |store, worktree, commits| {
-            // The first read of a file starts the process that hands out contents, after the
-            // commit was copied into the store and before anything is read.
+            // The first read of a file starts the contents reader, after the commit was copied into
+            // the store and before anything is read.
             store.content_in(Some(worktree), &commits[1], Path::new("unique.bin"))
         },
     );
@@ -1370,19 +1303,17 @@ fn a_clean_up_waits_for_a_call_that_compares_two_kept_commits_until_it_has_compa
     held.watched.assert_unchanged();
 }
 
-/// The process ids of the starts of the store's reader of contents, from the list of a git
-/// that writes every start of itself down, oldest first.
 fn reader_starts(list: &Path) -> Vec<String> {
     std::fs::read_to_string(list)
         .unwrap_or_default()
         .lines()
-        // Of a git that has `-Z` and of one that has not; `--batch-check` is another process.
+        // The reader's start, by a git that has `-Z` or by one that has not; `--batch-check` is
+        // another process.
         .filter(|line| line.ends_with("cat-file --batch -Z") || line.ends_with("cat-file --batch"))
         .map(|line| line.split(' ').next().expect("a process id").to_owned())
         .collect()
 }
 
-/// The packs the store holds, by name.
 fn packs_of(store: &Path) -> BTreeSet<OsString> {
     std::fs::read_dir(store.join("objects/pack"))
         .expect("read the folder of packs")
@@ -1391,10 +1322,9 @@ fn packs_of(store: &Path) -> BTreeSet<OsString> {
         .collect()
 }
 
-/// The processes of the store's reader of contents that this test process started and that
-/// still run: its children whose command line is `git cat-file --batch`. A child exists
-/// before the call that started it returns, so this holds a fact of the moment it is asked
-/// in, which a note the child writes itself does not (it writes after it was started).
+/// The children of this process whose command line holds `git cat-file --batch`. A child
+/// exists before the call that started it returns, so this is true at the moment it is
+/// asked, which a note the child writes itself is not.
 fn readers_running() -> Vec<u32> {
     let me = std::process::id();
     let is_reader = |command: &str| command.contains("cat-file --batch");
@@ -1406,11 +1336,11 @@ fn readers_running() -> Vec<u32> {
                 let parent = std::fs::read_to_string(format!("/proc/{pid}/stat"))
                     .ok()
                     .and_then(|stat| {
-                        // The parent is the second field after the last `)`.
+                        // The parent is the second field after the last `)`: the command name
+                        // before it may hold one.
                         let (_, rest) = stat.rsplit_once(')')?;
                         rest.split_whitespace().nth(1)?.parse::<u32>().ok()
                     });
-                // The arguments are separated by NUL bytes.
                 parent == Some(me)
                     && std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|bytes| {
                         is_reader(&String::from_utf8_lossy(&bytes).replace('\0', " "))
@@ -1438,7 +1368,6 @@ fn readers_running() -> Vec<u32> {
     }
 }
 
-/// Waits on a thread of its own for one byte of the pipe and tells the channel it came.
 fn byte_of(mut pipe: File) -> std::sync::mpsc::Receiver<std::io::Result<()>> {
     let (told, came) = channel();
     std::thread::spawn(move || {
@@ -1455,9 +1384,8 @@ fn a_pack_that_removes_a_pack_waits_for_a_read_in_flight_before_it_ends_the_read
     let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
-    // This git writes down every start of itself. Once armed, it tells the test at the
-    // start of `prune`, and stops at the start of the reader of contents, which the first
-    // read has by then asked for under the lock a read takes, until the test says go.
+    // This git writes down every start of itself. Once armed, it tells the test at the start of
+    // `prune` and stops at the start of the reader of contents until the test says go.
     let list = scratch.join("starts-of-git");
     let (pack_armed, read_armed) = (scratch.join("arm-the-prune"), scratch.join("arm-the-read"));
     let (pruning_path, reached_path, go_path) = (
@@ -1499,8 +1427,8 @@ fn a_pack_that_removes_a_pack_waits_for_a_read_in_flight_before_it_ends_the_read
     let packs = packs_of(store.folder());
     assert!(reader_starts(&list).is_empty(), "no read has asked yet");
 
-    // The first read of a state asks for the reader and stops at its start, holding the lock
-    // of the reader.
+    // The first read of a state asks for the reader and stops at its start, holding the reader's
+    // lock.
     std::fs::write(&read_armed, "").expect("arm the read");
     let reading = {
         let (store, id) = (store.clone(), second.id.to_string());
@@ -1517,7 +1445,6 @@ fn a_pack_that_removes_a_pack_waits_for_a_read_in_flight_before_it_ends_the_read
         "the read asked for one reader: {started:?}"
     );
 
-    // A pack that removes the old pack runs beside it, up to the start of its prune.
     std::fs::write(&pack_armed, "").expect("arm the prune");
     let (cleaned, ended) = channel();
     let cleaner = {
@@ -1532,9 +1459,8 @@ fn a_pack_that_removes_a_pack_waits_for_a_read_in_flight_before_it_ends_the_read
         .recv_timeout(DEADLINE)
         .expect("the pack reached its prune")
         .expect("read the pipe");
-    // The one timed negative: a pack that does not wait for the read leaves nothing to look
-    // at, as `clean_up_beside_a_call` says. A passing run cannot fail on it: the read is let
-    // go only after the window.
+    // The one timed negative: a passing run cannot fail on it, since the read is let go only after
+    // the window.
     let ran_on = ended.recv_timeout(SETTLE);
     go.write_all(b"go\n").expect("say go");
     assert_eq!(
@@ -1567,7 +1493,6 @@ fn a_pack_that_removes_a_pack_waits_for_a_read_in_flight_before_it_ends_the_read
         "none starts before a read asks"
     );
 
-    // The next read starts another reader, and the bytes are the same.
     assert_eq!(
         store
             .content(second.id.as_str(), Path::new("turn.bin"))
@@ -1613,7 +1538,6 @@ fn the_reader_of_contents_ends_at_the_end_of_a_pack_that_removed_a_pack_and_the_
     let old_reader = started[0].clone();
     assert!(is_alive(&old_reader), "the reader waits for the next read");
 
-    // A pack that removes nothing ends nothing.
     let packs = packs_of(store.folder());
     store.pack().expect("pack again");
     assert_eq!(packs_of(store.folder()), packs, "this pack removed no pack");
@@ -1623,7 +1547,6 @@ fn the_reader_of_contents_ends_at_the_end_of_a_pack_that_removed_a_pack_and_the_
     );
     assert_eq!(reader_starts(&list), std::slice::from_ref(&old_reader));
 
-    // One that removes the old pack ends it, and waits for it: the room is given back.
     record_with_noise(&store, &repo, &worktree, &mut noise);
     store
         .delete(&[first.id.to_string()].into())
@@ -1643,7 +1566,6 @@ fn the_reader_of_contents_ends_at_the_end_of_a_pack_that_removed_a_pack_and_the_
         "none starts before a read asks"
     );
 
-    // The next read starts a new one and reads what the old one did.
     let after = store
         .content(second.id.as_str(), path)
         .expect("read")
@@ -1682,7 +1604,6 @@ fn the_reader_of_contents_ends_at_the_end_of_a_pack_that_only_pruned_loose_objec
     let started = reader_starts(&list);
     assert_eq!(started.len(), 1, "one reader: {started:?}");
 
-    // A comparison with the files on disk writes a tree and a blob no ref names.
     write(&repo, "notes.txt", "changed since the state\n");
     store
         .compare(Some(&worktree), state.id.as_str(), None)
@@ -1712,8 +1633,8 @@ fn the_reader_of_contents_ends_with_a_pack_that_removed_a_pack_though_its_prune_
     let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
-    // This git writes down every start of itself and, once armed, fails the next `prune`
-    // after `repack` ran: the stand-in for a disk that fails then.
+    // This git writes down every start of itself and, once armed, fails the next `prune` after
+    // `repack` ran: the stand-in for a disk that fails then.
     let list = scratch.join("starts-of-git");
     let armed = scratch.join("fail-the-prune");
     let failing = scratch.join("bin/git-listed-and-failing");
@@ -1743,7 +1664,6 @@ fn the_reader_of_contents_ends_with_a_pack_that_removed_a_pack_though_its_prune_
     assert_eq!(started.len(), 1, "one reader: {started:?}");
     let packs = packs_of(store.folder());
 
-    // A pack that removes the old pack, and whose prune then fails.
     record_with_noise(&store, &repo, &worktree, &mut noise);
     store
         .delete(&[first.id.to_string()].into())
@@ -1765,7 +1685,6 @@ fn the_reader_of_contents_ends_with_a_pack_that_removed_a_pack_though_its_prune_
         "none starts before a read asks"
     );
 
-    // The next read starts a new one and gives the bytes the old one gave.
     assert_eq!(
         store.content(second.id.as_str(), path).expect("read"),
         Some(before),

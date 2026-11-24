@@ -1,5 +1,4 @@
-//! System tests of the walking skeleton: the two built programs and the Link between
-//! them, with no window on any screen.
+//! System tests of the two built programs and the Link between them, with no window.
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -11,8 +10,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[test]
 fn both_programs_say_their_version() {
-    // As a user of a folder of the test's own, like every other run of the programs: the
-    // environment of the person who runs the tests names where a Keeper would listen.
+    // A folder of its own: the environment of whoever runs the tests names where a Keeper would
+    // listen.
     let place = Place::new();
     for (name, expected) in [
         ("yaar-review", format!("yaar-review {VERSION}\n")),
@@ -59,7 +58,6 @@ fn the_keeper_answers_a_scripted_window_and_stops_when_asked() {
 #[test]
 fn the_window_program_starts_a_keeper_that_outlives_it() {
     let place = Place::new();
-    // The Window program, told to find or start the Keeper as the window would and leave.
     let out = place
         .command(&program("yaar-review"))
         .arg("--keeper-status")
@@ -84,7 +82,6 @@ fn the_window_program_starts_a_keeper_that_outlives_it() {
     assert_eq!(field("started"), "true");
     let pid: u32 = field("pid").parse().expect("pid");
 
-    // The Window program is gone. Its Keeper still runs, in a session of its own.
     assert!(is_alive(pid), "the Keeper ended with the Window program");
     assert_eq!(
         field("session"),
@@ -95,7 +92,6 @@ fn the_window_program_starts_a_keeper_that_outlives_it() {
     let my_session = unsafe { libc::getsid(0) };
     assert_ne!(my_session as u32, pid);
 
-    // A second Window finds the same Keeper and starts none.
     let again = place
         .command(&program("yaar-review"))
         .arg("--keeper-status")

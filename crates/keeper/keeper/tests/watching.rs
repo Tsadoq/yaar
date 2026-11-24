@@ -1,10 +1,5 @@
-//! Component tests: the worktrees the Keeper watches for the Windows, through the surface a
-//! Window uses, with real repositories the tests make, the system's own notices of
-//! changed files, and a real database beneath.
-//!
-//! The Keeper runs git as its user does, with the environment of its process. Each test
-//! therefore cleans that environment as its first statement, and these tests are run by
-//! `cargo nextest`, which gives each test a process of its own.
+//! Component tests of the watched worktrees, with real repositories and the system's file notices.
+//! Each test sets the process environment first, so nextest runs it in a process of its own.
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -19,21 +14,17 @@ use yaar_link::{
     ReviewId, Side, ThreadId, WorkspaceId, handshake, read_message, write_message,
 };
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// How long without a fact is taken to mean that none is on its way: far more than the
-/// system takes to tell of a change of a file (about 12 ms on macOS) and than the Keeper
-/// waits between two facts of one workspace (250 ms).
+/// How long without a fact means none is coming: far more than the system takes to tell
+/// of a file change (about 12 ms on macOS) and than the Keeper waits between two facts
+/// of one workspace (250 ms).
 const QUIET: Duration = Duration::from_millis(1200);
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and cleans the environment of this process for git: no
-    /// configuration of the user or of the system, a fixed author and date, an empty
-    /// home. It has to be the first statement of a test.
+    /// Cleans the process environment for git. Must be the first statement of a test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -55,10 +46,8 @@ impl Scratch {
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: this runs as the first statement of a test, and nextest gives each test
+        // a process of its own, so no other thread exists yet.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
@@ -87,7 +76,6 @@ impl Scratch {
         self.0.join("data")
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -101,9 +89,8 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen, and waiting until it
-    /// serves this Window: a fact told before that is told to a Window that is not there
-    /// yet, and the first reply is the proof that it is.
+    /// Waits until the Keeper serves this Window, which the first reply proves: a fact told
+    /// before then never reaches this Window.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -115,9 +102,6 @@ impl Scratch {
                     .set_read_timeout(Some(DEADLINE))
                     .expect("set the deadline of a read");
                 let mut window = Window { stream, next_id: 0 };
-                // The Keeper tells a fact to the Windows it serves: its first reply comes
-                // after the Window is one of them. `ListClis` tells no fact and keeps no
-                // state.
                 window
                     .ask(Request::ListClis)
                     .expect("the Keeper serves the Window");
@@ -132,7 +116,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main`.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -143,8 +126,6 @@ impl Scratch {
         folder
     }
 
-    /// How many states of `workspace` the Keeper has recorded, read from the state store
-    /// as git does.
     fn states_of(&self, workspace: &WorkspaceId) -> usize {
         let store = self
             .data_dir()
@@ -163,8 +144,6 @@ impl Scratch {
         String::from_utf8_lossy(&output.stdout).lines().count()
     }
 
-    /// The content of `path` in the state `state` of `workspace`, read from the state
-    /// store as git does.
     fn file_in_state(&self, workspace: &WorkspaceId, state: &str, path: &str) -> String {
         let store = self
             .data_dir()
@@ -180,8 +159,7 @@ impl Scratch {
         String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
-    /// Waits until the Keeper has recorded at least one state of `workspace`: it does so
-    /// after its watcher runs, so no change made after this is missed.
+    /// The Keeper records a state after its watcher runs, so no change made after this is missed.
     fn wait_until_watched(&self, workspace: &WorkspaceId) {
         let deadline = Instant::now() + DEADLINE;
         while self.states_of(workspace) == 0 {
@@ -215,7 +193,6 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// One end of the Link, as a Window holds it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -235,7 +212,6 @@ impl Window {
         }
     }
 
-    /// Opens the folder as a workspace.
     fn open(&mut self, folder: &Path) -> WorkspaceId {
         let opened = self.ask(Request::OpenFolder {
             path: folder.to_owned(),
@@ -246,14 +222,12 @@ impl Window {
         workspace
     }
 
-    /// Tells the Keeper which workspace this Window shows.
     fn show(&mut self, workspace: Option<&WorkspaceId>) -> Result<Reply, Refusal> {
         self.ask(Request::ShowWorkspace {
             workspace: workspace.cloned(),
         })
     }
 
-    /// The next fact, waiting up to `limit` for it: none when nothing comes by then.
     fn fact_within(&mut self, limit: Duration) -> Option<Fact> {
         self.stream
             .set_read_timeout(Some(limit))
@@ -277,7 +251,6 @@ impl Window {
         }
     }
 
-    /// Reads facts until one that `wanted` accepts comes, and returns it.
     fn wait_for(&mut self, wanted: impl Fn(&Fact) -> bool) -> Fact {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -290,7 +263,6 @@ impl Window {
         }
     }
 
-    /// Every fact that comes until none has come for [`QUIET`], each with when it came.
     fn facts_until_quiet(&mut self) -> Vec<(Instant, Fact)> {
         let mut facts = Vec::new();
         while let Some(fact) = self.fact_within(QUIET) {
@@ -299,7 +271,6 @@ impl Window {
         facts
     }
 
-    /// The review of no agent of `workspace`, and the state each of its threads sits on.
     fn thread_states(&mut self, workspace: &WorkspaceId) -> (ReviewId, Vec<String>) {
         let Ok(Reply::Reviews(held)) = self.ask(Request::GetReviews {
             workspace: workspace.clone(),
@@ -321,14 +292,10 @@ impl Window {
         (review.id, states)
     }
 
-    /// Starts a thread on the first line of `a.txt` in the files on disk, the `n`th of
-    /// the test.
     fn new_thread(&mut self, review: &ReviewId, n: u8) {
         self.new_thread_on(review, n, 1, "one");
     }
 
-    /// Starts a thread on line `line` of `a.txt` in the files on disk, `text` being that
-    /// line, the `n`th of the test.
     fn new_thread_on(&mut self, review: &ReviewId, n: u8, line: u32, text: &str) {
         let anchor = Anchor {
             tree: None,
@@ -390,14 +357,11 @@ fn a_change_of_a_file_of_a_shown_worktree_is_told_to_every_window_and_the_first_
 
     assert_eq!(shows.show(Some(&workspace)), Ok(Reply::Done));
     scratch.wait_until_watched(&workspace);
-    // A Window that shows nothing is told too: facts go to every Window.
     let mut other = scratch.window();
     std::fs::write(repo.join("a.txt"), "one\ntwo\n").expect("change a file");
     other.wait_for(changes_of(&workspace));
     shows.wait_for(changes_of(&workspace));
 
-    // A second Window that shows it does not take another state: the worktree was
-    // watched already.
     assert_eq!(other.show(Some(&workspace)), Ok(Reply::Done));
     assert_eq!(scratch.states_of(&workspace), 1);
     shows.stop(keeper);
@@ -407,9 +371,8 @@ fn a_change_of_a_file_of_a_shown_worktree_is_told_to_every_window_and_the_first_
 fn a_new_thread_on_the_files_on_disk_records_a_state_only_when_a_file_changed_since_the_newest() {
     let scratch = Scratch::new();
     let repo = scratch.repository("repo");
-    // A state is recorded through the repository's own filters, as `git add` makes it, and
-    // the file below is one git does not track, so that every recording runs the filter
-    // again: the lines it leaves tell whether a state was recorded.
+    // A state is recorded through the repository's own filters, as `git add` does: the
+    // untracked file runs the filter on every recording, so the lines it leaves count them.
     let count = scratch.0.join("recordings");
     git(
         &repo,
@@ -433,12 +396,10 @@ fn a_new_thread_on_the_files_on_disk_records_a_state_only_when_a_file_changed_si
     let mut window = scratch.window();
     let workspace = window.open(&repo);
     assert_eq!(window.show(Some(&workspace)), Ok(Reply::Done));
-    // The first watching recorded a state, and the files have not changed since.
     scratch.wait_until_watched(&workspace);
     let first = recordings();
     assert!(first > 0, "the first watching recorded a state");
 
-    // Two threads with no change between them sit on one state, the one already there.
     let (review, _) = window.thread_states(&workspace);
     window.new_thread(&review, 1);
     window.new_thread(&review, 2);
@@ -448,7 +409,6 @@ fn a_new_thread_on_the_files_on_disk_records_a_state_only_when_a_file_changed_si
     assert_eq!(scratch.states_of(&workspace), 1);
     assert_eq!(recordings(), first, "no state was recorded for them");
 
-    // A file changed since, told by the Keeper's own fact, gives the next thread a new one.
     std::fs::write(repo.join("a.txt"), "one\ntwo\n").expect("change a file");
     window.wait_for(changes_of(&workspace));
     window.new_thread(&review, 3);
@@ -471,8 +431,8 @@ fn a_new_thread_on_lines_a_write_just_made_sits_on_a_state_that_holds_them() {
     scratch.wait_until_watched(&workspace);
     let (review, _) = window.thread_states(&workspace);
 
-    // The write is read from disk by a Window before the watcher tells of it, so the
-    // thread must not wait for that fact: the newest state lacks the line it comments on.
+    // A Window reads the write from disk before the watcher tells of it, so the thread must not
+    // wait for that fact: the newest state lacks the line it comments on.
     std::fs::write(repo.join("a.txt"), "one\ntwo\n").expect("change a file");
     window.new_thread_on(&review, 1, 2, "two");
 
@@ -496,8 +456,6 @@ fn a_change_of_what_is_checked_out_is_told_with_the_list_of_workspaces_as_it_is_
     assert_eq!(window.show(Some(&workspace)), Ok(Reply::Done));
     scratch.wait_until_watched(&workspace);
 
-    // The list is told at the first change git makes, and again at the last: the one that
-    // names the new branch is the one wanted.
     git(&repo, &["checkout", "--quiet", "-b", "other"]);
     let on_other = |found: &yaar_link::Workspace| {
         found.id == workspace && found.head == Some(yaar_link::Head::Branch("other".to_owned()))
@@ -519,14 +477,11 @@ fn writes_that_follow_each_other_are_told_once_at_the_start_and_then_once_in_eac
     let workspace = window.open(&repo);
     assert_eq!(window.show(Some(&workspace)), Ok(Reply::Done));
     scratch.wait_until_watched(&workspace);
-    // The facts the opening and the first watching told are not those of the writes.
     window.facts_until_quiet();
 
-    // Sixty writes, one due every 20 ms from the first, which is 1.2 s at the pace of an
-    // agent saving. The pace is a schedule and not a sleep after each write, so that a slow
-    // machine whose sleeps overshoot writes late and then catches up, and the span stays
-    // near 1.2 s: it is what the bound is made of. The writes are made on a thread of their
-    // own, so that the facts are read as they come.
+    // Sixty writes, one due every 20 ms from the first (an agent's pace): a schedule, not a
+    // sleep after each, so a slow machine catches up and the span stays near the 1.2 s the
+    // bound uses.
     let writing = {
         let file = repo.join("a.txt");
         std::thread::spawn(move || {
@@ -551,13 +506,8 @@ fn writes_that_follow_each_other_are_told_once_at_the_start_and_then_once_in_eac
         .collect();
     let (first_write, last_write) = writing.join().expect("the writes");
 
-    // A fact for each write would be sixty. One for the start, one for each calm time that
-    // fits in the span of the writes (rounded up: the time between a write and the
-    // watcher's notice differs from write to write, which can move one fact more into the
-    // span) and one for the rest after the last write is all there may be, and there
-    // is one at least for the start and one for the rest. That bound must also stay at
-    // half of the writes or less: above it a Keeper that told most writes would pass, so a
-    // run too slow to show the calming fails for that reason and proves nothing.
+    // At most one fact for the start, one per calm time in the span (rounded up), one for the rest.
+    // The bound must stay at half the writes or less, or a Keeper that told most writes passes.
     let span = last_write - first_write;
     let calm_times = span.as_millis().div_ceil(250) as usize;
     let most = calm_times + 2;
@@ -601,7 +551,6 @@ fn a_worktree_is_no_longer_watched_when_the_window_that_showed_it_goes_or_shows_
     assert_eq!(shows_two.show(Some(&second)), Ok(Reply::Done));
     scratch.wait_until_watched(&second);
 
-    // `goes` shows the first and then goes; `moves` shows the third and then the second.
     let mut goes = scratch.window();
     assert_eq!(goes.show(Some(&first)), Ok(Reply::Done));
     let mut moves = scratch.window();
@@ -610,9 +559,6 @@ fn a_worktree_is_no_longer_watched_when_the_window_that_showed_it_goes_or_shows_
     scratch.wait_until_watched(&third);
     drop(goes);
     assert_eq!(moves.show(Some(&second)), Ok(Reply::Done));
-    // The first is let go once its Window is gone, which the Keeper sees on its own
-    // thread: what comes of changing it is read after a change of the second, which is
-    // still watched, has come and a quiet time has passed.
     shows_two.facts_until_quiet();
 
     std::fs::write(one.join("a.txt"), "one\nchanged\n").expect("change a file");

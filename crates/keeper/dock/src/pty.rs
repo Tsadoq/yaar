@@ -1,7 +1,5 @@
-//! The system calls that make a pseudo-terminal and the pipe that wakes its threads.
-//!
-//! Every descriptor made here is close-on-exec from its birth: other threads of the
-//! Keeper start programs at any moment, and none of them may take a terminal along.
+//! Every descriptor made here is close-on-exec, from its birth except the macOS pipe: other
+//! threads start programs at any moment, and none may take a terminal along.
 
 use std::ffi::CString;
 use std::io;
@@ -9,19 +7,17 @@ use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 
 use crate::Size;
 
-/// The most characters a slave's name has, with the end of the string.
 const SLAVE_NAME_LENGTH: usize = 128;
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
-    /// macOS has had this since 10.13.4, and the `libc` crate does not declare it there.
+    /// Declared here: the `libc` crate lacks it on macOS.
     fn ptsname_r(fd: libc::c_int, buf: *mut libc::c_char, buflen: libc::size_t) -> libc::c_int;
 }
 
 #[cfg(not(target_os = "macos"))]
 use libc::ptsname_r;
 
-/// Turns the return of a system call into an error when it failed.
 pub(crate) fn checked(result: libc::c_int) -> io::Result<libc::c_int> {
     if result < 0 {
         Err(io::Error::last_os_error())
@@ -30,10 +26,8 @@ pub(crate) fn checked(result: libc::c_int) -> io::Result<libc::c_int> {
     }
 }
 
-/// A new master and the slave that belongs to it, both of `size`.
 pub(crate) fn open_pair(size: Size) -> io::Result<(OwnedFd, OwnedFd)> {
-    // SAFETY: the path is a C string that outlives the call, and the flags are the
-    // system's own. The descriptor is wrapped at once, so it is closed on every path out.
+    // SAFETY: the path is a C string that outlives the call. The descriptor is wrapped at once.
     let master = unsafe {
         let fd = checked(libc::open(
             c"/dev/ptmx".as_ptr(),
@@ -61,8 +55,8 @@ pub(crate) fn open_pair(size: Size) -> io::Result<(OwnedFd, OwnedFd)> {
     let name = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_owned();
 
     let slave = open_slave(&name)?;
-    // The size goes in before the program starts, so that it never sees another. Not
-    // before the slave is open: macOS refuses it on a master that has no slave.
+    // Set before the program starts, but after the slave is open: macOS refuses it on a master that
+    // has no slave.
     set_size(raw, size)?;
     Ok((master, slave))
 }
@@ -78,7 +72,6 @@ fn open_slave(name: &CString) -> io::Result<OwnedFd> {
     }
 }
 
-/// Gives the terminal a size; the system tells the program with a signal when it changes.
 pub(crate) fn set_size(master: RawFd, size: Size) -> io::Result<()> {
     let window = libc::winsize {
         ws_row: size.rows.max(1),
@@ -86,14 +79,10 @@ pub(crate) fn set_size(master: RawFd, size: Size) -> io::Result<()> {
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    // SAFETY: the pointer is to a value that outlives the call, of the type the request
-    // takes.
+    // SAFETY: the pointer is to a value that outlives the call.
     checked(unsafe { libc::ioctl(master, libc::TIOCSWINSZ as _, &window) }).map(|_| ())
 }
 
-/// Makes the descriptor refuse a blocking wait: reads and writes on it return at once
-/// when they cannot go on, and the threads wait with `poll` instead, which they can
-/// leave when told to.
 pub(crate) fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     // SAFETY: plain flag calls on an open descriptor.
     unsafe {
@@ -103,14 +92,13 @@ pub(crate) fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
-/// A pipe of which both ends are close-on-exec: the read end and the write end.
 pub(crate) fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut ends = [0 as libc::c_int; 2];
     #[cfg(not(target_os = "macos"))]
     // SAFETY: the array holds the two descriptors the call writes.
     checked(unsafe { libc::pipe2(ends.as_mut_ptr(), libc::O_CLOEXEC) })?;
-    // macOS has no `pipe2`. The window between the two calls is why the program's start
-    // marks every descriptor close-on-exec there.
+    // macOS has no `pipe2`; the gap between the two calls is why program start marks every
+    // descriptor close-on-exec there.
     #[cfg(target_os = "macos")]
     // SAFETY: as above, and the flags are set on descriptors that are open.
     unsafe {
@@ -123,10 +111,8 @@ pub(crate) fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     Ok(unsafe { (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) })
 }
 
-/// Waits for the master to be ready for `events`, or to fail, and for the pipe that says
-/// the program was collected. Gives whether the master is ready, and whether the pipe
-/// spoke. `timeout` is in milliseconds, `None` for no end. A pipe already known to have
-/// spoken is left out with `wake: None`. An interrupted wait gives `(false, false)`.
+/// Gives (master ready, pipe spoke). `timeout` is in ms, `None` for no end. `wake: None` leaves out
+/// a pipe already known to have spoken. An interrupted wait gives `(false, false)`.
 pub(crate) fn wait(
     master: RawFd,
     events: libc::c_short,
@@ -161,8 +147,7 @@ pub(crate) fn wait(
     Ok((fds[0].revents & (events | failed) != 0, fds[1].revents != 0))
 }
 
-/// Reads what the descriptor holds. `Ok(None)` when there is nothing now, or the call
-/// was interrupted; `Ok(Some(0))` at the end of the file.
+/// `Ok(None)` when there is nothing now or the call was interrupted; `Ok(Some(0))` at the end.
 pub(crate) fn read(fd: RawFd, buffer: &mut [u8]) -> io::Result<Option<usize>> {
     // SAFETY: the pointer and the length are those of the buffer.
     let count = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
@@ -176,8 +161,6 @@ pub(crate) fn read(fd: RawFd, buffer: &mut [u8]) -> io::Result<Option<usize>> {
     }
 }
 
-/// Writes what the descriptor takes now. `Ok(None)` when it takes nothing now, or the call
-/// was interrupted.
 pub(crate) fn write(fd: RawFd, bytes: &[u8]) -> io::Result<Option<usize>> {
     // SAFETY: the pointer and the length are those of the slice.
     let count = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
@@ -191,8 +174,6 @@ pub(crate) fn write(fd: RawFd, bytes: &[u8]) -> io::Result<Option<usize>> {
     }
 }
 
-/// The descriptors a program must not hold on macOS, where the standard library makes
-/// some and only then marks them close-on-exec: how many to mark, from 3 up.
 #[cfg(target_os = "macos")]
 pub(crate) fn descriptor_limit() -> libc::c_int {
     const CAP: libc::rlim_t = 65_536;

@@ -1,51 +1,18 @@
 #!/bin/bash
-# PERF-04: a key is on screen at most 10 ms later than in Ghostty, at the median and at the
-# 95th percentile, in three places: the terminal pane idle, the terminal pane while an agent
-# writes, and a comment box. (HW-03 asks the same of the Linux machine against foot: see
-# linux-hardware.sh.)
+# A key is on screen at most 10 ms later than in Ghostty, at the median and p95, in three places:
+# the terminal pane idle, the pane while an agent writes, and a comment box.
 #
-#   packaging/checklists/typing.sh
-#   packaging/checklists/typing.sh --analyse <input log> <capture log>
+# packaging/checklists/typing.sh
+# packaging/checklists/typing.sh --analyse <input log> <capture log>
 #
-# NOT RUN BY ANY AGENT. It posts real key events to the system and records the screen, so it
-# runs only on the owner's word: it asks for the word "go" before it posts anything, and
-# fakeinput itself refuses to post unless the app it types into is the frontmost one.
-#
-# What it does, for each of the three places: asks you to put the app in the state named
-# (you start `cat` or the stream in the terminal pane, or open a comment box, and click in
-# it), then starts adecap.app on the app's Window (it logs the display time of every frame of
-# that window whose pixels changed), brings the app to the front, posts 208 or 210 letters
-# with fakeinput at random gaps of 150 to 250 ms (every 30 in the idle case it also posts
-# Ctrl-U to clear the line), stops the capture, and does the same on a second instance of
-# Ghostty running `cat` (for "while an agent writes", `cat` with the same stream beside it;
-# the comment box is compared with Ghostty idle, the only text-input surface it has). The
-# posts and the frames are on one clock, the system's uptime in nanoseconds: the key to
-# screen time is the first changed frame after each post (a frame sooner than 12 ms is not
-# the key's; a key with none before the next key plus 20 ms, or within 400 ms, is missed).
-# The figures are the median and the 95th percentile of those times, for the app and for
-# Ghostty, and their difference against 10 ms.
-#
-# What it needs of the owner: his "go"; mains power, an unlocked screen, nobody at the
-# keyboard; Accessibility for the terminal that runs this (to post events); Screen Recording
-# for adecap.app (not for the terminal); the packaged app running with one workspace open;
-# Ghostty installed. The measuring tools are the phase 4 kit's, read and never rebuilt:
-# fakeinput, adecap.app and tools/stream.pl in YAAR_KIT (default
-# ~/ade-phase4-2026-11-12/gpui-measure), or YAAR_FAKEINPUT and YAAR_ADECAP outright.
-# YAAR_REFERENCE_APP names the application to compare with (default Ghostty), and
-# YAAR_REFERENCE_PROGRAM the full path of its program (default Ghostty's, in /Applications).
-# The reference it starts is found as the one new process of that program, by its full path,
-# and ended by that pid: a Ghostty of yours that was already open is never touched.
-#
-# --analyse reads the logs of an earlier case (fakeinput's `--log` and adecap's `--log`
-# files) and prints the number of keys, the median and the 95th percentile of the key to
-# screen time; it posts nothing and opens nothing.
-#
-# Where it writes: ~/yaar-checklists/<YYYY-MM-DD>/typing-<HHMMSS>/ with, for each place, the
-# input log and the capture log of the app and of the reference, and results.txt.
-#
-# Exit codes: 0 the difference is within 10 ms at the median and at the 95th percentile in
-# all three places; 1 it is not, or the run could not be done (a sentence says which); 2
-# usage error.
+# RUN BY HAND ONLY: it posts real key events and records the screen, so it asks for "go" first.
+# Per terminal place: 208 or 210 letters at random 150-250 ms gaps, then the same on a second
+# Ghostty running `cat` (the stream beside it while an agent writes); the comment box is compared
+# with Ghostty idle. YAAR_REFERENCE_APP and YAAR_REFERENCE_PROGRAM name another reference.
+# Needs Accessibility and Screen Recording, mains power, the app with one workspace, Ghostty, and
+# the tools that YAAR_FAKEINPUT, YAAR_ADECAP and YAAR_STREAM name (or YAAR_KIT, a folder that holds
+# them under tools/). --analyse posts nothing. Exit: 0 within 10 ms in all three, 1 over or not
+# done, 2 usage.
 set -euo pipefail
 
 CK_NAME=typing.sh
@@ -72,8 +39,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-# summary <input log> <capture log>: "n=<keys> median=<ms> p95=<ms>" and, apart, the counts
-# of missed and early keys on standard error.
 summary() {
   ck_key_latencies "$1" "$2" | ck_median_p95
 }
@@ -86,11 +51,10 @@ if [ -n "$ANALYSE_INPUT" ]; then
 fi
 
 ck_lit_preflight 1 > /dev/null
-KIT=$(ck_kit_dir)
 FAKEINPUT=$(ck_fakeinput)
 REFERENCE=${YAAR_REFERENCE_APP:-Ghostty}
-STREAM="$KIT/tools/stream.pl"
-[ -f "$STREAM" ] || ck_die "no stream.pl at $STREAM: it is the phase 4 kit's output generator"
+STREAM=$(ck_stream_script)
+[ -f "$STREAM" ] || ck_die "no stream.pl at $STREAM: name it in YAAR_STREAM (or its folder in YAAR_KIT)"
 WINDOW_PROGRAM=$(ck_window_program)
 APP_PIDS=$(ck_pids_of "$WINDOW_PROGRAM")
 case $APP_PIDS in
@@ -118,15 +82,13 @@ cat << EOF
 This posts real keys to the system, about 600 of them in all, to the app and to a second
 $REFERENCE, and records the screen. Nobody should touch the keyboard or the mouse.
 EOF
-ck_go "The app is pid $APP_PID, the measuring tools are in $KIT."
+ck_go "The app is pid $APP_PID."
 
 is_front() {
   [ "$(ck_front_pid)" = "$1" ]
 }
 
-# bring_front <pid>: puts the process with that pid in front, by its pid: asking for an
-# application by name would bring forward whichever instance of it LaunchServices likes,
-# which may be a Ghostty of the owner's own and not the one this script started.
+# Front by pid: asking for an application by name brings whichever instance LaunchServices likes.
 bring_front() {
   case $1 in
     '' | *[!0-9]*) ck_die "the pid to bring to the front is '$1', not a number" ;;
@@ -136,7 +98,6 @@ bring_front() {
   ck_wait_until 10 is_front "$1" || ck_die "the application (pid $1) did not come to the front in 10 s: another window took the focus"
 }
 
-# type_into <name> <pid> <count> <batch>: one capture and one run of keys.
 type_into() {
   local name=$1 pid=$2 count=$3 batch=$4
   bring_front "$pid"
@@ -147,13 +108,7 @@ type_into() {
   ck_cap_stop "$OUT/$name.cap" "$OUT/$name.capstop"
 }
 
-# reference <name> <command>: a second instance of the reference terminal running the command,
-# typed into and closed again by its pid. Its pid is the one new process of REF_PROGRAM, by
-# full path, that appears after the start: whichever application is in front says nothing of
-# which process is ours.
 STARTED_REFERENCE=""
-# end_started_reference: the second reference terminal this script started, if it is still
-# there, is ended by its pid (and no other process) when the script ends for any reason.
 end_started_reference() {
   if [ -n "$STARTED_REFERENCE" ] && kill -0 "$STARTED_REFERENCE" 2> /dev/null; then
     kill "$STARTED_REFERENCE" 2> /dev/null || true
@@ -161,6 +116,8 @@ end_started_reference() {
 }
 CK_EXTRA_CLEANUP=end_started_reference
 
+# The reference's pid is the one new process of REF_PROGRAM, by full path, after the start:
+# the frontmost application says nothing of which process is ours.
 reference() {
   local name=$1 command=$2 pid="" known
   known=$(ck_pids_of "$REF_PROGRAM")
@@ -176,7 +133,6 @@ reference() {
     *[[:space:]]*) ck_die "more than one new process of $REF_PROGRAM appeared ($(echo "$pid" | tr '\n' ' ')): none was ended, close the one you do not know yourself" ;;
   esac
   STARTED_REFERENCE=$pid
-  # The reference is ready for keys when its terminal has started the command: a child of it.
   has_child() {
     ps -axo pid=,ppid= | awk -v p="$pid" '$2 == p { found = 1 } END { exit !found }'
   }
@@ -200,7 +156,6 @@ say() {
 }
 OVER=0
 
-# judge <case> <app summary> <reference summary>
 judge() {
   local app_median app_p95 ref_median ref_p95 dm dp
   app_median=$(printf '%s\n' "$2" | sed -n 's/.*median=\([0-9.]*\).*/\1/p')
@@ -223,7 +178,6 @@ judge() {
   fi
 }
 
-# --- the terminal pane, idle
 wait_ready "Place 1 of 3. In the app, click into a terminal pane and run: cat" "place 1"
 type_into app-terminal-idle "$APP_PID" 210 30
 reference ref-terminal-idle cat
@@ -231,7 +185,6 @@ APP_IDLE=$(summary "$OUT/app-terminal-idle.input" "$OUT/app-terminal-idle.cap" 2
 REF_IDLE=$(summary "$OUT/ref-terminal-idle.input" "$OUT/ref-terminal-idle.cap" 2> /dev/null)
 judge "terminal idle" "$APP_IDLE" "$REF_IDLE"
 
-# --- the terminal pane while output streams
 wait_ready "Place 2 of 3. In the app, stop what runs in the terminal pane (Ctrl-C), then run: perl '$STREAM' & cat" "place 2"
 type_into app-terminal-stream "$APP_PID" 208 0
 reference ref-terminal-stream "$WRAPPER"
@@ -239,7 +192,6 @@ APP_STREAM=$(summary "$OUT/app-terminal-stream.input" "$OUT/app-terminal-stream.
 REF_STREAM=$(summary "$OUT/ref-terminal-stream.input" "$OUT/ref-terminal-stream.cap" 2> /dev/null)
 judge "terminal while output streams" "$APP_STREAM" "$REF_STREAM"
 
-# --- a comment box
 wait_ready "Place 3 of 3. In the app, stop what runs in the terminal pane, open a comment box on a diff line, and click into it" "place 3"
 type_into app-comment-box "$APP_PID" 208 0
 APP_COMMENT=$(summary "$OUT/app-comment-box.input" "$OUT/app-comment-box.cap" 2> /dev/null)

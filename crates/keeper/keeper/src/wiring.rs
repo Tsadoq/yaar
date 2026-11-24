@@ -1,106 +1,7 @@
-//! Between the Link and the parts of the Keeper.
-//!
-//! The parts speak in their own words and know nothing of the Link. Here each request of a
-//! Window is handed to the part that answers it, and what the part returns is put into the
-//! words of the Link: a reply for the Window that asked, and the facts that every attached
-//! Window is told.
-//!
-//! | Request | Answered by | Facts told to every Window |
-//! | --- | --- | --- |
-//! | `ListWorkspaces` | `Workspaces::repositories` | none |
-//! | `OpenFolder` | `Workspaces::open_folder` | `Workspaces`, the list as it is then |
-//! | `SetBase` | `Workspaces::set_base` | `ChangesChanged` of that workspace |
-//! | `GetChanges` | `Workspaces::changes` | none |
-//! | `ReadFile` | `Workspaces::file` | none |
-//! | `OpenTerminal` | `Dock::open`, in the folder of the workspace | none; later `TerminalEnded` |
-//! | `ResizeTerminal` | `Dock::resize` | none |
-//! | `GetReviews` | `Reviews::of_workspace`, with the worktree when it is there | none |
-//! | `SaveDraft` | `Reviews::save_draft` | `ReviewsChanged` of its workspace when it made a comment |
-//! | `DeleteDraft` | `Reviews::delete_draft` | `ReviewsChanged` of its workspace |
-//! | `CopyReview` | `Reviews::copy_as_text` | `ReviewsChanged` of its workspace |
-//! | `MarkReviewed` | `Reviews::mark_reviewed` | `ReviewsChanged` of its workspace |
-//! | `SetViewed` | `Reviews::set_viewed` | `ReviewsChanged` of that workspace |
-//! | `Commit` | `Worktree::commit_all`, the worktree from `Workspaces::worktree` | `ChangesChanged` of that workspace |
-//! | `Report` | `Agents::report`: queued, and answered once the agents' own thread has taken it (`Answer` or `Done`) | later `AgentsChanged`, `Step`, `TurnEnded`, `ReviewsChanged` |
-//! | `ListAgents` | `Agents::list` | none |
-//! | `GetHistory` | `Agents::history` | none |
-//! | `GetUncommitted` | `Agents::uncommitted` | none |
-//! | `CompareVersions` | `Agents::compare` | none |
-//! | `ReadVersions` | `Agents::read_versions` | none |
-//! | `GetTurn` | `Agents::turn` | none |
-//! | `ShowWorkspace` | the watchers of the worktrees on screen | later `ChangesChanged`, `Workspaces` |
-//! | `ListTerminals` | the terminals the Dock holds, with their workspace and program | none |
-//! | `AttachTerminal` | `Dock::attach` adds the Window to the terminal's route, then `Dock::resize` and `Dock::redraw` | none |
-//! | `GetSettings` | `settings::get`, from the Store | none |
-//! | `SetSetting` | `settings::set`, into the Store | `SettingChanged` with the setting |
-//! | `ListClis` | `Agents::supported`, the Adapters' names and titles | none |
-//! | `CompareForReview` | `Agents::compare_for_review`, through `Reviews::credited_change` | none |
-//! | `ListConsents` | `Agents::consents`, each Adapter's `consent` | none |
-//! | `AnswerConsent` | `Agents::answer_consent`, the Adapter's `answer_consent` | `ConsentsChanged` with every Adapter's consent |
-//! | `ExportVersion` | `Agents::export_version`, through `StateStore::export` | none |
-//! | `CreateWorktree` | `Parts::create_worktree` (`wiring/worktrees.rs`): `Workspaces::plan_worktree`, `Planned::add` once the parts are let go, then under the Keeper's turn `Workspaces::open_added` and the agent's launcher as `OpenTerminal` opens it | `Workspaces`, the list as it is then, told under the turn before the reply |
-//! | `GetStateSizes` | `cleaning::sizes`, through `Reviews::state_sizes` | none |
-//! | `CleanUpStates` | `cleaning::clean_up_now`: `Reviews::clean_up` of every workspace, then `Agents::remove_files_of_ended` | `StatesDeleted` of each workspace that lost a state |
-//!
-//! `SetBase` and `GetChanges` also tell `base_moves` the commit the changes are counted from,
-//! so that the threads on the old side follow the base when it moves; a thread that moved is
-//! told as `ReviewsChanged` of its workspace.
-//!
-//! A Window is also told `ConsentsChanged` alone at its first request when an Adapter's
-//! question waits for an answer or its CLI's settings could not be changed: the question
-//! it shows (`Parts::consents`).
-//!
-//! A piece of the app inside an agent CLI connects as a Window does, sends one request of
-//! the origin `Agent`, and is let go once it is answered.
-//!
-//! The worktree of a request of reviews is found with `Workspaces::worktree`, which reads
-//! the Store and the folder and runs no git: never through the list of every repository,
-//! which runs git in each. A save that changes a draft's text needs no worktree at all.
-//!
-//! A copy of a review and a mark of reviewed need the worktree of the review's workspace,
-//! and are refused with the words "the worktree is gone" when there is none. So is a
-//! commit, and so is the mark of a viewed file. Reading the reviews of a gone worktree
-//! works, and so does the save of a draft's text.
-//!
-//! The commit is not answered by [`Parts::answer`] itself: that gives the work, which the
-//! Keeper runs once it has let its parts go, so that the user's hooks, which may run for
-//! minutes, hold up nothing.
-//!
-//! A terminal's bytes are no request. What a Window sends as `Message::Input` is handed
-//! to `Dock::write`; what the program writes goes, as `Message::Output`, to every Window
-//! the terminal is shown to: the one that opened it, and each that attached to it later.
-//! A Window gets it only after the reply that named the terminal or attached it, and an
-//! attached Window first gets the kept output of the terminal, so that nothing is lost or
-//! sent twice where that ends. When the program ends, every Window is told
-//! `Fact::TerminalEnded`, after the last output of each that was sent any.
-//!
-//! The reply goes out before the facts. A Window that opened a folder therefore learns
-//! the id of the new workspace before the list that holds it.
-//!
-//! The list is told after every folder that was opened, also one that was open already.
-//! Whether it differs from what a Window holds, the Keeper cannot say: the list is read
-//! from git each time, and a worktree made outside the app is in it before any Window
-//! heard of it. A Window that opens such a worktree waits for the list that holds it.
-//!
-//! A version of a file is sent as text unless it is larger than `yaar_link::MAX_CONTENT`,
-//! or holds a zero byte among its first 8,000, which is how git tells that a file is not
-//! text; of such a version only the size is sent.
-//!
-//! A reply too large for one frame, as the changes of a folder with a hundred thousand
-//! new files can be, is not sent: the Window that asked gets `Refusal::Failed` with the
-//! reason in its place, so that no request stays without an answer. That is done where
-//! the reply is written, in the serve loop.
-//!
-//! Requests that change the list of workspaces, and the one whose reply carries that
-//! list, are answered one at a time: see [`waits_its_turn`]. The Review engine keeps its
-//! own changes one at a time. Where each request is answered, so that what takes long
-//! holds up nothing else of its Window, is [`answerer`]'s to say.
-//!
-//! The worktrees a Window shows, and those an agent works in, are watched: what changes in
-//! them is told as `ChangesChanged`, and a change of what is checked out as `Workspaces`
-//! too. The list of every repository is read from git when a Window asks for it.
+//! Hands each request of a Window to the part that answers it and puts the result into the Link's
+//! words. The reply goes out before the facts: a Window that opened a folder learns the new
+//! workspace's id before the list that holds it.
 
-// A worktree made from a branch with an agent in it, which `Parts::open_terminal` serves.
 mod worktrees;
 
 pub(crate) use worktrees::set_worktrees_folder;
@@ -123,58 +24,39 @@ use crate::base_moves;
 use crate::watching::Watching;
 use crate::{Options, Shared, Window, frame_of};
 
-/// How many of its first bytes say whether a file is text: git's own number.
+/// git's own number: how many first bytes say whether a file is text.
 const TEXT_PROBE: usize = 8000;
 
-/// The most bytes of a program's output that one frame carries.
 const OUTPUT_FRAME: usize = 64 * 1024;
 
-/// The parts of the Keeper, started and connected.
 pub(crate) struct Parts {
-    // Workspaces and the reviews, both on git and the Store, or the sentence that says
-    // why there are none.
     kept: Result<Kept, String>,
-    // The agents' side: the Adapters, the Switchboard and what follows from them. Held by
-    // the routes of the terminals too, which tell it the marks they find, so that the
-    // Dock's threads never wait for the parts.
+    // Also held by the terminals' routes, so the Dock's threads never wait for the parts.
     agents: Arc<Agents>,
-    // The worktrees watched: those a Window shows, and those an agent runs in.
     watching: Arc<Watching>,
-    // The terminals and their programs. Dropped with the parts, which ends every program.
+    // Dropped with the parts, which ends every program.
     dock: Dock,
-    // The terminals the Dock runs, with who is shown each: what `ListTerminals` and
-    // `AttachTerminal` read, and what a Window that goes leaves.
     terminals: Arc<Terminals>,
-    // What the programs of the Dock tell the Windows goes through here.
     shared: Weak<Shared>,
-    // Where the Keeper was asked to listen: what every shell of the app is told is its
-    // socket.
     socket: PathBuf,
 }
 
-/// What the Keeper keeps for its Windows: the workspaces, the reviews of their worktrees,
-/// and the Store both keep their records in.
 pub(crate) struct Kept {
     pub(crate) workspaces: Workspaces,
     pub(crate) reviews: Reviews,
     pub(crate) store: Store,
 }
 
-/// A step that waits for a reply to be queued, and runs after it.
 pub(crate) type Step = Box<dyn FnOnce() + Send>;
 
-/// What one request leads to.
 pub(crate) struct Outcome {
-    /// For the Window that asked.
     pub(crate) reply: Result<Reply, Refusal>,
-    /// For every attached Window, the one that asked included, after the reply.
     pub(crate) facts: Vec<Fact>,
-    /// Run once the reply is queued, before the facts are told.
+    // Run once the reply is queued, before the facts are told.
     pub(crate) then: Option<Step>,
 }
 
 impl Outcome {
-    /// A request that was refused, with nothing to tell anybody else.
     pub(crate) fn failed(reason: impl Into<String>) -> Outcome {
         Outcome {
             reply: Err(Refusal::Failed {
@@ -186,22 +68,18 @@ impl Outcome {
     }
 }
 
-/// Where a request is answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Answerer {
     /// On the thread that reads the Window's connection, before its next message is read.
     Here,
-    /// By the Window's one thread for reviews, one after the other in the order they came.
+    // By the Window's one thread for reviews, one after the other in the order they came.
     InOrder,
-    /// On a thread of its own, started for this request.
     Apart,
 }
 
-/// Where requests of this kind are answered.
 pub(crate) fn answerer(kind: RequestKind) -> Answerer {
     // No arm for "the rest": a new kind of request has to say which it is.
     match kind {
-        // Quick, or ordered with the Window's other requests of slices 1 and 2.
         RequestKind::ListWorkspaces
         | RequestKind::OpenFolder
         | RequestKind::SetBase
@@ -209,104 +87,64 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         | RequestKind::ReadFile
         | RequestKind::OpenTerminal
         | RequestKind::ResizeTerminal => Answerer::Here,
-        // The saves of a draft must be kept in the order they were typed, and a reading
-        // that follows a save must find it. A copy or a mark of reviewed records a state,
-        // up to a second or more on a large repository: the Window's typing into its
-        // terminals, read on the connection's thread, must not wait for it.
+        // Saves keep typing order and a reading after a save must find it. A copy or a mark of
+        // reviewed can take a second on a large repository, which the connection's thread must not
+        // wait for.
         RequestKind::GetReviews
         | RequestKind::SaveDraft
         | RequestKind::DeleteDraft
         | RequestKind::CopyReview
         | RequestKind::MarkReviewed
         | RequestKind::SetViewed => Answerer::InOrder,
-        // The user's own git, with their hooks, which may run for minutes: neither the
-        // Window's typing nor its saves may wait for it.
         RequestKind::Commit => Answerer::Apart,
-        // A CLI waits for its piece, which waits for this answer: it is given on the
-        // piece's own connection as soon as the agents' side has taken the report, and that
-        // connection has nothing else to answer meanwhile.
+        // Here although it waits: the CLI blocks on its piece, and the piece's connection has
+        // nothing else to answer.
         RequestKind::Report => Answerer::Here,
-        // Read from what the Keeper holds and the Store.
         RequestKind::ListAgents | RequestKind::GetTurn | RequestKind::ListTerminals => {
             Answerer::Here
         }
-        // The watcher of a worktree is started on a thread of its own: the request only
-        // says which workspace is on screen. The kept output of a terminal must reach its
-        // Window after the reply, as the output of a terminal opened.
+        // The kept output of an attached terminal must reach its Window after the reply.
         RequestKind::ShowWorkspace | RequestKind::AttachTerminal => Answerer::Here,
-        // git in the worktree or in its state store, up to a second on a large repository,
-        // reading the files on disk: the Window's typing into its terminals must not wait
-        // for it, nor its saves.
         RequestKind::GetHistory
         | RequestKind::GetUncommitted
         | RequestKind::CompareVersions
         | RequestKind::ReadVersions => Answerer::Apart,
-        // One read or one write of the Store, which a user's key waits for no longer than
-        // the drive takes.
         RequestKind::GetSettings | RequestKind::SetSetting => Answerer::Here,
-        // They change a review, or read what it would carry: in the order of the
-        // Window's other requests of reviews, so that a save typed before is in it.
         RequestKind::AttachReview
         | RequestKind::DetachReview
         | RequestKind::ResolveThread
         | RequestKind::ReopenThread
         | RequestKind::ResolveAddressed
         | RequestKind::GetAttachment => Answerer::InOrder,
-        // The Adapters' names, which never change while the Keeper runs.
         RequestKind::ListClis => Answerer::Here,
-        // git in the state store and the Store's credits of each state in the range: as a
-        // comparison of two versions.
         RequestKind::CompareForReview => Answerer::Apart,
-        // A few small files of the CLIs' settings, read or written once, which a user's
-        // key waits for no longer than the drive takes.
         RequestKind::ListConsents | RequestKind::AnswerConsent => Answerer::Here,
-        // git's checkout of a whole tree, a second or more on a large repository: as a
-        // comparison of two versions.
         RequestKind::ExportVersion => Answerer::Apart,
-        // The user's git checks a whole branch out and runs the user's hooks, which may take
-        // a minute: apart, so that the Window's other requests and its typing go on.
         RequestKind::CreateWorktree => Answerer::Apart,
-        // A walk of every folder of states, and a repack of every store: apart.
         RequestKind::GetStateSizes | RequestKind::CleanUpStates => Answerer::Apart,
     }
 }
 
-/// What [`Parts::answer`] gives.
 pub(crate) enum Answered {
-    /// The outcome, ready.
     Now(Outcome),
-    /// Work to run once the parts are let go, which gives the outcome: what may take as
-    /// long as the user's own git takes, and must hold up neither the Keeper's stop nor
-    /// anything else that waits for the parts.
     Later(Job),
 }
 
-/// Work that gives the outcome of a request, run after the parts are let go.
 pub(crate) type Job = Box<dyn FnOnce() -> Outcome + Send>;
 
-/// Whether requests of this kind are answered one at a time, each with its reply and its
-/// facts sent before the next is begun.
+/// Whether requests of this kind take the Keeper's turn: answered one at a time with the others
+/// that take it, each with its reply and facts sent before the next is begun.
 pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
-    // No arm for "the rest": a new kind of request has to say which it is.
     match kind {
-        // Each can change what the Keeper keeps, and so lead to a fact. The facts have to
-        // reach the Windows in the order in which the changes were made, or a Window is
-        // left with the older list.
+        // Each can change what the Keeper keeps; its facts must reach the Windows in order.
         RequestKind::OpenFolder | RequestKind::SetBase => true,
-        // Its reply carries what a fact carries. Read between two changes and sent after
-        // the fact of the second, it would be taken for the newer list.
+        // Its reply carries what a fact carries (also `GetSettings`, `ListAgents`, `ListConsents`):
+        // read between two changes and sent after the later fact, it would pass for the newer list.
         RequestKind::ListWorkspaces => true,
-        // What these read, no fact carries: a Window that is told of a change asks again.
         RequestKind::GetChanges | RequestKind::ReadFile => false,
-        // They lead to no fact, and a program that takes its time to start must not hold
-        // up the Windows' other questions.
         RequestKind::OpenTerminal | RequestKind::ResizeTerminal => false,
-        // Each may change what the Keeper keeps, `GetReviews` included: it keeps the review
-        // of no agent of a workspace that has none, and takes away the marks of files that
-        // changed. The Review engine makes those changes one at a time itself. The facts
-        // they lead to carry no more than the workspace's id, and a Window told one asks
-        // again and reads the newest: their order does not matter, and none of them may
-        // wait behind a recording or the user's git.
+        // Their facts carry only the workspace's id and a Window told one reads again, so their
+        // order does not matter; none may wait behind a recording or the user's git.
         RequestKind::GetReviews
         | RequestKind::SaveDraft
         | RequestKind::DeleteDraft
@@ -314,64 +152,35 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         | RequestKind::MarkReviewed
         | RequestKind::SetViewed
         | RequestKind::Commit => false,
-        // Its reply carries what `AgentsChanged` carries: read between two changes and
-        // sent after the fact of the second, it would be taken for the newer list. The
-        // agents' side tells its facts under the same turn.
         RequestKind::ListAgents => true,
-        // It leads to facts only later, from the agents' own thread, which takes the turn
-        // to tell them; and its answer waits for that thread, which the turn held here would
-        // keep waiting for ever.
+        // Its facts come from the agents' thread, which takes the turn, and the answer waits for
+        // that thread: a turn held here would wait for ever.
         RequestKind::Report => false,
-        // What these read, a fact makes a Window read again.
         RequestKind::GetHistory
         | RequestKind::GetUncommitted
         | RequestKind::CompareVersions
         | RequestKind::ReadVersions
         | RequestKind::GetTurn
         | RequestKind::ListTerminals => false,
-        // They lead to no fact of their own.
         RequestKind::ShowWorkspace | RequestKind::AttachTerminal => false,
-        // A setting kept leads to `SettingChanged`, and the answer of `GetSettings` carries
-        // what that fact carries: read between two settings kept and sent after the fact
-        // of the second, it would be taken for the newer list.
         RequestKind::GetSettings | RequestKind::SetSetting => true,
-        // As the other requests of reviews: their facts name a workspace, and a Window
-        // told one asks again. What attaching tells of the sessions is told by the agents'
-        // side under the Keeper's turn.
         RequestKind::AttachReview
         | RequestKind::DetachReview
         | RequestKind::ResolveThread
         | RequestKind::ReopenThread
         | RequestKind::ResolveAddressed
         | RequestKind::GetAttachment => false,
-        // No fact carries what they read: the CLIs never change, and a Window told of a
-        // turn's end or of a change of reviews asks again for what a review shows.
         RequestKind::ListClis | RequestKind::CompareForReview => false,
-        // An answer leads to `ConsentsChanged`, and the list carries what that fact
-        // carries: read between two answers and sent after the fact of the second, it
-        // would be taken for the newer one.
         RequestKind::ListConsents | RequestKind::AnswerConsent => true,
-        // It leads to no fact, and no fact carries what it writes.
         RequestKind::ExportVersion => false,
-        // It changes the list of workspaces, and tells it: not for the whole of its run,
-        // which waits for the user's git, but for its last steps, the opening and the fact,
-        // which take the turn themselves (`wiring/worktrees.rs`).
         RequestKind::CreateWorktree => false,
-        // The sizes change nothing; the clean-up's facts name workspaces, not the list.
         RequestKind::GetStateSizes | RequestKind::CleanUpStates => false,
     }
 }
 
 impl Parts {
-    /// Starts the parts: finds git, which runs in `environment`, opens the database
-    /// `yaar_store::FILE_NAME` in the folder of `options.data_dir`, and puts Workspaces and
-    /// the Review engine on both, the engine recording the states of worktrees in `states`
-    /// beside the database; and makes the Dock, whose programs tell what they do to the
-    /// Windows of `shared`.
-    ///
-    /// A Keeper with no git, or with a database it cannot open, still starts and answers
-    /// the hello, so that a Window can say what is wrong; each request is then refused
-    /// with the reason.
+    /// A Keeper with no git or an unopenable database still starts and answers the hello, so that a
+    /// Window can say what is wrong; each request is then refused with the reason.
     pub(crate) fn start(
         options: &Options,
         clock: Arc<dyn yaar_recorder::Clock>,
@@ -383,8 +192,6 @@ impl Parts {
             let git = git.with_environment(environment);
             let file = options.data_dir.join(yaar_store::FILE_NAME);
             let store = Store::open(&file).map_err(|e| e.to_string())?;
-            // The engine asks the watching whether files changed since its newest state,
-            // and tells it of every state it takes.
             let reviews = Reviews::new(store.clone(), git.clone(), options.data_dir.join("states"))
                 .watching(Arc::clone(&watching) as Arc<dyn StateWatch>)
                 .with_clock(clock);
@@ -411,19 +218,14 @@ impl Parts {
         }
     }
 
-    /// What the Keeper keeps for its Windows, unless it has no git or no database.
     pub(crate) fn kept(&self) -> Option<&Kept> {
         self.kept.as_ref().ok()
     }
 
-    /// The agents' side: the sweep of the recorded states has it remove the files of long
-    /// reviews that sessions which ended left.
     pub(crate) fn agents(&self) -> &Agents {
         &self.agents
     }
 
-    /// `window` has gone, whatever the way: it is no longer shown any terminal, and what
-    /// it showed on screen is no longer needed on its account.
     pub(crate) fn window_gone(&self, window: &Arc<Window>) {
         self.terminals.window_gone(window, &self.shared);
         if let Ok(kept) = &self.kept {
@@ -431,19 +233,14 @@ impl Parts {
         }
     }
 
-    /// How the Adapters that need the user's leave stand: what a Window is told at its
-    /// connect when one waits for an answer.
     pub(crate) fn consents(&self) -> Vec<yaar_link::Consent> {
         self.agents.consents()
     }
 
-    /// How many programs of terminals run.
     pub(crate) fn running(&self) -> usize {
         self.dock.running()
     }
 
-    /// Answers one request of `window`, or gives the work that answers it once the parts
-    /// are let go.
     pub(crate) fn answer(&self, window: &Arc<Window>, request: Request) -> Answered {
         let kept = match &self.kept {
             Ok(kept) => kept,
@@ -558,7 +355,6 @@ impl Parts {
             Request::CopyReview { review } => copy_review(workspaces, reviews, &review, &mut facts),
             Request::MarkReviewed { review } => {
                 let marked = mark_reviewed(workspaces, reviews, &review, &mut facts);
-                // A session whose review is marked has nothing unreviewed any more.
                 if marked.is_ok() {
                     self.agents.reviewed(kept, &review);
                 }
@@ -582,8 +378,6 @@ impl Parts {
                     }),
                 };
             }
-            // Answered once the agents' side has taken it, by work that runs after the
-            // parts are let go: that side takes them to work the report out.
             Request::Report { report } => return self.agents.report(kept, report),
             Request::ListAgents => self.agents.list(kept),
             Request::GetHistory { workspace } => self.agents.history(kept, &workspace),
@@ -608,8 +402,6 @@ impl Parts {
                 (new.as_deref(), path.as_path()),
             ),
             Request::GetTurn { turn } => self.agents.turn(kept, &turn),
-            // The terminals' side of slice 4: the watchers, the list of terminals and
-            // attaching to one.
             Request::ShowWorkspace { workspace } => {
                 self.watching.show(kept, window, workspace.as_ref())
             }
@@ -622,7 +414,6 @@ impl Parts {
             }
             Request::GetSettings => crate::settings::get(kept),
             Request::SetSetting { setting } => crate::settings::set(kept, setting, &mut facts),
-            // The requests of slice 6 on reviews: `reviewing.rs`.
             Request::AttachReview { review, thread } => {
                 crate::reviewing::attach(kept, &self.agents, &review, thread.as_ref(), &mut facts)
             }
@@ -641,8 +432,6 @@ impl Parts {
             Request::GetAttachment { review } => {
                 crate::reviewing::attachment(kept, &self.agents, &review)
             }
-            // The requests of slice 7: the CLIs to offer a launcher of, and what a review
-            // shows of a change with its credits.
             Request::ListClis => Ok(Reply::Clis(self.agents.supported())),
             Request::CompareForReview {
                 workspace,
@@ -652,7 +441,6 @@ impl Parts {
             } => self
                 .agents
                 .compare_for_review(kept, &workspace, &review, &from, &to),
-            // The questions for leave of the Adapters that write into a CLI's settings.
             Request::ListConsents => Ok(Reply::Consents(self.agents.consents())),
             Request::AnswerConsent { agent, answer } => {
                 self.agents.answer_consent(&agent, answer).map(|consents| {
@@ -660,7 +448,6 @@ impl Parts {
                     Reply::Consents(consents)
                 })
             }
-            // The old side of a diff, for the Window's language server.
             Request::ExportVersion {
                 workspace,
                 version,
@@ -668,8 +455,6 @@ impl Parts {
             } => self
                 .agents
                 .export_version(kept, &workspace, &version, &into),
-            // A worktree made from a branch, and an agent started in it: the user's git runs
-            // after the parts are let go.
             Request::CreateWorktree {
                 repository,
                 from,
@@ -679,16 +464,14 @@ impl Parts {
             } => {
                 return self.create_worktree(kept, window, &repository, &from, &branch, &agent, at);
             }
-            // The room the recorded states take, and their clean-up at once.
             Request::GetStateSizes => crate::cleaning::sizes(kept),
             Request::CleanUpStates => crate::cleaning::clean_up_now(kept, &self.agents, &mut facts),
         };
         Answered::Now(Outcome { reply, facts, then })
     }
 
-    /// Starts `program` in the folder of `workspace`, in a terminal of the Dock. The
-    /// reply names the terminal, and the step that goes with it lets the output of the
-    /// program through: until the reply is queued, nothing of it is sent.
+    /// The step that goes with the reply lets the program's output through: until the reply is
+    /// queued, nothing of it is sent.
     fn open_terminal(
         &self,
         kept: &Kept,
@@ -705,13 +488,13 @@ impl Parts {
             .ok_or_else(|| Refusal::UnknownWorkspace {
                 workspace: workspace.clone(),
             })?;
-        // The id is made first, so that the program's environment can name it.
+        // Made before the start so that the program's environment can name it.
         let id = yaar_dock::TerminalId::random().map_err(|error| Refusal::Failed {
             reason: format!("no name for the terminal could be made: {error}"),
         })?;
         let terminal = yaar_link::TerminalId::new(id.as_str());
-        // A launcher for a review is refused, as for an Adapter the Keeper does not have,
-        // before anything is listed or started: the terminal would bind a review nobody holds.
+        // Refused before anything is listed or started: the terminal would bind a review nobody
+        // holds.
         if let Program::AgentFor { review, .. } = program {
             let held = kept
                 .reviews
@@ -738,17 +521,13 @@ impl Parts {
                     }
                 }
             }
-            // The CLI's own command for bringing the session back, through the user's
-            // shell as a launcher's command.
             Program::Resume { session } => {
                 let command = self.agents.resume_command(session, &terminal)?;
                 Start::launcher(folder, size(at), &command)
             }
         };
-        // Every shell of the app is told where the Keeper listens and which terminal it
-        // is in, so that a piece of an agent CLI started in it finds its way back, and
-        // gets what each agent CLI's piece asks for. A CLI typed in a shell of the app
-        // finds all of it as one started from its launcher does.
+        // Every shell is told the Keeper's socket and its terminal, so a piece of an agent CLI
+        // finds its way back.
         let mut entries = vec![
             Entry::Variable {
                 name: SOCKET_VARIABLE.into(),
@@ -761,11 +540,8 @@ impl Parts {
         ];
         entries.extend(self.agents.entries());
         let mut start = start.with(&entries);
-        // Every terminal is watched for the marks of every agent CLI, for the same reason.
         start.marks = self.agents.marks();
         let route = Arc::new(Route::new(window, Arc::clone(&self.agents)));
-        // Listed before the program starts, so that its end, which may come at once,
-        // finds it there to take it out; shown to nobody until it runs.
         self.terminals.add(Held {
             id: terminal.clone(),
             workspace: workspace.clone(),
@@ -781,16 +557,13 @@ impl Parts {
                 terminal.clone(),
             );
             Box::new(move |event| {
-                // Gone from the list before the Windows are told, so that one that asks
-                // when it hears of the end does not find it.
                 if matches!(event, Event::Ended(_)) {
                     terminals.remove(&terminal);
                 }
                 route.event(&shared, &terminal, event);
             })
         };
-        // Told before the program starts: a CLI in it reports from its first moment, and
-        // is followed only in a terminal the agents' side holds.
+        // Told before the program starts: a CLI reports from its first moment.
         self.agents.terminal_opened(&terminal, workspace);
         if let Program::AgentFor { review, .. } = program {
             self.agents.terminal_opened_for(&terminal, review);
@@ -812,11 +585,9 @@ impl Parts {
         ))
     }
 
-    /// Shows `window` the terminal `terminal` too, as it was opened for another Window or
-    /// for this one before it was killed: the reply, then the newest output the Dock kept,
-    /// then what the program writes from then on, with nothing lost or sent twice where
-    /// the kept output ends. The terminal is given the size of this Window and asked to
-    /// draw itself again, which mends what the cut at the start of the kept output spoiled.
+    /// Shows `window` the terminal as well: the reply, the kept output, then live output, with
+    /// nothing lost or sent twice. The resize and redraw mend the cut at the start of the kept
+    /// output.
     fn attach(
         &self,
         window: &Arc<Window>,
@@ -829,21 +600,18 @@ impl Parts {
         let route = self.terminals.route(terminal).ok_or_else(unknown)?;
         let id = yaar_dock::TerminalId::new(terminal.as_str());
         let (mut cut, mut shown) = (false, false);
-        // The Window is put among those the output goes to while the Dock holds the
-        // output still, so that the kept output ends where the live output begins.
+        // Joined while the Dock holds the output still, so the kept output ends where the live
+        // begins.
         self.dock
             .attach(&id, |kept, dropped| {
                 cut = dropped;
                 shown = route.attach(window, kept);
             })
             .map_err(|_| unknown())?;
-        // The program ended between finding the route and the attach, and the Windows have
-        // been told: the terminal is no more.
         if !shown {
             return Err(unknown());
         }
-        // A program that ended meanwhile has nothing to draw: its end is told as it comes.
-        // What the redraw writes is held behind the kept output like all that follows it.
+        // A program that ended meanwhile has nothing to draw; its end is told as it comes.
         let _ = self.dock.resize(&id, size(at));
         let _ = self.dock.redraw(&id);
         let (shared, window, terminal) =
@@ -854,9 +622,6 @@ impl Parts {
         ))
     }
 
-    /// Hands what a Window typed to the program of `terminal`. Bytes for a terminal the
-    /// Dock does not hold, as one whose program has ended, are dropped: nothing answers
-    /// input.
     pub(crate) fn input(&self, terminal: &yaar_link::TerminalId, bytes: &[u8]) {
         let _ = self
             .dock
@@ -864,20 +629,16 @@ impl Parts {
     }
 }
 
-/// The terminals the Dock runs, in the order they were opened, with who they were opened
-/// for and what runs in them.
 #[derive(Default)]
 pub(crate) struct Terminals {
     held: Mutex<Vec<Held>>,
 }
 
-/// One terminal of the Keeper.
 struct Held {
     id: yaar_link::TerminalId,
     workspace: yaar_link::WorkspaceId,
     program: Program,
     route: Arc<Route>,
-    /// The Dock runs its program: before that, it is shown to nobody.
     opened: bool,
 }
 
@@ -890,19 +651,16 @@ impl Terminals {
         self.held().push(terminal);
     }
 
-    /// The Dock runs the program of `terminal` now.
     fn opened(&self, terminal: &yaar_link::TerminalId) {
         if let Some(held) = self.held().iter_mut().find(|held| held.id == *terminal) {
             held.opened = true;
         }
     }
 
-    /// `terminal` is no more: its program ended, or could not start.
     fn remove(&self, terminal: &yaar_link::TerminalId) {
         self.held().retain(|held| held.id != *terminal);
     }
 
-    /// Every terminal that runs, in the order opened.
     fn list(&self) -> Vec<yaar_link::TerminalInfo> {
         self.held()
             .iter()
@@ -915,7 +673,6 @@ impl Terminals {
             .collect()
     }
 
-    /// Where the output of `terminal` goes, if it runs.
     fn route(&self, terminal: &yaar_link::TerminalId) -> Option<Arc<Route>> {
         self.held()
             .iter()
@@ -923,7 +680,6 @@ impl Terminals {
             .map(|held| Arc::clone(&held.route))
     }
 
-    /// `window` has gone: it is shown no terminal any more.
     fn window_gone(&self, window: &Arc<Window>, shared: &Weak<Shared>) {
         // The list is not held while a route is: a route tells of an end to Windows.
         let routes: Vec<(yaar_link::TerminalId, Arc<Route>)> = self
@@ -937,49 +693,28 @@ impl Terminals {
     }
 }
 
-/// Where the output of one terminal goes: to every Window it is shown to, the one that
-/// opened it first, and in order.
-///
-/// The reply that names a terminal must reach its Window before the terminal's first
-/// output, and nothing may be lost in between. The program starts before the reply is
-/// made, so what it writes first is held until the reply is queued, and then queued
-/// behind it. A Window that attaches later is treated the same way: the output waits
-/// behind the reply and the kept output that follows it.
+/// Where the output of one terminal goes. The program starts before the reply is made, so what it
+/// writes first is held until the reply is queued; a Window that attaches later waits behind both.
 struct Route {
     state: Mutex<RouteState>,
-    // Told the marks found in the output and the end of the program.
     agents: Arc<Agents>,
 }
 
 #[derive(Default)]
 struct RouteState {
-    /// The Windows the terminal is shown to. A Window that has gone is dropped when the
-    /// route finds it so, which is at the next output or at once when it is told of.
     members: Vec<Member>,
-    /// The program ended, and the end is not told yet: it is told once every Window has
-    /// what came before it.
     ended: Option<Ending>,
-    /// The end has been told: no Window is shown the terminal any more, since nothing
-    /// more would be told to one that came after.
     over: bool,
 }
 
-/// One Window a terminal is shown to.
 struct Member {
-    // Not held for long: a Window that has gone away is gone, though its terminal runs
-    // on, and its connection closes with it.
     window: Weak<Window>,
-    /// The reply is queued: output goes straight to the Window.
     released: bool,
-    /// The kept output the Dock handed over at the attach, to go right behind the reply.
     kept: Vec<u8>,
-    /// Frames of output that came before the reply was queued, in order.
     held: Vec<Vec<u8>>,
 }
 
 impl RouteState {
-    /// Shows `window` the terminal from the start of `kept`; one shown it already is
-    /// shown it again from there. False, and nothing done, when the end has been told.
     fn admit(&mut self, window: &Arc<Window>, kept: &[u8]) -> bool {
         if self.over {
             return false;
@@ -1006,8 +741,6 @@ impl Member {
             .is_some_and(|ours| Arc::ptr_eq(&ours, window))
     }
 
-    /// Gives the Window what the program wrote, or keeps it until the reply is queued.
-    /// False when the Window has gone, and takes nothing more.
     fn take(&mut self, frames: &[Vec<u8>]) -> bool {
         let Some(window) = self.window.upgrade() else {
             return false;
@@ -1036,7 +769,6 @@ impl Route {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// What the Dock tells of the terminal, on the Dock's thread for it.
     fn event(&self, shared: &Weak<Shared>, terminal: &yaar_link::TerminalId, event: Event) {
         match event {
             Event::Output(bytes) => {
@@ -1045,7 +777,6 @@ impl Route {
                     .members
                     .retain_mut(|member| member.take(&frames));
             }
-            // After the output that held it: what the mark means is the agents' side's.
             Event::Mark(mark) => self.agents.marked(terminal, mark),
             Event::Ended(how) => {
                 self.agents.terminal_ended(terminal);
@@ -1053,8 +784,6 @@ impl Route {
                 state.ended = Some(ending(how));
                 let told = Self::settle(&mut state);
                 drop(state);
-                // From this thread, which queued the last output: the end follows it on
-                // the connection of each Window that holds it.
                 if let Some(how) = told {
                     tell_ended(shared, terminal, how);
                 }
@@ -1062,8 +791,6 @@ impl Route {
         }
     }
 
-    /// The end of the program, once every Window that is shown the terminal has what
-    /// came before it: taken, so that it is told once. None before.
     fn settle(state: &mut RouteState) -> Option<Ending> {
         if state.members.iter().all(|member| member.released) {
             let told = state.ended.take();
@@ -1074,17 +801,10 @@ impl Route {
         }
     }
 
-    /// `window` is shown the terminal from now on, after the kept output `kept`. One that
-    /// was shown it already is shown it from the start of the kept output again, as its
-    /// reply says: what it was sent before the reply it has, and the kept output holds.
-    /// Called with the Dock holding the output still. False when the end of the program
-    /// has been told already: the Window is not shown it.
     fn attach(&self, window: &Arc<Window>, kept: &[u8]) -> bool {
         self.state().admit(window, kept)
     }
 
-    /// The reply to `window`'s request is queued: what was held goes out after it, in
-    /// order, the kept output first, and from now on output goes out as it comes.
     fn release(
         &self,
         window: &Arc<Window>,
@@ -1097,7 +817,6 @@ impl Route {
             let mut frames = frames_of(terminal, std::mem::take(&mut member.kept));
             frames.append(&mut member.held);
             member.released = true;
-            // A Window that takes nothing more is gone, and so is its place.
             if !frames.iter().all(|frame| window.queue(frame.clone())) {
                 state.members.remove(at);
             }
@@ -1109,8 +828,8 @@ impl Route {
         }
     }
 
-    /// `window` has gone: it is shown the terminal no more, and a program that ended
-    /// while it waited for its reply no longer holds the end back.
+    /// `window` has gone: it is shown the terminal no more, and an end held back for its release is
+    /// told once every Window left has been released.
     fn leave(&self, window: &Arc<Window>, shared: &Weak<Shared>, terminal: &yaar_link::TerminalId) {
         let mut state = self.state();
         state.members.retain(|member| !member.is(window));
@@ -1122,10 +841,7 @@ impl Route {
     }
 }
 
-/// Tells every Window that the program of a terminal has ended, and wakes the thread
-/// that waits to see whether the Keeper is still needed.
 fn tell_ended(shared: &Weak<Shared>, terminal: &yaar_link::TerminalId, how: Ending) {
-    // The Keeper that is leaving has nobody to tell.
     if let Some(shared) = shared.upgrade() {
         shared.tell(&[Fact::TerminalEnded {
             terminal: terminal.clone(),
@@ -1135,8 +851,6 @@ fn tell_ended(shared: &Weak<Shared>, terminal: &yaar_link::TerminalId, how: Endi
     }
 }
 
-/// What a program wrote, as the frames that carry it: one for each 64 KiB at most, which
-/// is more than the Dock reads at once, and far under the length of a frame.
 fn frames_of(terminal: &yaar_link::TerminalId, bytes: Vec<u8>) -> Vec<Vec<u8>> {
     bytes
         .chunks(OUTPUT_FRAME)
@@ -1150,7 +864,6 @@ fn frames_of(terminal: &yaar_link::TerminalId, bytes: Vec<u8>) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// A size of the Link in the words of the Dock.
 fn size(size: TerminalSize) -> yaar_dock::Size {
     yaar_dock::Size {
         columns: size.columns,
@@ -1158,7 +871,6 @@ fn size(size: TerminalSize) -> yaar_dock::Size {
     }
 }
 
-/// How a program ended, in the words of the Link.
 fn ending(ending: yaar_dock::Ending) -> Ending {
     match ending {
         yaar_dock::Ending::Exited(code) => Ending::Exited(code),
@@ -1166,9 +878,8 @@ fn ending(ending: yaar_dock::Ending) -> Ending {
     }
 }
 
-/// The worktree of a workspace: none when the worktree is gone, refused with
-/// `UnknownWorkspace` when the Keeper does not hold the workspace. It reads the Store and
-/// the folder and runs no git: a save of a draft may ask at every key.
+/// None when the worktree is gone; `UnknownWorkspace` when the Keeper does not hold the workspace.
+/// Runs no git: a save of a draft may ask at every key.
 fn worktree_of(
     workspaces: &Workspaces,
     workspace: &yaar_link::WorkspaceId,
@@ -1178,8 +889,6 @@ fn worktree_of(
         .map_err(refusal)
 }
 
-/// The worktree a request of reviews needs, which is refused in the words of "the
-/// worktree is gone" when it is not there.
 fn worktree_needed(
     workspaces: &Workspaces,
     workspace: &yaar_link::WorkspaceId,
@@ -1189,9 +898,6 @@ fn worktree_needed(
     })
 }
 
-/// The workspace of a review as the Store holds it, and the worktree of that workspace,
-/// none when it is gone. A review whose workspace the Store does not hold has no worktree
-/// either.
 fn worktree_of_review(
     workspaces: &Workspaces,
     reviews: &Reviews,
@@ -1208,7 +914,6 @@ fn worktree_of_review(
     }
 }
 
-/// The same, for the requests that cannot go on without the worktree.
 fn worktree_of_review_needed(
     workspaces: &Workspaces,
     reviews: &Reviews,
@@ -1222,15 +927,12 @@ fn worktree_of_review_needed(
     }
 }
 
-/// What every Window is told when the reviews of a workspace changed.
 fn reviews_changed(workspace: &WorkspaceId) -> Fact {
     Fact::ReviewsChanged {
         workspace: yaar_link::WorkspaceId::new(workspace.as_str()),
     }
 }
 
-/// The reviews of a workspace, with its files marked viewed when the worktree is there and
-/// each round with the turn it was sent in, which `store` keeps.
 fn get_reviews(
     workspaces: &Workspaces,
     reviews: &Reviews,
@@ -1244,9 +946,6 @@ fn get_reviews(
     workspace_reviews(workspace, view, store)
 }
 
-/// Keeps one save of a draft. A text that changes a comment of the review is kept with no
-/// lookup of a worktree and told to nobody; one that makes a comment is told to every
-/// Window.
 fn save_draft(
     workspaces: &Workspaces,
     reviews: &Reviews,
@@ -1255,9 +954,8 @@ fn save_draft(
     facts: &mut Vec<Fact>,
 ) -> Result<Reply, Refusal> {
     let review = ReviewId::new(review.as_str());
-    // Only a thread that starts here is put on the files of the worktree, and needs it; one
-    // on a file outside the worktree, which has an absolute path, is put on nothing, and the
-    // worktree is not even looked up: the lookup may fail, and the save does not depend on it.
+    // A thread on a file outside the worktree (absolute path) skips the lookup, which may fail and
+    // which the save does not depend on.
     let worktree = match &save.on {
         yaar_review_engine::DraftOn::NewThread(at) if !at.path.is_absolute() => {
             worktree_of_review(workspaces, reviews, &review)?.1
@@ -1275,7 +973,6 @@ fn save_draft(
     Ok(Reply::Done)
 }
 
-/// Copies a review as text, and sends what was copied.
 fn copy_review(
     workspaces: &Workspaces,
     reviews: &Reviews,
@@ -1300,7 +997,6 @@ fn copy_review(
     }
 }
 
-/// Marks the change of a review reviewed.
 fn mark_reviewed(
     workspaces: &Workspaces,
     reviews: &Reviews,
@@ -1316,7 +1012,6 @@ fn mark_reviewed(
     Ok(Reply::Done)
 }
 
-/// Marks a file of a workspace viewed, or takes the mark away.
 fn set_viewed(
     workspaces: &Workspaces,
     reviews: &Reviews,
@@ -1334,8 +1029,6 @@ fn set_viewed(
     Ok(Reply::Done)
 }
 
-/// The commit: the user's own git, run once the parts are let go. Every Window is told
-/// that the changes of the workspace changed when a commit was made.
 fn commit(worktree: &Worktree, workspace: &yaar_link::WorkspaceId, message: &str) -> Outcome {
     let mut facts = Vec::new();
     let reply = match worktree.commit_all(message) {
@@ -1361,20 +1054,17 @@ fn commit(worktree: &Worktree, workspace: &yaar_link::WorkspaceId, message: &str
     }
 }
 
-/// Opens a folder, and tells the list of repositories as it is then.
 fn open_folder(
     workspaces: &Workspaces,
     path: std::path::PathBuf,
     facts: &mut Vec<Fact>,
 ) -> Result<Reply, Refusal> {
-    // A Window names the folder in full. A path counted from wherever this process
-    // happens to run names nothing the user chose.
     if !path.is_absolute() {
         return Err(Refusal::NoSuchFolder { path });
     }
     let opened = workspaces.open_folder(&path).map_err(refusal)?;
-    // The folder is open now, whatever becomes of the list: a list that cannot be read
-    // is told to nobody, and the Window that asks for it next learns why.
+    // Told even for a folder already open: the list is read from git, and a worktree made outside
+    // the app may be new to every Window.
     if let Ok(list) = list(workspaces) {
         facts.push(Fact::Workspaces(list));
     }
@@ -1384,7 +1074,6 @@ fn open_folder(
     })
 }
 
-/// Every opened repository with its worktrees, in the words of the Link.
 pub(crate) fn list(workspaces: &Workspaces) -> Result<Vec<yaar_link::Repository>, Refusal> {
     let repositories = workspaces.repositories().map_err(refusal)?;
     Ok(repositories
@@ -1405,8 +1094,6 @@ pub(crate) fn list(workspaces: &Workspaces) -> Result<Vec<yaar_link::Repository>
         .collect())
 }
 
-/// What is checked out, in the words of the Link. A branch with no commit yet is still
-/// that branch.
 fn head(head: yaar_workspaces::Head) -> yaar_link::Head {
     match head {
         yaar_workspaces::Head::Branch { name, .. } => yaar_link::Head::Branch(name),
@@ -1424,7 +1111,6 @@ fn base(base: yaar_workspaces::Base) -> yaar_link::Base {
     }
 }
 
-/// The changes of a workspace, in the words of the Link.
 fn changes(
     workspace: yaar_link::WorkspaceId,
     found: yaar_workspaces::Changes,
@@ -1485,9 +1171,8 @@ fn changes(
     }
 }
 
-/// One version of a file as far as it travels: its bytes when it is text of a size the
-/// Link carries, else its size alone. What is not text is said to be so whatever its
-/// size, since that is the better reason to show no lines.
+/// One version of a file as the Link carries it: its bytes when it is text no larger than
+/// `MAX_CONTENT`, else its size alone; a binary one is said to be so whatever its size.
 fn content(version: Option<Vec<u8>>) -> yaar_link::Content {
     let Some(bytes) = version else {
         return yaar_link::Content::Absent;
@@ -1502,8 +1187,6 @@ fn content(version: Option<Vec<u8>>) -> yaar_link::Content {
     }
 }
 
-/// The reviews of a workspace, in the words of the Link; refused when `store` cannot say
-/// which turn a round was sent in.
 fn workspace_reviews(
     workspace: yaar_link::WorkspaceId,
     view: yaar_review_engine::WorkspaceView,
@@ -1519,8 +1202,8 @@ fn workspace_reviews(
             Ok(review(found, &turns))
         })
         .collect::<Result<Vec<yaar_link::Review>, Refusal>>()?;
-    // A thread on a file outside the worktree, which has an absolute path, has no version:
-    // the Store keeps the empty one, and the Window is told none.
+    // A thread on a file outside the worktree has no version: the Store keeps the empty one, and
+    // the Window is told none.
     for thread in reviews.iter_mut().flat_map(|review| &mut review.threads) {
         if thread.anchor.path.is_absolute() {
             thread.anchor.tree = None;
@@ -1533,8 +1216,7 @@ fn workspace_reviews(
     })
 }
 
-/// One review, in the words of the Link. `turns` is the turn each of its rounds was sent
-/// in, by the round's number, as the Store keeps it: a round with none, as a copy, has
+/// `turns` is the turn each round was sent in, by round number; a round with none, as a copy, has
 /// none.
 fn review(review: &yaar_review_engine::Review, turns: &[(u32, String)]) -> yaar_link::Review {
     use yaar_review_engine::{Attachment, Author, SentBy};
@@ -1615,7 +1297,6 @@ fn review(review: &yaar_review_engine::Review, turns: &[(u32, String)]) -> yaar_
     }
 }
 
-/// A side of a diff, in the words of the Link.
 fn side(side: yaar_review_engine::Side) -> yaar_link::Side {
     match side {
         yaar_review_engine::Side::Old => yaar_link::Side::Old,
@@ -1623,7 +1304,6 @@ fn side(side: yaar_review_engine::Side) -> yaar_link::Side {
     }
 }
 
-/// One save of a draft, in the words of the engine.
 fn draft_save(
     thread: &yaar_link::ThreadId,
     comment: &yaar_link::CommentId,
@@ -1653,12 +1333,6 @@ fn draft_save(
     }
 }
 
-/// Puts a failure of the Review engine into the words of the Link: what names something
-/// the Keeper does not hold, a sent comment, and a path out of the worktree keep their
-/// kind; the rest becomes `Refusal::Failed` with the sentence of the error. An empty send,
-/// `ReviewError::NothingToSend`, is not mapped here: its refusal names the review, which
-/// the error does not carry, so the caller that copies a review maps it to
-/// `Refusal::NothingToSend` before it calls this.
 fn engine_refusal(error: yaar_review_engine::EngineError) -> Refusal {
     use yaar_review_engine::{EngineError, ReviewError};
 
@@ -1682,8 +1356,6 @@ fn engine_refusal(error: yaar_review_engine::EngineError) -> Refusal {
     }
 }
 
-/// Puts a failure of Workspaces into the words of the Link: what the user can mend keeps
-/// its kind, everything else becomes `Refusal::Failed` with the sentence of the error.
 pub(crate) fn refusal(error: WorkspaceError) -> Refusal {
     use yaar_workspaces::Refusal as Refused;
 
@@ -1698,8 +1370,7 @@ pub(crate) fn refusal(error: WorkspaceError) -> Refusal {
             },
             Refused::UnknownRevision(revision) => Refusal::UnknownRevision { revision },
             Refused::OutsideWorkspace(path) => Refusal::OutsideWorkspace { path },
-            // Refusals of a worktree made from a branch: the Link has no kind of its own for
-            // them, and the sentence names what to mend.
+            // The Link has no kind of its own for these; the sentence names what to mend.
             other @ (Refused::UnknownRepository(_)
             | Refused::NotABranchName(_)
             | Refused::BranchExists(_)
@@ -1733,7 +1404,6 @@ mod tests {
             Content::Text(b"fn main() {}\n".to_vec())
         );
 
-        // A zero byte among the first 8,000 says "not text"; one after them says nothing.
         let mut zero_in_reach = vec![b'a'; TEXT_PROBE + 10];
         zero_in_reach[TEXT_PROBE - 1] = 0;
         assert_eq!(
@@ -1749,7 +1419,6 @@ mod tests {
             Content::Text(zero_out_of_reach)
         );
 
-        // The largest version that travels, and one byte more.
         let largest = vec![b'a'; yaar_link::MAX_CONTENT as usize];
         assert_eq!(content(Some(largest.clone())), Content::Text(largest));
         let too_large = vec![b'a'; yaar_link::MAX_CONTENT as usize + 1];
@@ -1759,7 +1428,6 @@ mod tests {
                 size: yaar_link::MAX_CONTENT + 1
             }
         );
-        // Large and not text: said to be not text.
         let mut large_and_binary = vec![b'a'; yaar_link::MAX_CONTENT as usize + 1];
         large_and_binary[0] = 0;
         assert_eq!(
@@ -1879,15 +1547,11 @@ mod tests {
         state.members[0].released = true;
         state.ended = Some(Ending::Exited(0));
 
-        // The end waits for a Window whose reply is not queued: one more may still be shown
-        // the terminal, and is told of the end with the rest.
         let waiting = window();
         assert!(state.admit(&waiting, b"kept"));
         assert!(Route::settle(&mut state).is_none());
         state.members[1].released = true;
 
-        // Once the end is told, the terminal is over, and no Window is shown it after that:
-        // it would never hear what it is told of an end that has gone by.
         assert_eq!(Route::settle(&mut state), Some(Ending::Exited(0)));
         assert!(!state.admit(&late, b"kept"));
         assert!(!state.members.iter().any(|member| member.is(&late)));

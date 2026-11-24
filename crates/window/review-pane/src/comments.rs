@@ -1,7 +1,3 @@
-//! What the pane does with the reviews of the workspace on screen: it reads them, keeps
-//! them in step with its own saves, and lets the reviewer write, edit, delete and walk
-//! through the comments of threads.
-
 use gpui_kit::component::input::{Escape, InputEvent, TextareaState};
 use gpui_kit::*;
 use yaar_diff::Side;
@@ -18,31 +14,22 @@ use crate::{
     ReviewPane, View,
 };
 
-/// How many lines of text a comment box grows to before it scrolls.
 const BOX_ROWS: usize = 6;
 
-/// A comment box that is open: what it says to the pane, the field that holds its text,
-/// and the subscription that hears the field change.
 pub(crate) struct OpenBox {
     pub(crate) view: CommentBox,
     pub(crate) input: Entity<TextareaState>,
     _heard: Subscription,
 }
 
-/// A thread of the review as the rows have it, in their order.
 struct ThreadStop {
     thread: ThreadId,
-    /// The index of the row of the diff the thread follows; none for a thread among
-    /// those elsewhere, which has no line to stand on.
+    /// None for a thread elsewhere, which has no line to stand on.
     line_row: Option<usize>,
 }
 
 impl ReviewPane {
-    /// Takes up the workspace on screen: when it is another than the one the reviews
-    /// belong to, they are let go, with the box that was open on them. Asks the Keeper for
-    /// them whenever the changes of that workspace have a new answer or a refusal, which
-    /// covers a workspace that just came on screen, one whose worktree is gone, and the
-    /// window coming back to the front.
+    /// Reviews and the open box are let go when the workspace changes.
     pub(crate) fn follow_reviews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let changes = self.models.changes.read(cx);
         let workspace = changes.workspace().cloned();
@@ -58,7 +45,6 @@ impl ReviewPane {
             if self.open_box.is_some() {
                 self.close_box(window, cx);
             }
-            // A commit is of the workspace the field was opened on.
             if self.commit_field.is_some() {
                 self.close_commit_field(window, cx);
             }
@@ -69,20 +55,15 @@ impl ReviewPane {
         }
     }
 
-    /// What the pane does with a fact of the Keeper: the reviews of the workspace on
-    /// screen changed, and are read again.
     pub(crate) fn told(&mut self, fact: &Fact, cx: &mut Context<Self>) {
         match fact {
             Fact::ReviewsChanged { workspace } if self.reviews_of.as_ref() == Some(workspace) => {
                 self.read_reviews(workspace.clone(), cx);
             }
-            // The history grows when a commit is made or a branch is switched.
             Fact::Workspaces(_) => self.read_history(cx),
-            // Turns of the history may be expired now.
             Fact::StatesDeleted { workspace } if self.tree.of.as_ref() == Some(workspace) => {
                 self.read_history(cx);
             }
-            // What is uncommitted changes with the files, and with the turn that ended.
             Fact::ChangesChanged { workspace } if self.tree.of.as_ref() == Some(workspace) => {
                 self.read_uncommitted(cx);
             }
@@ -94,7 +75,6 @@ impl ReviewPane {
                 ..
             } if self.tree.of.as_ref() == Some(workspace) => {
                 self.read_history(cx);
-                // A turn whose state was not recorded has no change to select.
                 if let Some(state) = state {
                     self.turn_ended(session, state.clone(), since.clone(), cx);
                 }
@@ -102,18 +82,16 @@ impl ReviewPane {
             }
             _ => {}
         }
-        // Flow hears every fact too: the timeline first, so that the live diff and follow
-        // find in it the step they are told of.
+        // The timeline hears every fact first, so that the live diff and follow find in it the step
+        // they are told of.
         self.flow_told(fact, cx);
         self.live_told(fact, cx);
         self.follow_told(fact, cx);
     }
 
-    /// Asks the Keeper for the reviews of `workspace`. Only the answer to the last
-    /// question is taken.
     fn read_reviews(&mut self, workspace: WorkspaceId, cx: &mut Context<Self>) {
-        // The Keeper answers the requests of reviews of one Window in the order they were
-        // sent, so every save sent before this question is in its answer.
+        // The Keeper answers the requests of reviews of one Window in the order they were sent, so
+        // every save sent before this question is in its answer.
         let asked_after = self.saved;
         let asked = self.models.link.update(cx, |link, cx| {
             link.ask(
@@ -132,9 +110,6 @@ impl ReviewPane {
         }));
     }
 
-    /// Shows an answer of the Keeper with the saves sent after it was asked for put over
-    /// it. A refusal shows no review and no notice: what the pane has stays, and the pane
-    /// works on.
     fn reviews_answered(
         &mut self,
         workspace: &WorkspaceId,
@@ -158,41 +133,31 @@ impl ReviewPane {
         }
         self.attaching.reviews_read(&shown);
         self.reviews = Some(shown);
-        // Read anew, the reviews may add or take rows above what the reviewer reads.
         self.rebuild_steady(cx);
         self.review_shown(cx);
     }
 
-    /// Says something under the rows.
     pub(crate) fn say(&mut self, words: impl Into<String>, cx: &mut Context<Self>) {
         self.notice = Some(words.into());
         cx.notify();
     }
 
-    /// Called first by every action of the reviewer: what was said is gone, and the
-    /// reviewer at work in the pane pauses follow ([`ReviewPane::touched`]). A key bound to
-    /// an action reaches the pane only as that action, never as a key event, so this is
-    /// where a key of the pane pauses follow. The controls of the views and of follow call
+    /// A key bound to an action reaches the pane only as that action, never as a key event, so this
+    /// is where a key pauses follow. The controls of the views and of follow call
     /// [`ReviewPane::steered`] instead.
     pub(crate) fn acted(&mut self, cx: &mut Context<Self>) {
         self.steered(cx);
         self.touched(cx);
     }
 
-    /// Called first by the four controls of the views and of follow, [`crate::ToggleView`],
-    /// [`crate::ToggleFlowForm`], [`crate::ToggleFollow`] and [`crate::ResumeFollow`], by key
-    /// or by a click on the bar: what was said is gone, and follow is not paused, since
-    /// they choose what Flow shows rather than read it. `ToggleFlowForm` and
-    /// `ResumeFollow` act only while Flow is on screen; in Changes they do not get this
-    /// far, and leave the notice as it is.
+    /// Called first by the view and follow controls: clears the notice without pausing follow,
+    /// since those controls choose what Flow shows rather than read it.
     pub(crate) fn steered(&mut self, cx: &mut Context<Self>) {
         if self.notice.take().is_some() {
             cx.notify();
         }
     }
 
-    /// Where the reviewer's line would be anchored: the version it is read in, the path
-    /// it has there, its side, its line and its text.
     fn anchor_at(&self, position: &Position) -> Result<Anchor, String> {
         let file = self
             .by_path
@@ -202,9 +167,6 @@ impl ReviewPane {
         let text = self
             .text(position)
             .ok_or("The text of the line is not here")?;
-        // The old side is read in the version the change is counted from, which the
-        // Keeper keeps; the new side is in the version the change leads to, or on disk,
-        // and the Keeper records it.
         let tree = match (position.side, &self.listed) {
             (Side::Old, Some(Source::Versions { old, .. })) => Some(
                 old.clone()
@@ -232,12 +194,9 @@ impl ReviewPane {
         })
     }
 
-    /// The threads of the review that sit on the line the reviewer is on, those of the
-    /// reviewer's own side first. A thread sits where the pane draws it
-    /// ([`crate::threads::place_of`]): on the lines the Keeper carried it to when it has
-    /// moved, not on the lines it was written on, which are other code by then. An
-    /// unchanged line is one row with a line on each side, and a thread of either side
-    /// sits there: the reviewer stands on it by one side whichever the thread is on.
+    /// Threads sit where the pane draws them ([`crate::threads::place_of`]). An unchanged line is
+    /// one row with a line on each side, and a thread of either side sits there. The reviewer's own
+    /// side comes first.
     fn threads_on(&self, position: &Position) -> Vec<&Thread> {
         let Some(&index) = self.by_path.get(&position.path) else {
             return Vec::new();
@@ -277,7 +236,6 @@ impl ReviewPane {
         threads
     }
 
-    /// The thread on the reviewer's line with the draft of the reviewer in it, if any.
     fn draft_on(&self, position: &Position) -> Option<(&Thread, CommentId)> {
         self.threads_on(position).into_iter().find_map(|thread| {
             let draft = thread
@@ -288,15 +246,11 @@ impl ReviewPane {
         })
     }
 
-    /// What [`Comment`] does: opens a comment box for a new thread on the reviewer's line.
     pub(crate) fn comment(&mut self, _: &Comment, window: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
-        // A line of the file view takes a comment of its own, whether or not it is in the
-        // diff.
         if self.comment_in_file_view(window, cx) {
             return;
         }
-        // In Flow the reviewer's line is one of the live diff.
         if self.view == View::Flow {
             return self.comment_in_flow(window, cx);
         }
@@ -327,8 +281,6 @@ impl ReviewPane {
         );
     }
 
-    /// What [`EditDraft`] does: opens the reviewer's draft in the thread on the
-    /// reviewer's line.
     pub(crate) fn edit_draft(
         &mut self,
         _: &EditDraft,
@@ -364,8 +316,6 @@ impl ReviewPane {
         );
     }
 
-    /// What [`crate::Reply`] does: opens a comment box for a reply in the thread on the
-    /// reviewer's line, once its last comment was sent and it holds no draft.
     pub(crate) fn reply(&mut self, _: &crate::Reply, window: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
         let Some(position) = self.position.clone() else {
@@ -381,8 +331,8 @@ impl ReviewPane {
                 .iter()
                 .any(|comment| comment.round.is_none())
         };
-        // A thread that holds a draft takes no second one, and one with nothing sent
-        // has nothing to reply to: the reply goes to the first thread that can have it.
+        // A thread with a draft takes no second one, and one with nothing sent has nothing to reply
+        // to.
         let Some(thread) = threads
             .iter()
             .find(|thread| !holds_draft(thread) && !thread.comments.is_empty())
@@ -411,9 +361,6 @@ impl ReviewPane {
         );
     }
 
-    /// What [`DeleteDraft`] does: asks the Keeper to delete the reviewer's draft in the
-    /// thread on the reviewer's line. The Keeper tells that the reviews changed, and the
-    /// pane reads them again.
     pub(crate) fn delete_draft(
         &mut self,
         _: &DeleteDraft,
@@ -443,8 +390,6 @@ impl ReviewPane {
         self.report(asked, cx);
     }
 
-    /// Says why a request of the reviewer was not done, when the Keeper's answer is not
-    /// a plain yes.
     pub(crate) fn report(&mut self, asked: Task<Result<Reply, AskError>>, cx: &mut Context<Self>) {
         cx.spawn(async move |pane, cx| {
             let words = match asked.await {
@@ -457,8 +402,6 @@ impl ReviewPane {
         .detach();
     }
 
-    /// The threads of the review in the order of the rows, each with the row of the line
-    /// it follows.
     fn thread_stops(&self) -> Vec<ThreadStop> {
         let mut stops = Vec::new();
         let mut line_row = None;
@@ -477,7 +420,6 @@ impl ReviewPane {
         stops
     }
 
-    /// Puts the reviewer on the line of a thread that is shown on one.
     fn go_to_thread(&mut self, stop: &ThreadStop, cx: &mut Context<Self>) {
         let (Some(index), Some(side)) = (
             stop.line_row,
@@ -499,8 +441,6 @@ impl ReviewPane {
         self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
     }
 
-    /// What [`NextThread`] does: puts the reviewer on the line of the first thread whose
-    /// line comes after theirs.
     pub(crate) fn next_thread(&mut self, _: &NextThread, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
         let from = self.position_row;
@@ -523,8 +463,6 @@ impl ReviewPane {
         }
     }
 
-    /// What [`PreviousThread`] does: puts the reviewer on the line of the last thread
-    /// whose line comes before theirs.
     pub(crate) fn previous_thread(
         &mut self,
         _: &PreviousThread,
@@ -544,7 +482,6 @@ impl ReviewPane {
         }
     }
 
-    /// Opens a comment box, with the focus, in the place of the one that is open.
     pub(crate) fn open_box(
         &mut self,
         view: CommentBox,
@@ -555,13 +492,11 @@ impl ReviewPane {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, BOX_ROWS)
-                // Enter is the end of the comment, as in tuicr: Shift-Enter is a new line.
                 .submit_on_enter(true)
         });
         input.update(cx, |input, cx| {
             if !text.is_empty() {
                 input.set_value(text.clone(), window, cx);
-                // The next key goes after the draft, not before it.
                 input.set_selected_range(text.len()..text.len(), cx);
             }
             input.focus(window, cx);
@@ -584,8 +519,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// Closes the comment box, which keeps its draft, and gives the focus back to the
-    /// rows, where the keys of the pane work.
     pub(crate) fn close_box(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open_box.take().is_some() {
             self.focus.focus(window, cx);
@@ -593,12 +526,10 @@ impl ReviewPane {
         }
     }
 
-    /// What the box does with Escape, which the field lets pass.
     pub(crate) fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
         self.close_box(window, cx);
     }
 
-    /// The text of the box changed: it is saved at once, with the whole text.
     fn typed(&mut self, cx: &mut Context<Self>) {
         let Some(open) = &mut self.open_box else {
             return;
@@ -612,8 +543,8 @@ impl ReviewPane {
         self.save(&view, text, cx);
     }
 
-    /// Asks the Keeper to keep a draft as it is now, without waiting for the answer to
-    /// the one before, and puts it into the reviews the pane shows.
+    /// Sends the draft without waiting for the answer to the previous save, and puts it into the
+    /// reviews the pane shows.
     fn save(&mut self, view: &CommentBox, text: String, cx: &mut Context<Self>) {
         let on = match &view.anchor {
             Some(anchor) => DraftOn::NewThread {

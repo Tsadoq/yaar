@@ -1,5 +1,4 @@
-//! Component tests: everything the Store holds of reviews and of turns reads back as it
-//! was after the database is closed and opened again, on a real database file.
+//! Reviews and turns read back as they were after the database is closed and opened again.
 
 mod support;
 
@@ -14,7 +13,6 @@ use yaar_store::{
     ThreadPlace, TurnEndRecord, TurnId, TurnRecord, WorkspaceId,
 };
 
-/// An id of 32 hexadecimal digits, from a number.
 fn id(n: u128) -> String {
     format!("{n:032x}")
 }
@@ -55,7 +53,6 @@ fn comment(n: u128, author: Author, text: &str, round: Option<u32>) -> Comment {
     }
 }
 
-/// A thread `n` with one draft of the reviewer, `first_comment`.
 fn thread(n: u128, first_comment: u128, text: &str, anchor: Anchor) -> Thread {
     Thread {
         id: tid(n),
@@ -79,7 +76,6 @@ fn review(n: u128, agent: Option<&str>) -> ReviewRecord {
     }
 }
 
-/// What the Store holds, read through its calls.
 #[derive(Debug, PartialEq)]
 struct Everything {
     reviews: Vec<ReviewRecord>,
@@ -109,7 +105,6 @@ fn read_everything(store: &Store) -> Everything {
 #[test]
 fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_with_its_turns() {
     let scratch = Scratch::new();
-    // A path that is not text, and its old side.
     let odd = PathBuf::from(OsStr::from_bytes(b"src/\xff odd\n'name\".rs"));
     let state = |c: char| c.to_string().repeat(40);
 
@@ -121,10 +116,6 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
             .expect("put review");
         store.put_review(&review(2, None)).expect("put review");
 
-        // Review 1: a thread whose lines were rewritten and which the agent answered
-        // (10), a draft (11) that is attached alone, a resolved thread whose lines were
-        // deleted (12), and a thread of round 2 that stays on its anchor (13). The draft
-        // (11) is placed with no notice.
         let rewritten = anchor(odd.clone(), Side::Old, 4, 6);
         let plain = anchor(PathBuf::from("src/lib.rs"), Side::New, 3, 3);
         for (n, first, text, anchor) in [
@@ -137,7 +128,6 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
                 .put_thread(&rid(1), &thread(n, first, text, anchor))
                 .expect("put thread");
         }
-        // The first round is kept with no state, which is recorded after.
         store
             .put_round(&rid(1), &delivered(1, None), &[cid(100), cid(120)])
             .expect("put round 1");
@@ -202,7 +192,6 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
             .set_attached(&rid(1), Some(&AttachedRecord::Thread(tid(11))))
             .expect("attach a thread");
 
-        // Review 2: attached whole, with a draft.
         store
             .put_thread(&rid(2), &thread(20, 200, "of no agent", plain))
             .expect("put thread");
@@ -210,7 +199,6 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
             .set_attached(&rid(2), Some(&AttachedRecord::Review))
             .expect("attach the review");
 
-        // A session with two turns: the first ended, with an edit that names its lines.
         let session = SessionRecord {
             id: SessionId::new(id(50)),
             workspace: workspace(),
@@ -261,7 +249,6 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
             )
             .expect("end turn");
 
-        // The records the test built, field for field.
         let sent = |n, text: &str, round| comment(n, Author::Reviewer, text, round);
         expected = Everything {
             reviews: vec![
@@ -383,7 +370,6 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
         assert_eq!(read_everything(&store), expected);
     }
 
-    // Opened anew, twice, as after two restarts; the first Store is gone.
     for _ in 0..2 {
         let store = Store::open(&scratch.file()).expect("open again");
         assert_eq!(read_everything(&store), expected);
@@ -396,7 +382,6 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
     }
 }
 
-/// Round `number`, delivered with a message, with the state recorded for it or none yet.
 fn delivered(number: u32, state: Option<String>) -> Round {
     Round {
         number,

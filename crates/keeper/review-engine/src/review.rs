@@ -1,11 +1,3 @@
-//! One review and its rules, with no file and no process: what can be done to its threads
-//! and comments, what is attached, and what a send carries.
-//!
-//! The rules slice 6 adds are in child modules, one for each package that builds them:
-//! attaching with the offer to start an agent, and a send whose state is recorded later
-//! (`attaching.rs`); the agent's replies and the states of a thread (`answers.rs`); and
-//! the round its agent has edited since (`rounds.rs`).
-
 mod answers;
 mod attaching;
 mod rounds;
@@ -20,78 +12,52 @@ use yaar_store::{
     ThreadId, WorkspaceId,
 };
 
-/// What of a review goes with the user's next message to its agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attachment {
-    /// The review: every unsent comment on an unresolved thread at the moment of the send,
-    /// drafts written after the attaching included, and a thread resolved meanwhile not.
+    /// Every unsent comment on an unresolved thread at the moment of the send, drafts written after
+    /// the attaching included.
     Review,
-    /// One thread alone: its unsent comments, while it is unresolved. A draft on another
-    /// thread does not join.
     Thread(ThreadId),
 }
 
-/// Which comments a send, or the text of a review, takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
-    /// Every unsent comment on an unresolved thread, whatever is attached: what copying a
-    /// review as text takes.
+    /// Every unsent comment on an unresolved thread, whatever is attached: what copying a review
+    /// as text takes.
     Everything,
-    /// What is attached: everything as [`Scope::Everything`] when the review is attached,
-    /// the one thread when one thread is attached alone, and nothing when nothing is.
+    /// Everything when the review is attached, one thread when that alone is, else nothing.
     Attached,
 }
 
-/// The unsent comments of one thread that a send would carry, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unsent<'a> {
-    /// The thread.
     pub thread: &'a Thread,
-    /// Its unsent comments, oldest first: at least one.
     pub comments: Vec<&'a Comment>,
 }
 
-/// What a send did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sent {
-    /// The round it started.
     pub round: Round,
-    /// The comments it sent, now carrying that round, in the order of [`Review::unsent`].
     pub comments: Vec<CommentId>,
 }
 
-/// Why a review refused a change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewError {
-    /// The review holds no thread by this id.
     UnknownThread(ThreadId),
-    /// The review holds no comment by this id.
     UnknownComment(CommentId),
-    /// The comment was sent: it carries its round and cannot be edited or deleted.
     NotADraft(CommentId),
-    /// The id is taken by a thread or a comment of the review.
     TakenId(String),
-    /// A reply was asked for in a thread with no sent comment: there is nothing to follow
-    /// up on, and its draft is edited instead.
     NothingSent(ThreadId),
-    /// A reply was asked for in a thread that holds a draft already: that draft is edited
-    /// instead.
     DraftPending {
-        /// The thread.
         thread: ThreadId,
-        /// Its draft.
         draft: CommentId,
     },
-    /// The anchor is not a range of lines: the first line is 0, the last is before the
-    /// first, or its text holds another number of lines than the range.
+    /// The first line is 0, the last is before the first, or the text holds another number of lines
+    /// than the range.
     BadAnchor,
-    /// A send was asked for with nothing to carry.
     NothingToSend,
-    /// A reply of an agent came from a session the review does not belong to.
     OtherSession(SessionId),
-    /// The review holds no round by this number.
     UnknownRound(u32),
-    /// The round has its state already: a round's state is given once.
     RoundHasState(u32),
 }
 
@@ -126,17 +92,8 @@ impl fmt::Display for ReviewError {
 
 impl std::error::Error for ReviewError {}
 
-/// One review: threads written for one agent session in one worktree, or for no agent.
-///
-/// A comment is a draft until a send carries it; a draft can be edited and deleted. A send
-/// starts a round: every comment it carries gets the round's number and refuses to be
-/// edited or deleted from then on. A follow-up on a sent comment is a new draft, a reply,
-/// in the same thread. A resolved thread is not sent, an unsent comment on it included.
-/// A review has no votes and no labels.
-///
-/// The ids of threads and comments are given by the caller, which draws them; an id the
-/// review holds already is refused. Every change is checked before anything is changed: a
-/// change that is refused leaves the review as it was.
+/// One review: threads written for one agent session in one worktree, or for no agent. A comment is
+/// a draft until a send carries it; then it refuses edit and delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Review {
     record: ReviewRecord,
@@ -144,7 +101,6 @@ pub struct Review {
 }
 
 impl Review {
-    /// A new review with no thread, no round and no reviewed state.
     pub fn new(id: ReviewId, workspace: WorkspaceId, agent: Option<String>) -> Review {
         Review::from_record(ReviewRecord {
             id,
@@ -157,8 +113,6 @@ impl Review {
         })
     }
 
-    /// The review the Store kept, with what the Store keeps attached. What [`Review::attach`]
-    /// and [`Review::detach`] change later is the review's, until the caller keeps it.
     pub fn from_record(record: ReviewRecord) -> Review {
         let attached = record.attached.as_ref().map(|attached| match attached {
             yaar_store::AttachedRecord::Review => Attachment::Review,
@@ -167,37 +121,30 @@ impl Review {
         Review { record, attached }
     }
 
-    /// The review as the Store keeps it.
     pub fn record(&self) -> &ReviewRecord {
         &self.record
     }
 
-    /// Its id.
     pub fn id(&self) -> &ReviewId {
         &self.record.id
     }
 
-    /// The workspace it belongs to.
     pub fn workspace(&self) -> &WorkspaceId {
         &self.record.workspace
     }
 
-    /// The agent session it belongs to; none for the review of no agent.
     pub fn agent(&self) -> Option<&str> {
         self.record.agent.as_deref()
     }
 
-    /// Its threads, in the order they were started.
     pub fn threads(&self) -> &[Thread] {
         &self.record.threads
     }
 
-    /// One thread.
     pub fn thread(&self, thread: &ThreadId) -> Option<&Thread> {
         self.record.threads.iter().find(|t| &t.id == thread)
     }
 
-    /// One comment, with the thread it is in.
     pub fn comment(&self, comment: &CommentId) -> Option<(&Thread, &Comment)> {
         self.record.threads.iter().find_map(|thread| {
             thread
@@ -208,26 +155,18 @@ impl Review {
         })
     }
 
-    /// Its rounds, the first first.
     pub fn rounds(&self) -> &[Round] {
         &self.record.rounds
     }
 
-    /// The state last marked reviewed, by its full id; none before the first mark.
     pub fn reviewed(&self) -> Option<&str> {
         self.record.reviewed.as_deref()
     }
 
-    /// What is attached to the user's next message; none while nothing is.
     pub fn attached(&self) -> Option<&Attachment> {
         self.attached.as_ref()
     }
 
-    /// Starts a thread on `anchor` with a first comment, a draft of the reviewer with
-    /// `text`. The anchor is kept as given: the tree, the path, the side, the lines and
-    /// their text, whatever line it is and wherever it was written. Refused with
-    /// [`ReviewError::BadAnchor`] for lines that are no range, and
-    /// [`ReviewError::TakenId`] for an id the review holds.
     pub fn start_thread(
         &mut self,
         thread: ThreadId,
@@ -265,10 +204,6 @@ impl Review {
         Ok(())
     }
 
-    /// Adds a draft reply of the reviewer at the end of a thread that holds a sent comment
-    /// and no draft. Refused with [`ReviewError::NothingSent`] in a thread with no sent
-    /// comment, [`ReviewError::DraftPending`] in one that holds a draft, and
-    /// [`ReviewError::UnknownThread`] and [`ReviewError::TakenId`].
     pub fn reply(
         &mut self,
         thread: &ThreadId,
@@ -303,8 +238,6 @@ impl Review {
         Ok(())
     }
 
-    /// Changes the text of a draft. Refused with [`ReviewError::NotADraft`] for a sent
-    /// comment, which keeps its text.
     pub fn edit(&mut self, comment: &CommentId, text: &str) -> Result<(), ReviewError> {
         self.check_draft(comment)?;
         let draft = self
@@ -318,8 +251,6 @@ impl Review {
         Ok(())
     }
 
-    /// Deletes a draft; a thread left with no comment goes with it. Refused with
-    /// [`ReviewError::NotADraft`] for a sent comment, which stays.
     pub fn delete(&mut self, comment: &CommentId) -> Result<(), ReviewError> {
         self.check_draft(comment)?;
         let (thread, _) = self.comment(comment).expect("the comment was found above");
@@ -333,7 +264,6 @@ impl Review {
         held.comments.retain(|c| &c.id != comment);
         if held.comments.is_empty() {
             self.record.threads.retain(|t| t.id != thread);
-            // A thread that is gone cannot be what the next message carries.
             if self.attached == Some(Attachment::Thread(thread)) {
                 self.attached = None;
             }
@@ -341,23 +271,17 @@ impl Review {
         Ok(())
     }
 
-    /// Resolves a thread: it is sent no more, an unsent comment on it included, until it
-    /// is reopened. A thread attached alone stays attached and carries nothing.
+    /// A thread attached alone stays attached and carries nothing.
     pub fn resolve(&mut self, thread: &ThreadId) -> Result<(), ReviewError> {
         self.thread_mut(thread)?.resolved = true;
         Ok(())
     }
 
-    /// Reopens a resolved thread.
     pub fn reopen(&mut self, thread: &ThreadId) -> Result<(), ReviewError> {
         self.thread_mut(thread)?.resolved = false;
         Ok(())
     }
 
-    /// Attaches the review, or one of its threads alone, to the user's next message, in
-    /// place of what was attached. What the send will carry is read at the send, by
-    /// [`Review::unsent`] with [`Scope::Attached`]: an edit changes it, a new draft joins
-    /// an attached review, and a thread resolved meanwhile leaves it.
     pub fn attach(&mut self, attachment: Attachment) -> Result<(), ReviewError> {
         if let Attachment::Thread(thread) = &attachment
             && self.thread(thread).is_none()
@@ -368,15 +292,10 @@ impl Review {
         Ok(())
     }
 
-    /// Takes the attachment away. Every comment it would have carried stays an unsent
-    /// draft.
     pub fn detach(&mut self) {
         self.attached = None;
     }
 
-    /// The unsent comments a send of `scope` would carry now, thread by thread, in the
-    /// order of the threads: every unsent comment on an unresolved thread, or for
-    /// [`Scope::Attached`] those of what is attached. A thread with none is left out.
     pub fn unsent(&self, scope: Scope) -> Vec<Unsent<'_>> {
         let only = match scope {
             Scope::Everything => None,
@@ -401,11 +320,8 @@ impl Review {
             .collect()
     }
 
-    /// Sends what [`Review::unsent`] gives for `scope`: starts the next round, recorded at
-    /// `state` and sent by `sent_by`, and gives each of those comments that round's
-    /// number. A send of what was attached detaches it. One thread sent alone is a round
-    /// like any other. Refused with [`ReviewError::NothingToSend`], and nothing changed,
-    /// when there is nothing to carry.
+    /// Refused with [`ReviewError::NothingToSend`], changing nothing, when there is nothing to
+    /// carry. A send of what was attached detaches it.
     pub fn send(
         &mut self,
         scope: Scope,
@@ -446,12 +362,10 @@ impl Review {
         })
     }
 
-    /// Makes `state` the reviewed state, from which the next review starts.
     pub fn mark_reviewed(&mut self, state: &str) {
         self.record.reviewed = Some(state.to_string());
     }
 
-    // Refuses an id that names a thread or a comment of the review.
     fn check_free(&self, id: &str) -> Result<(), ReviewError> {
         let taken = self.record.threads.iter().any(|thread| {
             thread.id.as_str() == id || thread.comments.iter().any(|c| c.id.as_str() == id)
@@ -463,7 +377,6 @@ impl Review {
         }
     }
 
-    // Refuses a comment the review does not hold, or one that was sent.
     fn check_draft(&self, comment: &CommentId) -> Result<(), ReviewError> {
         match self.comment(comment) {
             None => Err(ReviewError::UnknownComment(comment.clone())),
@@ -516,7 +429,6 @@ mod tests {
         }
     }
 
-    // Starts thread `n` with comment `n + 100` on a one-line anchor.
     fn start(review: &mut Review, n: u32, text: &str) {
         review
             .start_thread(
@@ -578,16 +490,12 @@ mod tests {
         assert_eq!(again.rounds().len(), 1);
     }
 
-    // REV-01
     #[test]
     fn a_draft_is_tied_to_a_path_a_side_lines_and_their_text_in_a_tree_whatever_the_line() {
         let mut review = review();
         let given = [
-            // An added line.
             anchor("S1", "src/a.rs", Side::New, 12, 12, "let added = 1;"),
-            // A removed line, in a commit of the real repository.
             anchor("C0", "src/a.rs", Side::Old, 7, 7, "let removed = 2;"),
-            // A line outside the diff, three lines of a file the change leaves alone.
             anchor(
                 "S1",
                 "src/untouched.rs",
@@ -596,18 +504,9 @@ mod tests {
                 42,
                 "fn a() {}\n\nfn b() {}",
             ),
-            // The same line written in Flow and written in Changes. The review pane builds
-            // both anchors one way: the path in the version of the line's side, the side,
-            // the line and its text, and for the new side the state the turn ended with.
-            // In Flow the line is one of the turn's live diff, read from the files on
-            // disk; the engine records them in state S2 before the anchor reaches the model.
-            // In Changes it is a line of the turn's change, to state S2.
             anchor("S2", "src/b.rs", Side::New, 5, 5, "let drafted = 3;"),
             anchor("S2", "src/b.rs", Side::New, 5, 5, "let drafted = 3;"),
         ];
-        // This states the premise and shows nothing: both literals are the same. What can
-        // fail is below, where each of the two is kept as a thread of its own and comes
-        // back field for field.
         assert_eq!(given[3], given[4]);
         for (n, anchor) in given.iter().enumerate() {
             let n = n as u32 + 1;
@@ -631,10 +530,8 @@ mod tests {
             assert_eq!(kept.first, wanted.first);
             assert_eq!(kept.last, wanted.last);
             assert_eq!(kept.text, wanted.text);
-            // The same threads are found by their id.
             assert_eq!(review.thread(&thread.id), Some(thread));
 
-            // A new thread is open and holds one draft of the reviewer.
             assert!(!thread.resolved && !thread.addressed);
             assert_eq!(thread.comments.len(), 1);
             let first = &thread.comments[0];
@@ -643,7 +540,6 @@ mod tests {
             assert_eq!(first.round, None);
         }
 
-        // The two anchors of one line, written in either view, are kept the same.
         let (in_flow, in_changes) = (&review.threads()[3].anchor, &review.threads()[4].anchor);
         assert_eq!(in_flow, in_changes);
         assert_eq!(
@@ -655,7 +551,6 @@ mod tests {
             (5, 5, "let drafted = 3;")
         );
 
-        // Edit and delete work the same on each.
         for n in 1..=given.len() as u32 {
             review
                 .edit(&comment_id(n + 100), &format!("edited {n}"))
@@ -677,15 +572,10 @@ mod tests {
         let before = review.clone();
 
         let bad = [
-            // The first line is 0: lines count from 1.
             anchor("S1", "a.rs", Side::New, 0, 0, "x"),
-            // The last line is before the first.
             anchor("S1", "a.rs", Side::New, 5, 4, "x"),
-            // The text holds fewer lines than the range.
             anchor("S1", "a.rs", Side::New, 5, 6, "x"),
-            // The text holds more lines than the range.
             anchor("S1", "a.rs", Side::New, 5, 5, "x\ny"),
-            // A line end after the last line is another line.
             anchor("S1", "a.rs", Side::New, 5, 5, "x\n"),
         ];
         for anchor in bad {
@@ -723,8 +613,6 @@ mod tests {
         let before = review.clone();
         let a = anchor("S1", "a.rs", Side::New, 1, 1, "x");
 
-        // A thread id again, a comment id again, a comment id used as a thread id, a
-        // thread id used as a comment id, and one id for both new parts.
         let attempts = [
             (thread_id(1), comment_id(102)),
             (thread_id(2), comment_id(101)),
@@ -743,17 +631,14 @@ mod tests {
         }
     }
 
-    // REV-02
     #[test]
     fn a_comment_is_a_draft_until_sent_and_a_sent_one_refuses_edit_and_delete() {
         let mut review = review();
         start(&mut review, 1, "first");
         start(&mut review, 2, "second");
 
-        // A draft until sent.
         assert_eq!(round_of(&review, 101), None);
 
-        // A draft can be edited and deleted.
         review
             .edit(&comment_id(101), "first, edited")
             .expect("edit");
@@ -763,7 +648,6 @@ mod tests {
         assert!(review.thread(&thread_id(2)).is_none());
         assert_eq!(review.threads().len(), 1);
 
-        // Once sent it carries the number of its round.
         let sent = review
             .send(Scope::Everything, "S1", SentBy::Copied)
             .expect("send");
@@ -788,7 +672,6 @@ mod tests {
         assert_eq!(round_of(&review, 101), Some(1));
         assert_eq!(review.rounds().len(), 2);
 
-        // And refuses both, leaving the review as it was.
         let before = review.clone();
         assert_eq!(
             review.edit(&comment_id(101), "changed"),
@@ -866,7 +749,6 @@ mod tests {
         assert_eq!(thread.comments[0].round, Some(1));
     }
 
-    // REV-03
     #[test]
     fn a_follow_up_on_a_sent_comment_is_a_draft_reply_in_the_same_thread() {
         let mut review = review();
@@ -887,7 +769,6 @@ mod tests {
         assert_eq!(reply.author, Author::Reviewer);
         assert_eq!(reply.text, "and one more thing");
         assert_eq!(reply.round, None);
-        // It is found in that thread by its id, and it is a draft: it can be edited.
         let (found_in, _) = review.comment(&comment_id(2)).expect("found");
         assert_eq!(found_in.id, thread_id(1));
         review
@@ -901,7 +782,6 @@ mod tests {
         start(&mut review, 1, "first");
         let before = review.clone();
 
-        // Nothing sent: the draft is edited instead.
         assert_eq!(
             review.reply(&thread_id(1), comment_id(2), "x"),
             Err(ReviewError::NothingSent(thread_id(1)))
@@ -915,7 +795,6 @@ mod tests {
             .reply(&thread_id(1), comment_id(2), "x")
             .expect("reply");
 
-        // A draft reply is there already: it is edited instead.
         let before = review.clone();
         assert_eq!(
             review.reply(&thread_id(1), comment_id(3), "y"),
@@ -926,7 +805,6 @@ mod tests {
         );
         assert_eq!(review, before);
 
-        // Once the reply is sent it carries round 2 and a reply can follow it.
         review
             .send(Scope::Everything, "S2", SentBy::Copied)
             .expect("send the reply");
@@ -939,7 +817,6 @@ mod tests {
             3
         );
 
-        // The id of the reply must be free.
         review
             .send(Scope::Everything, "S3", SentBy::Copied)
             .expect("send the second reply");
@@ -968,7 +845,6 @@ mod tests {
         assert_eq!(sent.comments, vec![comment_id(101)]);
         assert_eq!(round_of(&review, 102), None);
 
-        // Nothing but the resolved thread's draft is left: nothing to send.
         let before = review.clone();
         assert_eq!(
             review.send(Scope::Everything, "S2", SentBy::Copied),
@@ -976,7 +852,6 @@ mod tests {
         );
         assert_eq!(review, before);
 
-        // Reopened, its draft is sent again.
         review.reopen(&thread_id(2)).expect("reopen");
         assert_eq!(texts(&review.unsent(Scope::Everything)), ["resolved"]);
     }
@@ -998,11 +873,9 @@ mod tests {
         let threads: Vec<&ThreadId> = unsent.iter().map(|u| &u.thread.id).collect();
         assert_eq!(threads, [&thread_id(1), &thread_id(3)]);
         assert_eq!(texts(&unsent), ["a2", "c"]);
-        // Nothing is attached, so an attached send carries nothing.
         assert!(review.unsent(Scope::Attached).is_empty());
     }
 
-    // REV-07
     #[test]
     fn what_is_attached_is_read_at_the_send_and_one_thread_attached_alone_takes_no_new_draft() {
         let mut review = review();
@@ -1011,28 +884,24 @@ mod tests {
         review.attach(Attachment::Review).expect("attach");
         assert_eq!(review.attached(), Some(&Attachment::Review));
 
-        // An edit changes what will be sent.
         review.edit(&comment_id(101), "one, edited").expect("edit");
         assert_eq!(
             texts(&review.unsent(Scope::Attached)),
             ["one, edited", "two"]
         );
 
-        // A new draft joins.
         start(&mut review, 3, "three");
         assert_eq!(
             texts(&review.unsent(Scope::Attached)),
             ["one, edited", "two", "three"]
         );
 
-        // A thread resolved meanwhile leaves.
         review.resolve(&thread_id(2)).expect("resolve");
         assert_eq!(
             texts(&review.unsent(Scope::Attached)),
             ["one, edited", "three"]
         );
 
-        // The send carries exactly those, and nothing is attached after it.
         let sent = review
             .send(Scope::Attached, "S1", SentBy::Copied)
             .expect("send");
@@ -1043,7 +912,6 @@ mod tests {
         assert_eq!(round_of(&review, 102), None);
         assert_eq!(review.attached(), None);
 
-        // One thread attached alone: a new draft does not join.
         review
             .reply(&thread_id(1), comment_id(50), "a reply")
             .expect("reply");
@@ -1052,13 +920,11 @@ mod tests {
             .expect("attach");
         start(&mut review, 4, "four");
         assert_eq!(texts(&review.unsent(Scope::Attached)), ["a reply"]);
-        // Everything is still what a copy would take.
         assert_eq!(
             texts(&review.unsent(Scope::Everything)),
             ["a reply", "four"]
         );
 
-        // That send counts as a round like any other.
         let sent = review
             .send(Scope::Attached, "S2", SentBy::Copied)
             .expect("send the thread");
@@ -1115,7 +981,6 @@ mod tests {
 
         assert_eq!(review.attached(), None);
         assert!(review.unsent(Scope::Attached).is_empty());
-        // Deleting a draft of another thread leaves the attachment alone.
         review.attach(Attachment::Review).expect("attach");
         review.delete(&comment_id(102)).expect("delete");
         assert_eq!(review.attached(), Some(&Attachment::Review));

@@ -1,6 +1,3 @@
-//! The files marked viewed, through the engine with the real Store and the real Recorder
-//! beneath, on a repository the test makes.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -34,7 +31,6 @@ fn a_viewed_file_loses_the_mark_when_its_content_changes_and_keeps_it_when_anoth
     let view = reviews.of_workspace(&w, Some(&worktree)).expect("read");
     assert_eq!(view.viewed, paths(&["a.rs", "b.rs", "src/c.rs"]));
 
-    // One file changes: only its mark goes, and the Store no longer holds it.
     write(&repo, "a.rs", "one, changed\n");
     let view = reviews.of_workspace(&w, Some(&worktree)).expect("read");
     assert_eq!(view.viewed, paths(&["b.rs", "src/c.rs"]));
@@ -46,7 +42,6 @@ fn a_viewed_file_loses_the_mark_when_its_content_changes_and_keeps_it_when_anoth
         .collect();
     assert_eq!(kept, paths(&["b.rs", "src/c.rs"]));
 
-    // A file that is gone loses its mark too; one marked again is viewed for its new content.
     std::fs::remove_file(repo.join("b.rs")).expect("remove");
     reviews
         .set_viewed(&w, &worktree, Path::new("a.rs"), true)
@@ -54,7 +49,6 @@ fn a_viewed_file_loses_the_mark_when_its_content_changes_and_keeps_it_when_anoth
     let view = reviews.of_workspace(&w, Some(&worktree)).expect("read");
     assert_eq!(view.viewed, paths(&["a.rs", "src/c.rs"]));
 
-    // The mark is taken away, and taking away a mark that is not there is no error.
     reviews
         .set_viewed(&w, &worktree, Path::new("a.rs"), false)
         .expect("unmark");

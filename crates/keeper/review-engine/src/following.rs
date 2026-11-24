@@ -1,8 +1,3 @@
-//! Carrying every thread of a workspace to each new state the engine records, one state
-//! at a time, and between any two trees: commits and recorded states alike, which only
-//! the Recorder tells apart. Built by the engine's package "following through rounds" of
-//! slice 6.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -12,8 +7,6 @@ use yaar_store::{NoticeRecord, Side, ThreadId, ThreadPlace, WorkspaceId};
 use crate::engine::{EngineError, Reviews, is_outside};
 use crate::follow::{FileStep, Notice, Place, Placed, carry, carry_file};
 
-/// What one file became between two trees, with the bytes it needs: [`FileStep`] owns
-/// nothing, and this holds what it points at.
 enum Step {
     Unchanged,
     Changed {
@@ -39,10 +32,7 @@ impl Step {
     }
 }
 
-/// What became of the file at `path` of tree `from` in tree `to`, as `changes`, the paths
-/// that differ between the two with renames paired, says; the bytes are read from the
-/// state store. A file git does not list is unchanged, and so is one whose old bytes the
-/// store does not hold, which cannot be diffed.
+/// A file git does not list is unchanged, and so is one whose old bytes the store lacks.
 fn step_of(
     states: &StateStore,
     from: &str,
@@ -90,42 +80,21 @@ fn record_of(notice: Notice) -> NoticeRecord {
     }
 }
 
-/// One thread to be carried: where it sits and in which tree, as read.
 struct Candidate {
     thread: ThreadId,
-    /// What the Store held of its place when it was read; compared when it is kept.
+    /// What the Store held when read; compared before keeping, to skip threads changed meanwhile.
     was: Option<ThreadPlace>,
-    /// The tree it sits in.
     from: String,
     at: Placed,
 }
 
 impl Reviews {
-    /// Carries every thread of every review of `workspace` that is not resolved and sits on
-    /// the new side to the recorded state `to`, from the tree it sits in now (where it was
-    /// carried last, else its anchor's), by [`crate::follow::carry_file`] over the files of
-    /// the two trees as the workspace's state store reads them and pairs their renames;
-    /// keeps where each one sits now, but for a thread that has no place yet and sits where
-    /// its anchor says, which has none to keep. Gives the threads whose place or notice
-    /// changed.
-    ///
-    /// A thread is carried only forward: to a `to` newer than the tree it sits in, by the
-    /// order of the state store's list (`yaar_recorder::StateStore::states`), whose order
-    /// is the order the states were recorded. A thread that sits in `to` already, or in a
-    /// state newer than `to`, is left: two recordings of one workspace can run at once (a
-    /// turn's end and a new thread's first save, say), and their calls of this may come in
-    /// the other order. A thread that has a place in a state is carried forward to any newer
-    /// state. A thread that has no place yet, one that sits where its anchor says (in a
-    /// commit or in a state), is carried only to the newest state the list holds: when it
-    /// does not move there nothing is written to say it was carried, and a later call for
-    /// an older state would carry it back. A state taken outside the engine, and so never
-    /// followed, leaves such a thread waiting for the next state the engine follows.
-    ///
-    /// The engine's turn is not held while the trees are read and diffed, which may take
-    /// long with many threads: a report of the agent, which waits for the engine's turn,
-    /// must not wait for that. The turn is taken only at the end, to read the threads
-    /// again, leave out each one whose place changed meanwhile (another call carried it,
-    /// or the reviewer resolved it), and keep the rest with one `Store::set_places`.
+    /// Gives the threads whose place or notice changed. Only forward, by the order of
+    /// `StateStore::states`: two recordings can run at once, and their calls may arrive in the
+    /// other order. A thread still on its anchor goes only to the newest state: it writes nothing
+    /// when it does not move, so a later call for an older state would carry it back. The turn is
+    /// not held while trees are read and diffed; it is taken at the end to drop threads changed
+    /// meanwhile.
     pub fn follow(
         &self,
         workspace: &WorkspaceId,
@@ -138,18 +107,15 @@ impl Reviews {
             .enumerate()
             .map(|(n, state)| (state.id.as_str().to_owned(), n))
             .collect();
-        // A state the store does not list has no place in the order: nothing is carried
-        // to it.
+        // A state the store does not list has no place in the order: nothing is carried to it.
         let Some(&to_at) = order.get(to.as_str()) else {
             return Ok(Vec::new());
         };
 
-        // What there is to carry, read without the turn.
         let mut candidates = Vec::new();
         for review in self.store.reviews_of(workspace)? {
             for thread in review.threads {
-                // A thread on a file outside the worktree has no version to carry from, and
-                // no diff names its file.
+                // A file outside the worktree has no version to carry from, and no diff names it.
                 if thread.resolved
                     || thread.anchor.side != Side::New
                     || is_outside(&thread.anchor.path)
@@ -182,17 +148,11 @@ impl Reviews {
                         },
                     ),
                 };
-                // Forward only: a thread that sits in a state is carried only to a newer
-                // one. A tree the list does not hold is a commit: only a thread still on
-                // its anchor sits in one, and the check below sends it only to the newest
-                // state.
+                // A tree the list does not hold is a commit: only a thread still on its anchor sits
+                // in one.
                 if from == to.as_str() || order.get(&from).is_some_and(|&n| n >= to_at) {
                     continue;
                 }
-                // A thread with no place yet that sits where it was written is not written
-                // down when it has not moved, so nothing would say it was carried to `to`:
-                // a later call for an older state would carry it back. It waits for the
-                // newest state, whose own call carries it.
                 let to_is_newest = to_at + 1 == order.len();
                 if thread.now.is_none() && !to_is_newest {
                     continue;
@@ -206,9 +166,6 @@ impl Reviews {
             }
         }
 
-        // The trees are read and diffed once for each tree the threads sit in, and each file
-        // once for all the threads on it. A tree that cannot be read leaves its threads
-        // where they are; the first such failure is given when the others are kept.
         let mut failure: Option<EngineError> = None;
         let mut carried: Vec<(usize, Placed)> = Vec::new();
         let mut trees: Vec<&str> = candidates.iter().map(|c| c.from.as_str()).collect();
@@ -260,8 +217,6 @@ impl Reviews {
             };
         }
 
-        // The turn: the threads are read again, and one that was resolved, deleted or
-        // carried meanwhile is left out.
         let _turn = self.turn();
         let mut current: HashMap<ThreadId, Option<ThreadPlace>> = HashMap::new();
         for review in self.store.reviews_of(workspace)? {
@@ -279,8 +234,6 @@ impl Reviews {
                 continue;
             }
             if now == candidate.at {
-                // A thread that sits where its anchor says, and was not placed anywhere
-                // else before, has no place to keep.
                 if candidate.was.is_none() {
                     continue;
                 }
@@ -306,10 +259,7 @@ impl Reviews {
         }
     }
 
-    /// Where a thread placed at `placed` in tree `from` sits in tree `to`, two versions of
-    /// `workspace` read through its state store: recorded states or commits it holds,
-    /// whichever each is. Nothing is kept. A place on the old side or on a file outside the
-    /// worktree is given back as it is.
+    /// Nothing is kept. An old-side place or one outside the worktree is returned as it is.
     pub fn carry_between(
         &self,
         workspace: &WorkspaceId,
@@ -317,8 +267,6 @@ impl Reviews {
         from: &str,
         to: &str,
     ) -> Result<Placed, EngineError> {
-        // A thread on the old side, or on a file outside the worktree, stays where it is
-        // whatever the trees are: nothing is read.
         if placed.at.side != Side::New || is_outside(&placed.at.path) {
             return Ok(placed.clone());
         }
@@ -328,9 +276,7 @@ impl Reviews {
         Ok(carry(placed, Side::New, step.as_step()))
     }
 
-    /// The engine took the state `state` of `workspace`: every thread is carried to it, by
-    /// [`Reviews::follow`], and a failure is written down, since the state was taken all
-    /// the same. Called after the state was recorded, without the engine's turn.
+    /// A failure is written down, since the state was taken all the same. Called without the turn.
     pub(crate) fn followed(&self, workspace: &WorkspaceId, state: &StateId) {
         if let Err(e) = self.follow(workspace, state) {
             eprintln!(
@@ -363,12 +309,9 @@ mod tests {
         }
     }
 
-    // THREAD-06
     #[test]
     fn a_thread_on_a_removed_line_stays_put_through_three_rounds_of_changes_to_the_new_side() {
         let mut version: Vec<String> = (1..=10).map(|n| format!("line {n}")).collect();
-        // Carried alone, as the row says, and carried in one call with a thread on the new
-        // side, as the engine carries all the threads of a file: both must stay.
         let mut removed = on(Side::Old, 4);
         let mut together = vec![on(Side::Old, 4), on(Side::New, 4)];
 
@@ -402,15 +345,12 @@ mod tests {
                 round + 1
             );
         }
-        // The thread on the new side, the control, is what the changes do touch.
         assert!(
             together[1].notice.is_some(),
             "the changes did touch the new side: {:?}",
             together[1]
         );
 
-        // The file is then renamed, and then deleted, on the new side: the thread of the
-        // old side is as it was after each.
         let content = text(&version);
         let renamed = FileStep::Renamed {
             to: Path::new("b.rs"),

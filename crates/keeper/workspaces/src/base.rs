@@ -1,34 +1,15 @@
-//! The rules behind the base of a workspace, as plain functions of what git reports.
-
 use yaar_recorder::{Head, Refs};
 
-/// The default branch of a repository, found without asking any server: the base of a
-/// workspace whose user set none.
-///
-/// The first of three steps that answers:
-///
-/// 1. the default branch a remote recorded, if that branch still exists; `origin` is
-///    asked before any other remote;
-/// 2. the nearest of `main`, `origin/main`, `master`, `origin/master`, `develop` and
-///    `origin/develop`, among those that exist;
-/// 3. the nearest of all other branches, local and of the remotes, leaving out the
-///    branch that is checked out and the branch it follows.
-///
-/// "Nearest" is the branch with the fewest commits between the point where it parts from
-/// what is checked out and what is checked out. Between two that are equally near, the
-/// earlier in the order written above wins, and in step 3 the earlier in git's order,
-/// local branches first.
-///
-/// The answer is the short name of a branch, as [`Refs`] lists it. None when no step
-/// answers: there is then nothing to compare the workspace with.
+/// / The default a remote recorded (`origin` first) if its branch exists, else the nearest
+/// / of `USUAL`, else the nearest other branch (not the one checked out or followed).
+/// / Nearest: the checked-out commit has the fewest commits it lacks; ties go to the earlier.
 pub fn default_base(head: &Head, refs: &Refs) -> Option<String> {
     recorded_default(refs)
         .or_else(|| nearest_of_the_usual(refs))
         .or_else(|| nearest_of_the_others(head, refs))
 }
 
-/// The names a default branch usually has, in the order that decides between two that
-/// are equally near.
+/// Tie-break order for equally near names.
 const USUAL: [&str; 6] = [
     "main",
     "origin/main",
@@ -38,8 +19,7 @@ const USUAL: [&str; 6] = [
     "origin/develop",
 ];
 
-/// Step 1: the default branch a remote recorded, `origin` first. A recorded default
-/// whose branch is gone, as after the server renamed it, is passed over.
+/// A recorded default whose branch is gone (the server renamed it) is skipped.
 fn recorded_default(refs: &Refs) -> Option<String> {
     let mut existing = refs
         .remote_defaults
@@ -52,8 +32,7 @@ fn recorded_default(refs: &Refs) -> Option<String> {
         .map(|branch| branch.name.clone())
 }
 
-/// Step 2: the nearest of the usual names. The branch that is checked out counts: on
-/// `main` the base is `main`.
+/// The checked-out branch counts: on `main` the base is `main`.
 fn nearest_of_the_usual(refs: &Refs) -> Option<String> {
     nearest(USUAL.iter().filter_map(|usual| {
         let local = refs.local.iter().find(|branch| branch.name == *usual);
@@ -64,7 +43,6 @@ fn nearest_of_the_usual(refs: &Refs) -> Option<String> {
     }))
 }
 
-/// Step 3: the nearest of every other branch, local ones first.
 fn nearest_of_the_others(head: &Head, refs: &Refs) -> Option<String> {
     let checked_out = match head {
         Head::Branch { name, .. } => refs.local.iter().find(|branch| &branch.name == name),
@@ -81,17 +59,14 @@ fn nearest_of_the_others(head: &Head, refs: &Refs) -> Option<String> {
     nearest(local.chain(remote).filter(|(name, _)| !left_out(name)))
 }
 
-/// The name with the fewest commits ahead; the first of those that are equally near.
 fn nearest<'a>(branches: impl Iterator<Item = (&'a String, u32)>) -> Option<String> {
     branches
         .min_by_key(|(_, ahead)| *ahead)
         .map(|(name, _)| name.clone())
 }
 
-/// Whether a workspace is on its base branch: the branch checked out is `base` itself,
-/// or `base` is a branch of a remote and the branch checked out is the local branch of
-/// the same name, `main` against `origin/main`. Never when no branch is checked out, or
-/// when `base` is a commit.
+/// Whether `head` is `base`, or the local twin of the remote branch `base` (`main` for
+/// `origin/main`). Never when detached or when `base` is a commit.
 pub fn on_base_branch(head: &Head, base: &str, refs: &Refs) -> bool {
     let Head::Branch { name, .. } = head else {
         return false;
@@ -109,7 +84,6 @@ mod tests {
 
     use super::*;
 
-    /// A branch is checked out.
     fn on(name: &str) -> Head {
         Head::Branch {
             name: name.to_owned(),
@@ -117,15 +91,10 @@ mod tests {
         }
     }
 
-    /// No branch is checked out.
     fn detached() -> Head {
         Head::Detached(CommitId::new("c0ffee"))
     }
 
-    /// The branches of a repository: each local branch with its distance and what it
-    /// follows, each branch of `origin` with its distance, and the default branches the
-    /// remotes recorded. The repository has the remote `origin` when either of the last
-    /// two is not empty.
     fn refs(
         local: &[(&str, u32, Option<&str>)],
         remote: &[(&str, u32)],
@@ -161,9 +130,6 @@ mod tests {
         }
     }
 
-    /// One repository of the experiment that the rule was chosen on: what was checked
-    /// out, the branches around it, the default branch the repository really has, and
-    /// the branch the rule named there.
     struct Recorded {
         case: &'static str,
         head: Head,
@@ -172,17 +138,9 @@ mod tests {
         named: &'static str,
     }
 
-    /// The 24 repositories of the experiment, rebuilt from the script that made them:
-    /// the branches each one had when the rules were run, with the number of commits
-    /// the script put between each branch and what was checked out.
-    ///
-    /// The remote of most of them is one shared repository, which gained branches while
-    /// the script ran: a clone made later has `origin/feat-pushed`, then `origin/feat-a`,
-    /// then `origin/feat-remote` as well.
     fn recorded() -> Vec<Recorded> {
         let main = Some("origin/main");
         vec![
-            // With a default branch the remote recorded.
             Recorded {
                 case: "c01: a clone, a branch made on main",
                 head: on("feat"),
@@ -398,7 +356,6 @@ mod tests {
                 default_branch: "main",
                 named: "origin/main",
             },
-            // Without one: the remote recorded none, or there is no remote.
             Recorded {
                 case: "c04: a clone whose recorded default was deleted",
                 head: on("feat"),
@@ -434,14 +391,12 @@ mod tests {
                 refs: refs(
                     &[("feat", 0, None), ("master", 3, None)],
                     &[("origin/main", 2)],
-                    // Still recorded, and the branch it names is gone: the first step
-                    // has to pass it over.
+                    // Still recorded, but its branch is gone: the recorded default must be skipped.
                     &["origin/master"],
                 ),
                 default_branch: "main",
                 named: "origin/main",
             },
-            // With neither main nor master.
             Recorded {
                 case: "c07: no remote, the default branch is trunk",
                 head: on("feat"),
@@ -502,15 +457,13 @@ mod tests {
                     &[],
                 ),
                 default_branch: "develop",
-                // Wrong, and recorded as wrong: with nothing recorded by the remote and
-                // two candidates equally near, nothing in the repository tells the
-                // default branch from the other. The user sets the base there.
+                // Named wrong on purpose: with nothing recorded and two candidates equally near,
+                // nothing tells the default branch apart; the user sets the base there.
                 named: "origin/main",
             },
         ]
     }
 
-    // WS-03.
     #[test]
     fn the_rule_names_the_recorded_base_for_each_recorded_shape_of_repository() {
         let recorded = recorded();
@@ -520,13 +473,11 @@ mod tests {
             let named = default_base(&shape.head, &shape.refs);
             assert_eq!(named.as_deref(), Some(shape.named), "{}", shape.case);
 
-            // Right is the default branch itself or the remote's copy of it.
             let default_branch = shape.default_branch;
             if ![default_branch, &format!("origin/{default_branch}")].contains(&shape.named) {
                 wrong.push(&shape.case[..3]);
             }
         }
-        // Right in 23 of the 24, as measured; the one it gets wrong stays wrong here.
         assert_eq!(wrong, ["c12"]);
     }
 
@@ -555,7 +506,6 @@ mod tests {
 
     #[test]
     fn among_the_usual_names_the_nearest_wins_and_the_earlier_name_wins_a_tie() {
-        // The nearest, though three names stand before it.
         let near = refs(
             &[("feat", 0, None), ("main", 9, None), ("master", 7, None)],
             &[("origin/main", 8), ("origin/master", 3)],
@@ -566,7 +516,6 @@ mod tests {
             Some("origin/master")
         );
 
-        // Equally near: the order of the names decides, not git's order of the branches.
         let tie = refs(
             &[("develop", 4, None), ("feat", 0, None), ("master", 4, None)],
             &[("origin/develop", 4)],
@@ -574,7 +523,6 @@ mod tests {
         );
         assert_eq!(default_base(&on("feat"), &tie).as_deref(), Some("master"));
 
-        // A usual name is taken before a nearer branch of another name.
         let other_nearer = refs(
             &[("feat", 0, None), ("main", 6, None), ("spike", 1, None)],
             &[],
@@ -588,8 +536,6 @@ mod tests {
 
     #[test]
     fn the_branch_that_is_checked_out_is_its_own_base_when_it_has_a_usual_name() {
-        // On `main` in a repository with nothing else: the base is `main`, and the
-        // workspace is on its base branch.
         let alone = refs(&[("main", 0, None)], &[], &[]);
         assert_eq!(default_base(&on("main"), &alone).as_deref(), Some("main"));
         assert!(on_base_branch(&on("main"), "main", &alone));
@@ -603,13 +549,11 @@ mod tests {
                 ("trunk", 5, None),
                 ("wip", 2, None),
             ],
-            // The copy the branch follows is as near as can be, and is not its base.
             &[("origin/spike", 0), ("origin/trunk", 2)],
             &[],
         );
         // `wip` and `origin/trunk` are equally near: a local branch comes first.
         assert_eq!(default_base(&on("spike"), &others).as_deref(), Some("wip"));
-        // With no branch checked out, every branch is another branch.
         assert_eq!(default_base(&detached(), &others).as_deref(), Some("spike"));
     }
 
@@ -625,7 +569,6 @@ mod tests {
         );
         assert_eq!(default_base(&on("trunk"), &with_its_copy), None);
 
-        // Nothing committed yet: no branch exists at all.
         let unborn = Head::Branch {
             name: "main".to_owned(),
             commit: None,
@@ -647,9 +590,7 @@ mod tests {
 
         assert!(!on_base_branch(&on("feat"), "main", &clone));
         assert!(!on_base_branch(&on("feat"), "origin/main", &clone));
-        // A branch of a remote that is not there is the twin of nothing.
         assert!(!on_base_branch(&on("main"), "gone/main", &clone));
-        // Never with no branch checked out, and never when the base is a commit.
         assert!(!on_base_branch(&detached(), "main", &clone));
         assert!(!on_base_branch(&detached(), "c0ffee", &clone));
         assert!(!on_base_branch(&on("main"), "c0ffee", &clone));

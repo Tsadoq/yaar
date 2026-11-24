@@ -1,24 +1,7 @@
 #!/bin/sh
-# The step "One checksum file lists every package of the release" (jobs assemble and
-# assemble-release; the release row PKG-10's first clause).
-#
-#   .github/scripts/release-files-check.sh <release-dir> <version>
-#
-# Fails with a sentence when:
-#   - <release-dir> holds any file but the six of packaging/release/assemble.sh for
-#     <version>, SHA256SUMS and SHA256SUMS.asc;
-#   - SHA256SUMS lists anything but those six, or one of them twice, or a sum that
-#     `sha256sum -c` does not confirm;
-#   - SHA256SUMS is not sorted by name (assemble.sh writes it so; the order is part of what a
-#     reader may rely on);
-#   - SHA256SUMS.asc does not verify against SHA256SUMS with the key beside <release-dir>
-#     (<release-dir>/../key.asc, with gpgv and a keyring made from it in a temporary folder).
-#
-# Exit codes: 0 all hold; 1 one does not; 2 usage error.
-#
-# Every fault found is named on its own line of standard error, then the script exits 1: a
-# user of the step sees all that is wrong at once. A missing tool (sha256sum, gpg, gpgv) is a
-# fault, never a pass.
+# One checksum file lists every package of the release, and its signature verifies.
+# .github/scripts/release-files-check.sh <release-dir> <version>
+# SHA256SUMS.asc is verified with ../key.asc in a fresh keyring; a missing tool is a fault.
 set -eu
 
 NAME=release-files-check.sh
@@ -47,7 +30,6 @@ fault() {
   FAILED=1
 }
 
-# The six packages, the checksum file and its signature, one name a line, sorted by byte.
 {
   printf '%s\n' \
     "yaar-review_${VERSION}_amd64.deb" \
@@ -59,8 +41,6 @@ fault() {
 } | LC_ALL=C sort > "$TMP/packages"
 { cat "$TMP/packages"; printf '%s\n' SHA256SUMS SHA256SUMS.asc; } | LC_ALL=C sort > "$TMP/expected"
 
-# 1. The folder holds these eight and nothing else (a folder, a link or a hidden file is
-# something else too).
 if ! LC_ALL=C ls -A "$DIR" > "$TMP/present" 2> "$TMP/ls.err"; then
   echo "$NAME: $DIR cannot be listed: $(tr '\n' ' ' < "$TMP/ls.err")" >&2
   exit 1
@@ -81,8 +61,6 @@ while IFS= read -r f; do
   fi
 done < "$TMP/expected"
 
-# 2. SHA256SUMS lists the six, each once, as sha256sum writes a line: 64 hexadecimal digits,
-# two spaces, the name.
 SUMS=$DIR/SHA256SUMS
 LISTING_OK=1
 if [ -f "$SUMS" ] && [ ! -L "$SUMS" ]; then
@@ -127,8 +105,6 @@ else
   LISTING_OK=0 # SHA256SUMS missing or not a plain file: named in step 1
 fi
 
-# 3. Every sum is the file's own. Only when the listing is the six, so that the verdict of
-# sha256sum is not buried in the faults of step 2.
 if ! command -v sha256sum > /dev/null 2>&1; then
   fault "sha256sum is not installed, so no sum was checked"
 elif [ "$LISTING_OK" -eq 1 ] && [ ! -s "$TMP/missing" ]; then
@@ -137,8 +113,6 @@ elif [ "$LISTING_OK" -eq 1 ] && [ ! -s "$TMP/missing" ]; then
   fi
 fi
 
-# 4. SHA256SUMS.asc verifies SHA256SUMS with the key beside the folder only: a keyring made
-# from that file in a folder of its own, so that no key of the machine can stand in.
 KEY=$DIR/../key.asc
 if ! command -v gpg > /dev/null 2>&1 || ! command -v gpgv > /dev/null 2>&1; then
   fault "gpg and gpgv are needed to check $DIR/SHA256SUMS.asc and one is not installed"

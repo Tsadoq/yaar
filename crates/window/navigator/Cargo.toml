@@ -6,8 +6,7 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# The stand-in language server of the tests, for an invented language: it sits with the
-# Navigator's component tests. No package ships it.
+# Test-only stand-in language server for an invented language; no package ships it.
 [[bin]]
 name = "standin-lsp"
 path = "src/bin/standin-lsp.rs"
@@ -16,11 +15,8 @@ path = "src/bin/standin-lsp.rs"
 yaar-link.workspace = true
 yaar-diff.workspace = true
 yaar-text-search.workspace = true
-# Hands the asks and the answers between the Frame and the Navigator's thread.
 async-channel.workspace = true
-# The messages of the Language Server Protocol, and the settings a row sends.
 serde_json.workspace = true
-# The registry: the built-in table and the user's file.
 toml.workspace = true
 # Ends a server whose Window went (Linux), and asks whether a process lives.
 libc.workspace = true

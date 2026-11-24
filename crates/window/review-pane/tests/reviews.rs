@@ -1,9 +1,3 @@
-//! Component test: whose review the Review pane shows, on GPUI's test platform. Keys and
-//! clicks go in; the pane is read back through the model it shows. The test plays the
-//! Keeper on the other end of a socket pair: it sets the agents and the reviews the
-//! Keeper would hold, and the Keeper's own answers for the history and the uncommitted
-//! changes come from the helper of `common`.
-
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -28,7 +22,6 @@ fn r2() -> ReviewId {
     ReviewId::new("2".repeat(32))
 }
 
-/// A thread on the changed line of `story.txt`, which only the review that holds it shows.
 fn thread_on_story(digit: char) -> Thread {
     Thread {
         id: ThreadId::new(digit.to_string().repeat(32)),
@@ -52,7 +45,6 @@ fn thread_on_story(digit: char) -> Thread {
     }
 }
 
-/// What the Keeper lists as uncommitted: one change no agent made.
 fn outside() -> Vec<CreditedFile> {
     vec![CreditedFile {
         file: file("outside.txt", FileStatus::Added),
@@ -60,9 +52,8 @@ fn outside() -> Vec<CreditedFile> {
     }]
 }
 
-/// A window on workspace `1`, which shows the changes of one file, whose Keeper holds
-/// these reviews: R1 of session `a`, and R2 of session `b`, with a thread of its own.
-/// No session is told yet.
+/// Workspace `1` showing the changes of one file; the Keeper holds R1 of session `a` and R2 of
+/// session `b`, with a thread of its own. No session is told yet.
 fn open_with_two_reviews(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
     let (models, keeper) = link_up(vec![workspace('1', "feature")], cx);
     keeper.set_uncommitted(outside());
@@ -97,7 +88,6 @@ fn session_b() -> yaar_link::Session {
     session('b', "Claude Code 2", SessionState::Works, Some(r2()))
 }
 
-/// Tells the Window these sessions of workspace `1` and waits until the pane holds them.
 fn tell_sessions(stage: &mut Stage, sessions: Vec<yaar_link::Session>, cx: &mut VisualTestContext) {
     stage.keeper.tell_agents(agents_of(sessions.clone()));
     wait_until(cx, "the sessions in the pane", |cx| {
@@ -131,7 +121,6 @@ fn click(selector: &str, cx: &mut VisualTestContext) {
     cx.simulate_click(at, Modifiers::none());
 }
 
-/// Waits until the Keeper has been asked for the uncommitted changes of this review.
 fn wait_for_uncommitted_of(stage: &Stage, review: ReviewId, cx: &mut VisualTestContext) {
     wait_until(cx, "the uncommitted changes of the review shown", |_| {
         stage.keeper.uncommitted_review() == Some(review.clone())
@@ -148,11 +137,9 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
         "no session was told: none is named"
     );
 
-    // One session: the pane names it above its review.
     tell_sessions(&mut stage, vec![session_a()], &mut cx);
     assert!(drawn("review-session", &mut cx).is_some());
     assert!(drawn("review-session-0", &mut cx).is_none());
-    // What is drawn is the title of the session, not the name of its agent.
     assert!(
         drawn("review-session-name-0:Claude Code 1", &mut cx).is_some(),
         "the session is named by its title"
@@ -166,7 +153,6 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
     assert_eq!(review_shown(&stage, &mut cx), Some(r1()));
     assert!(!thread_drawn('t', &mut cx));
 
-    // Several: each is named, and a click shows the review of that session.
     tell_sessions(&mut stage, vec![session_a(), session_b()], &mut cx);
     assert!(drawn("review-session", &mut cx).is_none());
     assert!(drawn("review-session-0", &mut cx).is_some());
@@ -184,10 +170,8 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
         Some(session_id('b'))
     );
     assert!(thread_drawn('t', &mut cx), "the threads of R2 are drawn");
-    // The uncommitted changes are those of the review shown.
     wait_for_uncommitted_of(&stage, r2(), &mut cx);
 
-    // The next review, and from the last the first.
     cx.simulate_keystrokes("shift-a");
     assert_eq!(review_shown(&stage, &mut cx), Some(r1()));
     assert!(!thread_drawn('t', &mut cx), "the threads of R2 are gone");
@@ -197,8 +181,6 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
     wait_for_uncommitted_of(&stage, r2(), &mut cx);
 }
 
-/// The width of what is drawn for a session's name, which on the test platform is the
-/// number of its characters times the width of one.
 fn name_width(index: usize, title: &str, cx: &mut VisualTestContext) -> f32 {
     let selector = format!("review-session-name-{index}:{title}");
     let bounds = drawn(&selector, cx).unwrap_or_else(|| panic!("{selector} is not drawn"));
@@ -215,9 +197,8 @@ fn the_text_drawn_for_a_session_is_its_title_and_not_the_name_of_its_agent(
     let long = "LongerTitleOfTheSession";
     let titled = |title: &str| session('a', title, SessionState::Works, Some(r1()));
 
-    // The selector says what the title is; the width of what is drawn says what text is
-    // in it, since the agent's name has one length whatever the title is. A width is
-    // rounded to a pixel, hence the margin.
+    // The width says what text is in the name, since the agent's name has one length whatever the
+    // title is. A width is rounded to a pixel, hence the margin.
     tell_sessions(&mut stage, vec![titled(short)], &mut cx);
     let one_short = name_width(0, short, &mut cx);
     tell_sessions(&mut stage, vec![titled(long)], &mut cx);
@@ -230,7 +211,6 @@ fn the_text_drawn_for_a_session_is_its_title_and_not_the_name_of_its_agent(
          {one_short} and {one_long}"
     );
 
-    // With several, each is drawn with its own title.
     let other = session('b', short, SessionState::Works, Some(r2()));
     tell_sessions(&mut stage, vec![titled(long), other], &mut cx);
     let first = name_width(0, long, &mut cx);
@@ -246,8 +226,8 @@ fn the_text_drawn_for_a_session_is_its_title_and_not_the_name_of_its_agent(
 fn a_comment_on_a_change_no_agent_made_goes_to_the_review_on_screen(cx: &mut TestAppContext) {
     let (mut stage, mut cx) = open_with_two_reviews(cx);
     tell_sessions(&mut stage, vec![session_a(), session_b()], &mut cx);
-    // The Keeper answers R2's question with a list of its own, so that the pane showing it
-    // says the answer came: a list read again after the click would ask for the file twice.
+    // The Keeper answers R2's question with a list of its own, so that the pane showing it says the
+    // answer came: a list read again after the click would ask for the file twice.
     wait_for_uncommitted_of(&stage, r1(), &mut cx);
     let mut listed = outside();
     listed[0].file = file("outside.txt", FileStatus::Modified);
@@ -255,7 +235,6 @@ fn a_comment_on_a_change_no_agent_made_goes_to_the_review_on_screen(cx: &mut Tes
     click("review-session-1", &mut cx);
     assert_eq!(review_shown(&stage, &mut cx), Some(r2()));
 
-    // The change no agent made is in the list of every review; its file is read.
     wait_for_uncommitted_of(&stage, r2(), &mut cx);
     wait_until(&mut cx, "the uncommitted list of R2", |cx| {
         stage
@@ -286,7 +265,6 @@ fn a_comment_on_a_change_no_agent_made_goes_to_the_review_on_screen(cx: &mut Tes
         })
     });
 
-    // A comment on a line of it is saved in R2, the review on screen.
     cx.update(|window, cx| stage.focus.focus(window, cx));
     cx.simulate_keystrokes("c");
     let opened = stage
@@ -317,7 +295,6 @@ fn a_comment_on_a_change_no_agent_made_goes_to_the_review_on_screen(cx: &mut Tes
     );
     assert_eq!(anchor.path, PathBuf::from("outside.txt"));
 
-    // With R1 on screen the same line takes its comment to R1.
     cx.simulate_keystrokes("escape");
     cx.simulate_keystrokes("shift-a");
     assert_eq!(review_shown(&stage, &mut cx), Some(r1()));
@@ -334,7 +311,6 @@ fn the_review_shown_first_is_that_of_no_agent_and_else_that_of_the_first_session
     cx: &mut TestAppContext,
 ) {
     let (mut stage, mut cx) = open_with_two_reviews(cx);
-    // The session that started first ended; the second one runs: its review is shown.
     let mut ended = session_a();
     ended.state = SessionState::NotRunning;
     tell_sessions(&mut stage, vec![ended, session_b()], &mut cx);
@@ -346,7 +322,6 @@ fn the_review_shown_first_is_that_of_no_agent_and_else_that_of_the_first_session
         Some(session_id('b'))
     );
 
-    // A session that holds no review is not named: its review went to the next session.
     let mut taken = session_b();
     taken.review = None;
     stage
@@ -380,7 +355,6 @@ fn the_review_of_no_agent_is_shown_while_it_exists_and_names_no_session(cx: &mut
         None
     );
     assert!(drawn("review-session", &mut cx).is_none());
-    // The next review, with no session to go to, says so and changes nothing.
     cx.update(|window, cx| stage.focus.focus(window, cx));
     cx.simulate_keystrokes("shift-a");
     assert_eq!(
@@ -404,7 +378,6 @@ fn a_turn_end_shows_the_review_of_its_session_unless_the_selection_is_kept(
         since: Some("5".repeat(40)),
     };
 
-    // Kept: the review stays, the offer holds it, and taking the offer shows it.
     cx.update(|window, cx| stage.focus.focus(window, cx));
     cx.simulate_keystrokes("shift-t");
     stage.keeper.tell(turn_of_b("6"));
@@ -415,15 +388,14 @@ fn a_turn_end_shows_the_review_of_its_session_unless_the_selection_is_kept(
     cx.simulate_keystrokes("shift-o");
     assert_eq!(review_shown(&stage, &mut cx), Some(r2()));
     wait_for_uncommitted_of(&stage, r2(), &mut cx);
-    // The comparison of the offer is the next request, made for the review of the session
-    // that finished; the test does not answer it.
+    // The comparison of the offer is the next request, made for the review of the session that
+    // finished; the test does not answer it.
     let (_, asked) = stage.keeper.request(&mut cx);
     assert!(
         matches!(&asked, Request::CompareForReview { review, .. } if *review == r2()),
         "{asked:?}"
     );
 
-    // Not kept: the turn end shows the review of its session at once.
     cx.simulate_keystrokes("shift-a");
     assert_eq!(review_shown(&stage, &mut cx), Some(r1()));
     cx.simulate_keystrokes("shift-t");
@@ -446,8 +418,6 @@ fn a_reviewer_who_moves_to_another_review_leaves_the_open_comment_box_and_a_turn
         stage.pane.read_with(cx, |pane, _| pane.comment_box())
     };
 
-    // A box on R1 is closed by a click on the session of R2, and what was typed in it
-    // stays where the Keeper was told to keep it.
     cx.update(|window, cx| stage.focus.focus(window, cx));
     cx.simulate_keystrokes("c");
     assert_eq!(box_of(&stage, &mut cx).map(|open| open.review), Some(r1()));
@@ -461,8 +431,8 @@ fn a_reviewer_who_moves_to_another_review_leaves_the_open_comment_box_and_a_turn
     assert_eq!(review_shown(&stage, &mut cx), Some(r2()));
     assert_eq!(box_of(&stage, &mut cx), None);
 
-    // A box on R2 stays open when a turn end shows the review of the other session: the
-    // reviewer is typing, and a turn end has no business with the keys.
+    // A box on R2 stays open when a turn end shows the other session's review: the reviewer is
+    // typing.
     cx.update(|window, cx| stage.focus.focus(window, cx));
     cx.simulate_keystrokes("c");
     assert_eq!(box_of(&stage, &mut cx).map(|open| open.review), Some(r2()));

@@ -1,5 +1,4 @@
-//! A version of a worktree written into a folder as plain files: the old side of a diff,
-//! which a second language server reads (ADR-016 point 1).
+//! A version of a worktree written into a folder as plain files.
 
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
@@ -13,37 +12,12 @@ use crate::index::IndexCopy;
 use crate::states::{RecordError, StateStore};
 use crate::worktree::Worktree;
 
-/// The keys of a filter driver that make git run a program of the user's on a file.
 const DRIVER_KEYS: [&str; 3] = ["smudge", "process", "required"];
 
 impl StateStore {
-    /// Writes every file of `version` into the folder `into`, which must not exist and
-    /// whose parent must: `version` is the full id of a state of this store or of a commit
-    /// of the real repository, which the store copies first through `worktree` as
-    /// [`StateStore::compare`] does; with no worktree only what the store holds can be
-    /// written.
-    ///
-    /// The files are written by git's own checkout of a tree into a folder, with an index
-    /// of its own made for this call in a temporary file of the system's temporary folder
-    /// and removed after: git's `read-tree` of the version into that index, then
-    /// `checkout-index --all --prefix=<into>/`, both run in the state store, every hook
-    /// off as for every other call here. The store holds the version whole by then, so the
-    /// real repository's objects are not read again. No filter driver runs: for each driver
-    /// the configuration the store reads defines (`git config --get-regexp
-    /// '^filter\..*\.(smudge|process|required)$'`, read as the hooks to turn off are
-    /// read), `checkout-index` is given `filter.<driver>.smudge` and
-    /// `filter.<driver>.process` empty and `filter.<driver>.required` false, as settings of
-    /// its environment, so that a file is written as git stores it (a large-file pointer
-    /// stays a pointer) and no driver reaches a server of its own. Line-end conversions of
-    /// the attributes apply as in any checkout. A file's mode is kept, an executable one
-    /// stays executable; a link is written as a link. The folder holds no `.git` and is no
-    /// repository. The real repository gains nothing: no worktree, no ref, no file, no
-    /// change of its index; the store gains at most the commit it copied, as a comparison
-    /// does.
-    ///
-    /// A version that is not a full id, that neither the store nor the repository holds,
-    /// or a write that fails, is an error, and `into` is removed if it was made; an `into`
-    /// that exists, or whose parent does not, is an error and is left as it was.
+    /// Writes every file of `version` into `into`, which must not exist and whose parent must. No
+    /// filter driver runs: each configured driver gets `smudge` and `process` empty and `required`
+    /// false. An error removes `into` if this call made it.
     pub fn export(
         &self,
         worktree: Option<&Worktree>,
@@ -51,8 +25,7 @@ impl StateStore {
         into: &Path,
     ) -> Result<(), RecordError> {
         let _guard = self.reading();
-        // The folder is claimed first, by making it: a name that is taken, by a folder or
-        // by anything else, is left as it is, and no one else can write into this one.
+        // The folder is claimed first, by making it: a name that is taken is left as it is.
         fs::create_dir(into).map_err(|e| self.store_error(into, &e))?;
         match self.write_into(worktree, version, into) {
             Ok(()) => Ok(()),
@@ -63,21 +36,18 @@ impl StateStore {
         }
     }
 
-    /// The steps of [`StateStore::export`] after `into` was made, under the guard of the
-    /// clean-up that it holds.
     fn write_into(
         &self,
         worktree: Option<&Worktree>,
         version: &str,
         into: &Path,
     ) -> Result<(), RecordError> {
-        // A comparison of the version with itself is what makes the store hold it, state
-        // or commit, and refuses a version that is none; it names no path.
+        // Comparing the version with itself makes the store hold it, state or commit, and refuses
+        // an id that names neither.
         self.compare_held(worktree, version, Some(version))?;
 
-        // A list of files of its own, empty, in the system's temporary folder: where none
-        // is there to copy, the copy is none, which git reads as an empty list. The real
-        // repository's list is not read, let alone written.
+        // An empty index of its own: where none is there to copy, the copy is none, which git reads
+        // as empty. The real repository's index is never read.
         let index = IndexCopy::of(&self.folder.join("no-list-of-files"))
             .map_err(crate::git::GitError::from)?;
         let index_file = index.file();
@@ -90,8 +60,8 @@ impl StateStore {
             .args(["read-tree", version]);
         finish(read)?.printed()?;
 
-        // `checkout-index` wants a work tree, which a bare store has none of: the folder
-        // of the list stands in, and nothing is written there. The files go to the prefix.
+        // `checkout-index` wants a work tree, which a bare store has none of: the folder of the
+        // index stands in and nothing is written there.
         let mut prefix = OsString::from("--prefix=");
         prefix.push(into);
         prefix.push("/");
@@ -105,8 +75,6 @@ impl StateStore {
         Ok(())
     }
 
-    /// The filter drivers the configuration this store reads defines: the names of the
-    /// drivers with a key that makes git run a program of the user's.
     fn drivers(&self) -> Result<BTreeSet<Vec<u8>>, RecordError> {
         let answer = self.run(
             None,
@@ -130,13 +98,11 @@ impl StateStore {
                 })
                 .map(<[u8]>::to_vec)
                 .collect()),
-            // git says by its exit code that no key matched.
             Some(1) => Ok(BTreeSet::new()),
             _ => Err(answer.failed().into()),
         }
     }
 
-    /// A failure to make or reach `path`, as an error of the store.
     fn store_error(&self, path: &Path, e: &io::Error) -> RecordError {
         let reason = match e.kind() {
             io::ErrorKind::AlreadyExists => format!("{} exists", path.display()),
@@ -150,10 +116,9 @@ impl StateStore {
     }
 }
 
-/// Gives `command` the settings that turn each driver off, as git's own environment
-/// settings, numbered after those the command already carries or, when it carries none,
-/// after those this process's environment holds and the command inherits: a driver's name
-/// can hold any character, an equals sign too, which `-c` would cut at.
+/// Turns each driver off through git's environment settings, numbered after those `command`
+/// carries or, when it carries none, after those it inherits: a driver's name can hold an
+/// equals sign, which `-c` would cut at.
 fn turn_off_drivers(command: &mut std::process::Command, drivers: &BTreeSet<Vec<u8>>) {
     let set = command
         .get_envs()

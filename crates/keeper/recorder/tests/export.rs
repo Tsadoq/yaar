@@ -1,7 +1,3 @@
-//! Component tests: the files of one version written into a folder, the old side of a
-//! diff, through the surface the rest of the Keeper uses, in real repositories the tests
-//! make.
-
 mod support;
 
 use std::collections::BTreeMap;
@@ -19,12 +15,10 @@ fn open(folder: &Path) -> Worktree {
     Worktree::open(&found(), folder).expect("open")
 }
 
-/// A store in the scratch folder, outside every repository, as the app's folder is.
 fn store(scratch: &Scratch) -> StateStore {
     StateStore::open(&found(), &scratch.join("app/states/one.git")).expect("open the store")
 }
 
-/// What a folder holds at one path, as an export must reproduce it.
 #[derive(Debug, PartialEq, Eq)]
 enum Entry {
     File { bytes: Vec<u8>, executable: bool },
@@ -49,8 +43,6 @@ fn link(target: &str) -> Entry {
     Entry::Link(PathBuf::from(target))
 }
 
-/// Every file and link below `folder` by its path, as the file system holds it: folders
-/// are no entries, so a `.git` would show as the files in it.
 fn entries(folder: &Path) -> BTreeMap<String, Entry> {
     fn walk(root: &Path, folder: &Path, into: &mut BTreeMap<String, Entry>) {
         for child in std::fs::read_dir(folder).expect("read the folder") {
@@ -92,8 +84,6 @@ fn expected<const N: usize>(wanted: [(&str, Entry); N]) -> BTreeMap<String, Entr
         .collect()
 }
 
-/// A repository with an executable file, a link, a file in a folder and a `.gitignore`,
-/// committed, and the folder it is in.
 fn repository(scratch: &Scratch) -> (PathBuf, String) {
     let repo = scratch.join("repo");
     init(&repo);
@@ -107,7 +97,6 @@ fn repository(scratch: &Scratch) -> (PathBuf, String) {
     (repo, commit)
 }
 
-/// What `repository` committed.
 fn files_of_the_commit() -> BTreeMap<String, Entry> {
     expected([
         (".gitignore", file("ignored/\n")),
@@ -121,7 +110,6 @@ fn files_of_the_commit() -> BTreeMap<String, Entry> {
 fn the_export_of_a_commit_writes_exactly_its_files_and_no_git_folder() {
     let scratch = Scratch::new();
     let (repo, commit) = repository(&scratch);
-    // Later changes are not the commit's.
     write(&repo, "src/deep/lib.rs", "fn two() {}\n");
     write(&repo, "new.txt", "new\n");
     let worktree = open(&repo);
@@ -145,7 +133,6 @@ fn the_export_of_a_recorded_state_writes_the_files_as_they_were_then() {
     let worktree = open(&repo);
     let store = store(&scratch);
     let state = store.record(&worktree).expect("record");
-    // The files change again, and the repository is gone: a state needs neither.
     write(&repo, "src/deep/lib.rs", "fn three() {}\n");
     std::fs::remove_dir_all(&repo).expect("remove the repository");
 
@@ -187,7 +174,6 @@ fn a_version_that_is_not_a_commit_of_the_store_or_the_repository_is_an_error_and
     let store = store(&scratch);
 
     for version in [
-        // A tree, a commit nobody has, and names that are no full id: a branch, a short id.
         tree.as_str(),
         "1234567890abcdef1234567890abcdef12345678",
         "main",
@@ -222,7 +208,6 @@ fn an_into_that_exists_is_an_error_and_is_left_as_it_was() {
         expected([("mine.txt", file("not the store's\n"))])
     );
 
-    // A file in its place is as taken.
     let file_there = scratch.join("a-file");
     std::fs::write(&file_there, "a file\n").expect("write");
     assert!(store.export(Some(&worktree), &commit, &file_there).is_err());
@@ -248,8 +233,6 @@ fn an_into_whose_parent_is_not_there_is_an_error_and_makes_no_folder() {
 fn the_repository_and_the_temporary_folder_are_as_they_were_after_an_export() {
     let scratch = Scratch::new();
     let (repo, commit) = repository(&scratch);
-    // Something of every kind git can tell apart: a change, an untracked and an ignored
-    // file, a second commit, a branch, a stash entry and a second worktree.
     write(&repo, "src/deep/lib.rs", "fn two() {}\n");
     let second = commit_all(&repo, "two");
     write(&repo, "src/deep/lib.rs", "fn stashed() {}\n");
@@ -266,7 +249,6 @@ fn the_repository_and_the_temporary_folder_are_as_they_were_after_an_export() {
     // SAFETY: as in `Scratch::new`: no other thread exists yet in this test's process.
     unsafe { std::env::set_var("TMPDIR", &temp) };
 
-    // Read before the store is opened. Read-only: nothing here refreshes the list of files.
     let read = |repo: &Path| {
         let git = |args: &[&str]| {
             std::process::Command::new("git")
@@ -288,7 +270,6 @@ fn the_repository_and_the_temporary_folder_are_as_they_were_after_an_export() {
             git(&["worktree", "list", "--porcelain"]),
             git(&["for-each-ref"]),
             git(&["stash", "list"]),
-            // The objects: the export and the recording write to the store alone.
             git(&["count-objects", "-v"]),
             std::fs::read(repo.join(".git/index")).expect("the list of files"),
         )
@@ -310,7 +291,6 @@ fn the_repository_and_the_temporary_folder_are_as_they_were_after_an_export() {
         .expect("export a state");
 
     assert_eq!(read(&repo), before);
-    // The list of files the export made for itself is gone with the call.
     assert_eq!(std::fs::read_dir(&temp).expect("read").count(), 0);
 }
 
@@ -319,13 +299,9 @@ fn drivers_that_would_fail_run_no_program_and_the_files_are_written_as_git_store
     let scratch = Scratch::new();
     let repo = scratch.join("repo");
     init(&repo);
-    // Drivers that fail, as a large-file driver does with no server to ask: one in the
-    // user's own configuration, one in the repository's, and one whose name holds the
-    // characters `-c` cannot carry. Each is told to run a program that leaves a mark.
     let mark = scratch.join("a-driver-ran");
     let global = scratch.join("gitconfig");
-    // A long-running `process` driver takes part in staging too, so it is added to the
-    // configuration after the commit is made.
+    // A long-running `process` driver takes part in staging too, so it is added after the commit.
     let config = |process: bool| {
         let process = |program: &str| {
             if process {
@@ -416,10 +392,6 @@ fn settings_the_environment_hands_git_still_apply_when_hooks_and_drivers_are_tur
     settings_of_the_environment_apply_with_drivers_off(true);
 }
 
-/// An export of a repository with a driver that must not run, in a process whose
-/// environment hands git `core.autocrlf`. With `hook`, the configuration also defines a
-/// hook, so that the store's own commands already carry a setting of their own that turns
-/// it off, numbered after the one of the environment: the drivers' settings go after both.
 fn settings_of_the_environment_apply_with_drivers_off(hook: bool) {
     let scratch = Scratch::new();
     let repo = scratch.join("repo");
@@ -432,8 +404,8 @@ fn settings_of_the_environment_apply_with_drivers_off(hook: bool) {
     write(&repo, "a.bin", "stored\n");
     write(&repo, "a.txt", "one\ntwo\n");
     let commit = commit_all(&repo, "one");
-    // The driver is added after the commit, which a driver that must run would fail. A
-    // hook goes in before the store is opened, which reads the hooks to turn off once.
+    // A driver that must run would fail the commit, so it is added after. A hook goes in before
+    // the store is opened, which reads once the hooks it turns off.
     let hook_section = if hook {
         format!(
             "[hook \"x\"]\n\tcommand = touch {}\n\tevent = pre-commit\n",
@@ -453,10 +425,6 @@ fn settings_of_the_environment_apply_with_drivers_off(hook: bool) {
     let worktree = open(&repo);
     let store = store(&scratch);
 
-    // A setting handed over in the environment, as a shell or an outer git does: with
-    // line ends converted as git on Windows would, the text file is written with CRLF.
-    // The settings that turn the drivers off, and the hooks when there are any, are
-    // numbered after it and replace nothing.
     // SAFETY: as above.
     unsafe {
         std::env::set_var("GIT_CONFIG_COUNT", "1");
@@ -470,8 +438,6 @@ fn settings_of_the_environment_apply_with_drivers_off(hook: bool) {
         .expect("export");
     let found = entries(&into);
     assert_eq!(found["a.txt"], file("one\r\ntwo\r\n"));
-    // The conversion reaches the file a driver would have handled as well: only the
-    // driver is off.
     assert_eq!(found["a.bin"], file("stored\r\n"));
     assert!(!mark.exists(), "a driver ran its program");
 }

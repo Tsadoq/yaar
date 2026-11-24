@@ -1,16 +1,5 @@
-//! What the real language servers leave on the machine (LSP-07): tsgo, ty and rust-analyzer,
-//! each on its fixed project, from the folder of real servers (`YAAR_LANGUAGE_SERVERS`).
-//!
-//! Each runs with the home, cache, config, data and temporary folders and the cargo home of
-//! its test's scratch, the recorder `npm` first on its search path, and every proxy variable
-//! naming the scratch's own listener. After hover, definition and references on the new side,
-//! the Navigator is ended, which proves every server's process gone, and only then is
-//! anything read: the repository's `git status` with ignored files, the Rust project's
-//! `target`, the recorder, the scratch's folders and the listener. Those reads have no
-//! barrier on a server's own choice to run a package manager; that tsgo's setting is what
-//! keeps it from running npm is shown by the control test beside them and by the unit test of
-//! the built-in row. A connection a server opens without the proxy variables is not observed:
-//! no tracer runs in the tests.
+//! What the real servers (tsgo, ty, rust-analyzer) leave on the machine. No tracer runs: a
+//! connection opened without the proxy variables is not observed.
 
 mod support;
 
@@ -21,20 +10,13 @@ use std::time::{Duration, Instant};
 use support::*;
 use yaar_navigator::{BUILTIN, Location, State, Tree};
 
-/// What one fixed project is asked: a name, at a line of a file of its change, and where the
-/// name is defined and used.
 struct Probe {
-    /// The row that serves the file.
     language: &'static str,
-    /// The file, relative to the worktree, and the line of the name in it, from 1.
     file: &'static str,
     line: u32,
     name: &'static str,
-    /// What the hover holds: the name's signature.
     signature: &'static str,
-    /// The file and line of the definition.
     defined: (&'static str, u32),
-    /// Files and lines that refer to the name, the definition's among them.
     used: &'static [(&'static str, u32)],
 }
 
@@ -52,7 +34,6 @@ const TYPESCRIPT: Probe = Probe {
     ],
 };
 
-/// A JavaScript file of the same project: the row of TypeScript serves it too.
 const JAVASCRIPT: Probe = Probe {
     language: "typescript",
     file: "src/report.js",
@@ -95,15 +76,12 @@ const RUST: Probe = Probe {
     ],
 };
 
-/// Whether `places` holds the line `line` of `relative` in the worktree of `repo`.
 fn holds(places: &[Location], repo: &Repo, relative: &str, line: u32) -> bool {
     places
         .iter()
         .any(|place| place.line == line && place.path == repo.root.join(relative))
 }
 
-/// The lines the recorder `npm` wrote, looked at again after a short pause until one names
-/// `install`, up to `SERVER_DEADLINE`: a repeated look at one fact that stays true once it is.
 fn wait_for_npm_install(scratch: &Scratch) -> Vec<String> {
     let until = Instant::now() + SERVER_DEADLINE;
     loop {
@@ -119,8 +97,6 @@ fn wait_for_npm_install(scratch: &Scratch) -> Vec<String> {
     }
 }
 
-/// Runs the server of `probes` over the fixed project `fixture`, asks each probe, and checks
-/// that nothing is left behind.
 fn leaves_nothing_behind(fixture: Fixture, probes: &[Probe]) {
     let servers = real_servers();
     let scratch = Scratch::new();
@@ -147,8 +123,6 @@ fn leaves_nothing_behind(fixture: Fixture, probes: &[Probe]) {
     }
 
     if matches!(fixture, Fixture::TypeScript) {
-        // A file outside every project, where a server that acquires types would run npm,
-        // asked about first.
         let outside = running.hover(
             place(
                 &repo,
@@ -199,10 +173,7 @@ fn leaves_nothing_behind(fixture: Fixture, probes: &[Probe]) {
     }
     running.end();
 
-    // Every server is gone. Nothing new in the repository, ignored files included.
     assert_eq!(repo.status(), before, "git status shows something new");
-    // The build folder of the Rust project gains no output; the server's own is in the app's
-    // cache.
     assert!(
         !repo.root.join("target").exists(),
         "a build folder came into the project"
@@ -220,8 +191,6 @@ fn leaves_nothing_behind(fixture: Fixture, probes: &[Probe]) {
             own.display()
         );
     }
-    // No package manager ran, nothing was left in the servers' home, cache or temporary
-    // folders, and nothing reached the proxy listener.
     assert_eq!(scratch.npm_ran(), Vec::<String>::new());
     assert_eq!(scratch.left_outside(), Vec::<PathBuf>::new());
     assert_eq!(scratch.proxy_heard(), Vec::new());
@@ -242,8 +211,6 @@ fn rust_leaves_nothing_in_the_repository_and_builds_into_the_apps_cache() {
     leaves_nothing_behind(Fixture::Rust, &[RUST]);
 }
 
-/// The built-in table without the three tables that turn off tsgo's acquisition of types:
-/// each header and the `enabled = false` line under it.
 fn builtin_without_the_setting() -> String {
     let mut kept = Vec::new();
     let mut removed = 0;
@@ -297,8 +264,7 @@ fn typescript_without_its_setting_runs_npm_for_a_file_outside_every_project() {
     );
     assert!(!outside.guessed, "{outside:#?}");
 
-    // A positive wait: with the setting out, the arrangement of LSP-07 does make tsgo run
-    // npm, on every machine.
+    // Positive control: without the setting tsgo does run npm.
     let ran = wait_for_npm_install(&scratch);
     assert!(ran.iter().any(|line| line.contains("install")), "{ran:?}");
     running.end();

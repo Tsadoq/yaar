@@ -1,13 +1,5 @@
-//! The Navigator's end of the Window's way to code intelligence, played by the test: a
-//! port joined to the Frame's model `Navigation`, as the Keeper's end of the Window's
-//! socket is played by `KeeperEnd`. The test reads the asks the pane really makes, and
-//! answers them, and tells the states of the servers, with the data the Navigator would
-//! send; it computes nothing a Navigator computes.
-//!
-//! What the model tells by itself at times the test does not choose, the workspaces, the
-//! one on screen, the answers on the servers inside a repository, the files changed and the
-//! old side shown, is kept here and never handed to the test as its next ask; the test
-//! reads it with [`NavigatorEnd::standing`].
+//! The Navigator's end of the port, played by the test. Asks the model makes by itself
+//! (those `is_standing` matches) are kept aside and read with [`NavigatorEnd::standing`].
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
@@ -18,20 +10,15 @@ use yaar_navigator::{Ask, Told, port};
 
 use super::DEADLINE;
 
-/// How long a wait on the asks rests between two runs of the window.
 const PAUSE: Duration = Duration::from_millis(1);
 
-/// The Navigator, played by the test.
 pub struct NavigatorEnd {
-    /// The asks, moved by a thread of this end's own from the port onto a channel the
-    /// test waits on.
     asks: Receiver<Ask>,
     told: async_channel::Sender<Told>,
     standing: Vec<Ask>,
 }
 
 impl NavigatorEnd {
-    /// Connects a new port to the model `models.navigation`, and keeps the Navigator's end.
     pub fn connect(models: &Models, cx: &mut TestAppContext) -> NavigatorEnd {
         // The asks are read by a real thread, which the test executor cannot see.
         cx.executor().allow_parking();
@@ -56,7 +43,6 @@ impl NavigatorEnd {
         }
     }
 
-    /// Whether `ask` is one the model makes by itself.
     fn is_standing(ask: &Ask) -> bool {
         matches!(
             ask,
@@ -69,8 +55,7 @@ impl NavigatorEnd {
         )
     }
 
-    /// The next ask of the pane that the model does not make by itself. Fails when none
-    /// comes within [`DEADLINE`], or the model let the port go.
+    /// The next ask the model does not make by itself. Fails when none comes within [`DEADLINE`].
     pub fn ask(&mut self, cx: &mut TestAppContext) -> Ask {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -90,8 +75,8 @@ impl NavigatorEnd {
         }
     }
 
-    /// What the pane asked after everything before: the asks the model has handed over by
-    /// now, those it makes by itself kept aside. Read only after a barrier the test caused.
+    /// Asks handed over by now, those the model makes by itself kept aside. Read only after a
+    /// barrier the test caused.
     pub fn asked_so_far(&mut self, cx: &mut TestAppContext) -> Vec<Ask> {
         cx.run_until_parked();
         let mut asked = Vec::new();
@@ -105,7 +90,6 @@ impl NavigatorEnd {
         asked
     }
 
-    /// Tells the model `told`, as the Navigator would, and lets the window take it.
     pub fn tell(&self, told: Told, cx: &mut TestAppContext) {
         self.told
             .try_send(told)
@@ -113,7 +97,6 @@ impl NavigatorEnd {
         cx.run_until_parked();
     }
 
-    /// What the model told the Navigator by itself so far, in order.
     pub fn standing(&mut self, cx: &mut TestAppContext) -> Vec<Ask> {
         let _ = self.asked_so_far(cx);
         self.standing.clone()

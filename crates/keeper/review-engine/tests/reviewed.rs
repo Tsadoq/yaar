@@ -1,5 +1,5 @@
-//! Marking a change reviewed, through the engine with the real Store and the real
-//! Recorder beneath, on a repository the test makes.
+//! Marking a change reviewed, through the engine with the real Store and Recorder on a
+//! repository the test makes.
 
 mod support;
 
@@ -22,7 +22,6 @@ fn modified(path: &str) -> ChangedPath {
     }
 }
 
-// REV-16
 #[test]
 fn marking_reviewed_records_the_state_as_reviewed_and_a_commit_made_through_the_app_changes_neither()
  {
@@ -43,7 +42,6 @@ fn marking_reviewed_records_the_state_as_reviewed_and_a_commit_made_through_the_
         .id()
         .clone();
 
-    // Before the first mark there is no reviewed state, and nothing to compare with.
     assert_eq!(reviews.review(&review).expect("read").reviewed(), None);
     assert_eq!(
         reviews
@@ -52,9 +50,8 @@ fn marking_reviewed_records_the_state_as_reviewed_and_a_commit_made_through_the_
         None
     );
 
-    // An earlier mark, then an edit: the mark below must be a later state than the oldest
-    // one the workspace has recorded, so that what the next review starts from is the
-    // reviewed state and no other.
+    // An earlier mark and an edit come first, so that the mark tested below is a later state than
+    // the oldest recorded: the next review must start from the reviewed state and no other.
     let earlier = reviews.mark_reviewed(&worktree, &review).expect("mark");
     write(&repo, "a.txt", "one changed once more\n");
 
@@ -65,8 +62,6 @@ fn marking_reviewed_records_the_state_as_reviewed_and_a_commit_made_through_the_
     );
     let objects = git(&repo, &["count-objects", "-v"]);
 
-    // Marking records the current state as reviewed: the newest state, holding the files
-    // as they are.
     let reviewed = reviews.mark_reviewed(&worktree, &review).expect("mark");
     assert_ne!(reviewed, earlier);
     assert_eq!(
@@ -88,8 +83,6 @@ fn marking_reviewed_records_the_state_as_reviewed_and_a_commit_made_through_the_
         );
     }
 
-    // Without making a commit: HEAD, the refs and the objects of the repository are as
-    // they were.
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
     assert_eq!(
         git(
@@ -100,8 +93,6 @@ fn marking_reviewed_records_the_state_as_reviewed_and_a_commit_made_through_the_
     );
     assert_eq!(git(&repo, &["count-objects", "-v"]), objects);
 
-    // The next review starts from it: nothing has changed since, and then exactly what
-    // was edited and added.
     assert_eq!(
         reviews
             .changed_since_review(&worktree, &review)
@@ -118,8 +109,6 @@ fn marking_reviewed_records_the_state_as_reviewed_and_a_commit_made_through_the_
         Some(since.clone())
     );
 
-    // A commit made through the app changes neither: the reviewed state is the same, and
-    // so is what changed since it.
     let commit = worktree.commit_all("Commit what is there").expect("commit");
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), commit.as_str());
     assert_ne!(commit.as_str(), head);

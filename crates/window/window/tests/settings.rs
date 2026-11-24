@@ -1,12 +1,3 @@
-//! Component tests: the settings in the composed Window on GPUI's test platform, with every
-//! pane and the settings screen, the real Keeper beneath it and the real Navigator beside
-//! it. The Frame's rows play the Keeper with data; these join the screen and the real Keeper
-//! (WIN-11), as the Window's other tests join the Navigator.
-//!
-//! The keys are pressed as a user presses them. What a setting does is read back through the
-//! model that shows it, at once, and from a second Window opened on a Keeper started again.
-//! The tests wait for facts with a deadline, and the clock a span rests on is the test's own.
-
 mod common;
 
 use std::cell::RefCell;
@@ -39,12 +30,9 @@ use common::{
 };
 
 thread_local! {
-    /// The settings the Keeper told the Window of this test, in the order the Window heard
-    /// them (`hear_the_settings`).
     static ECHOES: Rc<RefCell<Vec<Setting>>> = Rc::default();
 }
 
-/// The Window as the program opens it, with the Navigator and the real Keeper of `world`.
 fn open_the_window(world: World, cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
     let navigator = navigator_for(
         &world,
@@ -56,13 +44,9 @@ fn open_the_window(world: World, cx: &mut TestAppContext) -> (Composed, VisualTe
     (window, cx)
 }
 
-/// Has what the Keeper tells the Window of the settings kept in order, as the Window hears it
-/// (what the Frame's list of settings hears, which is subscribed first, has been taken by the
-/// time this is told). The Keeper tells a setting to every Window once it keeps it, the
-/// Window that set it included, and that echo takes the setting the Window shows to the value
-/// it had when the Keeper kept it: two sets of one setting in quick succession show the first
-/// value again for a moment, until the second echo comes. A test that sets one setting twice
-/// waits for the echoes before it reads or sets it again ([`wait_for_the_echoes`]).
+/// Records each setting the Keeper echoes. The echo reaches every Window, the setter included,
+/// and resets the shown value, so two quick sets of one setting show the first value again:
+/// [`wait_for_the_echoes`] waits for them before a setting is read or set again.
 fn hear_the_settings(window: &Composed, cx: &mut VisualTestContext) {
     let echoes = ECHOES.with(Rc::clone);
     echoes.borrow_mut().clear();
@@ -76,8 +60,6 @@ fn hear_the_settings(window: &Composed, cx: &mut VisualTestContext) {
     });
 }
 
-/// Waits, with the app running, until the Window has heard the Keeper's word on every set of
-/// the kind of `setting` that has passed the tap.
 fn wait_for_the_echoes(window: &Composed, setting: &Setting, cx: &mut VisualTestContext) {
     wait_until(
         cx,
@@ -104,7 +86,6 @@ fn wait_for_the_echoes(window: &Composed, setting: &Setting, cx: &mut VisualTest
     );
 }
 
-/// A setting of the kind the screen's `row` sets.
 fn kind_of(row: &SettingRow) -> Setting {
     match row {
         SettingRow::TurnEnd => Setting::TurnEnd(TurnEndSelects::WhatChanged),
@@ -116,22 +97,18 @@ fn kind_of(row: &SettingRow) -> Setting {
     }
 }
 
-/// The theme's mode the toolkit draws in now.
 fn mode(cx: &mut VisualTestContext) -> ThemeMode {
     cx.update(|_, app| app.theme().mode)
 }
 
-/// The name of the definition `Looks` applied last.
 fn applied(cx: &mut VisualTestContext) -> String {
     cx.update(|_, app| theme::applied(app).name)
 }
 
-/// What `Looks` knows of the system's setting.
 fn system(window: &Composed, cx: &mut VisualTestContext) -> Option<Appearance> {
     window.models.looks.read_with(cx, |looks, _| looks.system())
 }
 
-/// The rows the settings screen shows now.
 fn rows(window: &Composed, cx: &mut VisualTestContext) -> Vec<RowShown> {
     let screen = window
         .frame
@@ -140,7 +117,6 @@ fn rows(window: &Composed, cx: &mut VisualTestContext) -> Vec<RowShown> {
     screen.read_with(cx, |screen, cx| screen.rows(cx))
 }
 
-/// The index of the row of the screen that is `wanted`, and the one the cursor is on.
 fn row_and_cursor(
     window: &Composed,
     wanted: &SettingRow,
@@ -157,7 +133,6 @@ fn row_and_cursor(
     (at, screen.read_with(cx, |screen, _| screen.cursor()))
 }
 
-/// Opens the settings screen by its key and waits until it has the focus.
 fn open_the_screen(window: &Composed, cx: &mut VisualTestContext) {
     window.leave_the_terminal_off_macos(cx);
     cx.simulate_keystrokes(&key_of("Settings…"));
@@ -169,7 +144,6 @@ fn open_the_screen(window: &Composed, cx: &mut VisualTestContext) {
     });
 }
 
-/// Closes the screen by its key and waits until it is gone.
 fn close_the_screen(window: &Composed, cx: &mut VisualTestContext) {
     cx.simulate_keystrokes(&key_of("Close Settings"));
     wait_until(cx, "the settings screen to close", |cx| {
@@ -179,7 +153,6 @@ fn close_the_screen(window: &Composed, cx: &mut VisualTestContext) {
     });
 }
 
-/// Puts the cursor on `row` with `j` and `k`.
 fn go_to(window: &Composed, row: &SettingRow, cx: &mut VisualTestContext) {
     let (next, previous) = (key_of("Next Setting"), key_of("Previous Setting"));
     loop {
@@ -191,12 +164,6 @@ fn go_to(window: &Composed, row: &SettingRow, cx: &mut VisualTestContext) {
     }
 }
 
-/// Chooses the value of `row` labelled `label`, by the cursor and `l` or `h`, as a user
-/// does; it is the model's, once the last key is pressed.
-///
-/// The echoes of the earlier sets of the row's setting are heard first, so that what the row
-/// shows when the keys are pressed is what was last chosen, and what the model shows after
-/// the last key is that choice, which the test reads at once.
 fn choose(window: &Composed, row: &SettingRow, label: &str, cx: &mut VisualTestContext) {
     wait_for_the_echoes(window, &kind_of(row), cx);
     go_to(window, row, cx);
@@ -212,7 +179,6 @@ fn choose(window: &Composed, row: &SettingRow, label: &str, cx: &mut VisualTestC
         .iter()
         .position(|value| value == label)
         .unwrap_or_else(|| panic!("the row {row:?} has no value {label:?}: {values:?}"));
-    // At most one key for each value there is.
     for _ in 0..=values.len() {
         match shown(window, cx).chosen {
             Some(chosen) if chosen == wanted => return,
@@ -223,8 +189,6 @@ fn choose(window: &Composed, row: &SettingRow, label: &str, cx: &mut VisualTestC
     panic!("the keys did not come to {label:?} on {row:?}");
 }
 
-/// Waits until the Window has sent a request `wanted` accepts to the Keeper, which the tap
-/// reads, while the app runs: what a request waits for in the Window goes on.
 fn wait_for_request(
     window: &Composed,
     what: &str,
@@ -234,8 +198,6 @@ fn wait_for_request(
     wait_until(cx, what, |_| window.tap.requests().iter().any(&wanted));
 }
 
-/// A repository with a change to review and the world's agent, the stand-in, started in a
-/// terminal of the Window for it. Gives the terminal once the stand-in shows its prompt.
 fn start_the_agent(window: &mut Composed, cx: &mut VisualTestContext) -> TerminalId {
     cx.simulate_keystrokes(&key_of("New Agent Terminal"));
     wait_until(cx, "the agent's terminal to take the focus", |cx| {
@@ -253,15 +215,12 @@ fn start_the_agent(window: &mut Composed, cx: &mut VisualTestContext) -> Termina
     terminal
 }
 
-/// The turn end the Keeper tells next: its session, its turn and the state it recorded.
 struct Ended {
     _session: SessionId,
     _turn: TurnId,
     state: String,
 }
 
-/// Types a line to the stand-in as a user does, and waits for the end of the turn it starts,
-/// which the Keeper tells the client.
 fn a_turn(client: &mut Client, terminal: &TerminalId) -> Ended {
     client.type_line(terminal, "do the next thing");
     match client.wait_for_fact(DEADLINE, |fact| matches!(fact, Fact::TurnEnded { .. })) {
@@ -279,7 +238,6 @@ fn a_turn(client: &mut Client, terminal: &TerminalId) -> Ended {
     }
 }
 
-/// The paths of the files the pane's Changes lists, in the order of its rows.
 fn files_of_changes(window: &Composed, cx: &mut VisualTestContext) -> Vec<PathBuf> {
     window.review.read_with(&*cx, |pane, _| {
         pane.rows()
@@ -292,7 +250,6 @@ fn files_of_changes(window: &Composed, cx: &mut VisualTestContext) -> Vec<PathBu
     })
 }
 
-/// What a read gave, compared byte for byte and shown as text when two differ.
 #[derive(PartialEq, Eq)]
 struct Bytes(Vec<u8>);
 
@@ -307,16 +264,14 @@ impl std::fmt::Debug for Bytes {
     }
 }
 
-/// What a clean-up must leave as it was in the user's repository: the seven reads of it and
-/// every file of its objects with its size.
 #[derive(Debug, PartialEq, Eq)]
 struct Reads {
     git: Vec<Bytes>,
     objects: Vec<(PathBuf, u64)>,
 }
 
-/// Runs git in `folder` as a reader of a repository does: with no optional lock, so that
-/// reading never rewrites the index, and with nothing of the user's configuration.
+/// Runs git as a reader: with no optional lock, so that reading never rewrites the index,
+/// and with none of the user's configuration.
 fn read_git(home: &Path, folder: &Path, args: &[&str]) -> Vec<u8> {
     let mut git = Command::new("git");
     git.env_clear();
@@ -348,7 +303,6 @@ fn read_git(home: &Path, folder: &Path, args: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
-/// Every file below `folder` with its size, the path relative to `below`.
 fn files_below(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, u64)>) {
     for entry in fs::read_dir(folder).expect("read the folder") {
         let path = entry.expect("an entry").path();
@@ -364,9 +318,6 @@ fn files_below(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, u64)>) {
     }
 }
 
-/// The repository's reads: status with the ignored files, the refs, the worktrees, the
-/// stashes, the unreachable objects, the bytes of the index and of the configuration, and
-/// the sorted list of every file of the objects with its size.
 fn reads(home: &Path, repo: &Repo) -> Reads {
     let git_folder = repo.path().join(".git");
     let mut objects = Vec::new();
@@ -399,8 +350,6 @@ fn reads(home: &Path, repo: &Repo) -> Reads {
     Reads { git, objects }
 }
 
-/// Two objects no ref reaches, planted before the first read: a blob and a dangling commit.
-/// Gives their ids, which [`still_there`] finds again.
 fn plant(home: &Path, repo: &Repo) -> Vec<String> {
     let file = home.join("planted.txt");
     fs::write(&file, "a blob nothing refers to\n").expect("write the blob's file");
@@ -412,15 +361,12 @@ fn plant(home: &Path, repo: &Repo) -> Vec<String> {
     vec![blob, dangling]
 }
 
-/// `git cat-file -e` of each planted object succeeds.
 fn still_there(repo: &Repo, planted: &[String]) {
     for id in planted {
         repo.git(&["cat-file", "-e", id]);
     }
 }
 
-/// The world of the settings' test: the stand-in as the agent CLI, which does a turn that
-/// writes `first.txt` and one that writes `second.txt`, and then ends.
 fn world_with_two_turns() -> World {
     let mut world = World::new();
     world.agents_on_path();
@@ -432,13 +378,8 @@ fn world_with_two_turns() -> World {
     world
 }
 
-// WIN-11, the opening as the program makes it: the program opens its window from the
-// application's start, outside any update of the app, where the toolkit has told the window's
-// observers by the time the window is open. The test opens its window inside an update, where
-// that notice comes only when the update ends, so the model is read inside the update, before
-// it can come: what the model holds then is what the Frame's `open` told it, before the window
-// existed. The Window program's own tell at the opening (step 1 of `appearance`) only repeats
-// it, and nothing here can tell it from its absence.
+// The program opens its window outside any update; the test opens inside one, where observers hear
+// only when it ends, so the model is read inside the update.
 #[gpui_kit::test]
 fn the_model_of_the_theme_holds_the_systems_appearance_the_moment_the_window_program_has_the_window(
     cx: &mut TestAppContext,
@@ -482,7 +423,6 @@ fn the_model_of_the_theme_holds_the_systems_appearance_the_moment_the_window_pro
     cx.quit();
 }
 
-// WIN-11, the opening: once the opening has run, the theme follows the system.
 #[gpui_kit::test]
 fn the_window_tells_its_theme_the_systems_appearance_at_its_opening(cx: &mut TestAppContext) {
     let mut world = World::new();
@@ -490,7 +430,6 @@ fn the_window_tells_its_theme_the_systems_appearance_at_its_opening(cx: &mut Tes
     let (window, mut cx) = open_the_window(world, cx);
     cx.run_until_parked();
 
-    // Nothing is set, so the system's setting is what the Window draws in.
     let platform = cx.update(|window, _| window.appearance());
     assert_eq!(
         platform,
@@ -515,10 +454,6 @@ fn the_window_tells_its_theme_the_systems_appearance_at_its_opening(cx: &mut Tes
     cx.quit();
 }
 
-// WIN-11: the settings screen sets what a turn end selects, the stop time, the theme, the place
-// of the terminal pane and the time states are kept; each is in force at once and still set
-// after the Keeper restarts; the screen shows the sizes of the recorded states and its
-// clean-up reaches the Keeper.
 #[gpui_kit::test]
 fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_keeper_restarts_and_the_screen_shows_the_sizes_and_cleans_up(
     app: &mut TestAppContext,
@@ -533,13 +468,11 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         .read_with(&cx, |list, _| list.selected().cloned())
         .expect("the opened folder is on screen");
     assert!(folder.exists());
-    // The repository is the user's: two objects no ref reaches are planted in it before the
-    // first read, so that a clean-up that reaches past the states shows.
+    // Two objects no ref reaches are planted before the first read, so that a clean-up reaching
+    // past the states shows.
     let home = window.world.home();
     let planted = plant(&home, &window.repositories[0]);
 
-    // A turn of the agent is recorded. Nothing is set: the turn's end selects what changed
-    // since the review, which is what the pane holds afterwards.
     let terminal = start_the_agent(&mut window, &mut cx);
     let first = a_turn(&mut client, &terminal);
     wait_until(
@@ -557,7 +490,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
             .read_with(&cx, |pane, _| pane.keeps_selection())
     );
     let selected = window.review.read_with(&cx, |pane, _| pane.change_shown());
-    // What changed since the base: the file the turn wrote and the one the worktree held changed.
     let files = ["first.txt", "notes.txt"].map(PathBuf::from).to_vec();
     wait_until(&mut cx, "the files of the first turn in Changes", |cx| {
         let mut listed = files_of_changes(&window, cx);
@@ -565,8 +497,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         listed == files
     });
 
-    // The screen, opened by its key, shows the room the recorded states take: the workspace
-    // of the world with more than nothing, and the total.
     open_the_screen(&window, &mut cx);
     go_to(&window, &SettingRow::States, &mut cx);
     let mut before: Option<StateSizes> = None;
@@ -583,7 +513,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         })
     });
     let before = before.expect("the Keeper gave the sizes");
-    // The workspace's line: its name (the branch checked out) and its bytes in words.
     let name = window
         .models
         .workspaces
@@ -612,7 +541,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         drawn(&drawn_workspace, cx).is_some() && drawn(&drawn_total, cx).is_some()
     });
 
-    // What a turn end selects: `l` on its row. The model has it before anything is waited for.
     choose(
         &window,
         &SettingRow::TurnEnd,
@@ -630,7 +558,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         "the review pane reads it at once"
     );
 
-    // The stop time, one step down from the 10 minutes there is: the model has it at once.
     choose(
         &window,
         &SettingRow::StopAfter,
@@ -642,7 +569,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         Duration::from_secs(300)
     );
 
-    // The theme, Light and then Dark: the toolkit draws in dark at once.
     choose(&window, &SettingRow::Theme, LIGHT, &mut cx);
     assert_eq!(applied(&mut cx), LIGHT);
     choose(&window, &SettingRow::Theme, DARK, &mut cx);
@@ -653,7 +579,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         theme::dark().colors.background
     );
 
-    // The time states are kept, 60 days for the 30 there are.
     choose(
         &window,
         &SettingRow::KeepStates,
@@ -668,7 +593,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         60
     );
 
-    // The terminal pane below: the Frame lays the panes out so at once.
     assert_eq!(
         window.frame.read_with(&cx, |frame, _| frame.beside()),
         Beside::Right
@@ -685,7 +609,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         "the terminal pane lies below at once"
     );
 
-    // Each reached the real Keeper.
     let sent = [
         Setting::TurnEnd(TurnEndSelects::KeepSelection),
         Setting::StopAfter { seconds: 300 },
@@ -702,8 +625,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         );
     }
 
-    // A second turn ends with the selection kept: the pane offers what it changed and leaves
-    // the selection, and with it the files, as they were.
     close_the_screen(&window, &mut cx);
     let second = a_turn(&mut client, &terminal);
     assert_ne!(first.state, second.state, "the second turn changed a file");
@@ -723,12 +644,8 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         "the files are the ones the selection had"
     );
 
-    // The clean-up: the screen again, with the sizes now, and `shift-c`. It reaches the
-    // Keeper, the sizes after are no larger, and the history still holds both turns.
     open_the_screen(&window, &mut cx);
     go_to(&window, &SettingRow::States, &mut cx);
-    // The room the states take with the second turn's recorded, as the Keeper says it: the
-    // clean-up only deletes, so no size is larger after it.
     let Ok(Reply::StateSizes(now)) = client.request(Request::GetStateSizes) else {
         panic!("the Keeper did not give the sizes of the recorded states");
     };
@@ -753,8 +670,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
             .states
             .read_with(cx, |states, _| !states.cleaning())
     });
-    // Nothing of the user's was written: every read of the repository is as it was, and the
-    // objects nothing refers to are still there.
     assert_eq!(reads(&home, &window.repositories[0]), repository_before);
     still_there(&window.repositories[0], &planted);
     let after = window
@@ -787,8 +702,7 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
     assert_eq!(turns, 2, "the history holds both turns: {history:?}");
     close_the_screen(&window, &mut cx);
 
-    // The Keeper ends with no goodbye once the agent is gone, and starts again on what it
-    // kept; a second Window opened on it shows every setting chosen.
+    // The Keeper ends with no goodbye once the agent is gone, and starts again on what it kept.
     wait_until(&mut cx, "the agent's terminal to end", |cx| {
         window.models.terminals.read_with(cx, |list, _| {
             list.terminals().iter().all(|held| held.id != terminal)
@@ -817,7 +731,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         assert_eq!(settings.keep_states(), 60);
         assert_eq!(settings.terminal_place(), TerminalPlace::Below);
     });
-    // Read through the model of the theme, which is what the screen shows.
     assert_eq!(
         second
             .models
@@ -825,7 +738,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
             .read_with(&cx, |looks, cx| looks.chosen(cx)),
         ThemeChoice::Named(DARK.to_owned())
     );
-    // And the pane of the second Window lays out as the setting says.
     wait_until(
         &mut cx,
         "the second Window to lay the panes out below",
@@ -838,7 +750,6 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
     cx.quit();
 }
 
-/// A time that moves only when the test moves it.
 struct TestClock {
     base: Instant,
     offset: Mutex<Duration>,
@@ -863,7 +774,6 @@ impl Clock for TestClock {
     }
 }
 
-/// A repository whose files the stand-in language server serves, `main.sil` among them.
 fn repository_of_code(world: &World, name: &str) -> Repo {
     let repository = world.repository(name);
     give_an_identity(&repository);
@@ -874,8 +784,6 @@ fn repository_of_code(world: &World, name: &str) -> Repo {
     repository
 }
 
-// WIN-11, the stop time: chosen on the screen, it is the time the real Navigator stops the
-// servers of a workspace off screen by, at once.
 #[gpui_kit::test]
 fn a_stop_time_chosen_on_the_screen_is_the_one_the_navigator_stops_the_servers_off_screen_by(
     cx: &mut TestAppContext,
@@ -893,7 +801,6 @@ fn a_stop_time_chosen_on_the_screen_is_the_one_the_navigator_stops_the_servers_o
     navigator.clock = clock.clone();
     let (mut window, mut cx) = open_composed_with_a_navigator(world, cx, Vec::new(), navigator);
 
-    // A server runs for the repository of code: the stand-in answers a hover on its file.
     window.open_this_folder(coded.path(), &mut cx);
     let coded_workspace = window
         .models
@@ -935,9 +842,7 @@ fn a_stop_time_chosen_on_the_screen_is_the_one_the_navigator_stops_the_servers_o
     });
     let pid = pid.expect("a server runs");
 
-    // Its workspace goes off screen, and the screen sets the stop time to 5 minutes, below the
-    // 10 there are. The clock then moves 6 minutes: past the time chosen, before the one
-    // that was.
+    // The clock moves 6 minutes: past the stop time chosen (5), before the one that was (10).
     window.open_this_folder(other.path(), &mut cx);
     open_the_screen(&window, &mut cx);
     choose(
@@ -956,9 +861,6 @@ fn a_stop_time_chosen_on_the_screen_is_the_one_the_navigator_stops_the_servers_o
     window.end_the_navigator(&mut cx);
 }
 
-// Of its own: when a forced appearance is let go, the window's appearance is read again and
-// told, however the choice came to be the system's: both when it is chosen and when it is a
-// name no theme has. A choice that moves between themes lets none go and tells nothing.
 #[gpui_kit::test]
 fn a_forced_appearance_let_go_has_the_windows_appearance_read_again_and_told(
     cx: &mut TestAppContext,
@@ -968,9 +870,8 @@ fn a_forced_appearance_let_go_has_the_windows_appearance_read_again_and_told(
     let (window, mut cx) = open_the_window(world, cx);
     assert_eq!(system(&window, &mut cx), Some(Appearance::Light));
 
-    // While a theme is chosen the window's appearance is the forced one, which the Window
-    // program notes: the test plays that the window reported Dark then, as a window with a
-    // dark theme forced on it does, whatever the system's setting is.
+    // The test plays that the window reported Dark, as a window with a dark theme forced on it
+    // does.
     open_the_screen(&window, &mut cx);
     choose(&window, &SettingRow::Theme, DARK, &mut cx);
     let noted_dark = |window: &Composed, cx: &mut VisualTestContext| {
@@ -981,7 +882,6 @@ fn a_forced_appearance_let_go_has_the_windows_appearance_read_again_and_told(
     noted_dark(&window, &mut cx);
     assert_eq!(system(&window, &mut cx), Some(Appearance::Dark));
 
-    // From one theme to another nothing is let go: the model is told nothing.
     choose(&window, &SettingRow::Theme, LIGHT, &mut cx);
     assert_eq!(applied(&mut cx), LIGHT);
     assert_eq!(
@@ -990,7 +890,6 @@ fn a_forced_appearance_let_go_has_the_windows_appearance_read_again_and_told(
         "a choice that leaves one theme for another tells the model nothing"
     );
 
-    // Back to the system: the appearance is read again, and it is the platform's.
     choose(
         &window,
         &SettingRow::Theme,
@@ -1004,7 +903,6 @@ fn a_forced_appearance_let_go_has_the_windows_appearance_read_again_and_told(
     );
     assert_eq!(applied(&mut cx), LIGHT);
 
-    // The same for a name no theme has: it is the system's as well.
     choose(&window, &SettingRow::Theme, DARK, &mut cx);
     noted_dark(&window, &mut cx);
     assert_eq!(applied(&mut cx), DARK);

@@ -1,5 +1,3 @@
-//! The id of a workspace, in the git folder of its worktree.
-
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -28,9 +26,7 @@ pub(crate) fn read(git_dir: &Path) -> Result<Option<WorkspaceId>, WorkspaceError
     }
 }
 
-/// Draws a new id and writes it into the git folder of a worktree, over whatever id
-/// was there. The file is written under another name and then renamed, so that nobody
-/// reads half an id.
+/// Writes a new id over any existing one, via a rename so nobody reads half an id.
 pub(crate) fn give(git_dir: &Path) -> Result<WorkspaceId, WorkspaceError> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let id = random()?;

@@ -1,11 +1,5 @@
-//! Component tests: the launchers of the agent CLIs at the Keeper's level, through the
-//! surface a Window uses, with a real pseudo-terminal beneath.
-//!
-//! The user's shell is a program of the test's own that writes down the arguments it is run
-//! with and runs no CLI: a launcher gives `-l`, `-i`, `-c` and the CLI's start command. The
-//! Keeper starts programs with the environment of its process, so each test sets that
-//! environment as its first statement, and these tests are run by `cargo nextest`, which
-//! gives each test a process of its own.
+//! Each test sets the process environment first, so each needs a process of its own (cargo
+//! nextest).
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -20,7 +14,6 @@ use yaar_link::{
     TerminalSize, WorkspaceId, handshake, read_message, write_message,
 };
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -28,15 +21,10 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the
-    /// shell of a terminal: no configuration of the user or of the system, a fixed
-    /// author, an empty home, and as the user's shell a program of the test's own that
-    /// writes down its arguments and then reads its terminal until the Keeper ends it. It
-    /// has to be the first statement of a test.
+    /// Sets the process environment; must be a test's first statement.
     fn with_launcher_shell() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -71,18 +59,14 @@ impl Scratch {
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("SHELL", &shell);
             std::env::set_var("HOME", scratch.0.join("home"));
-            // Where the Keeper's copies of git's lists of files go, and a program of a
-            // terminal's too: a folder that goes with the test.
             std::env::set_var("TMPDIR", scratch.0.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -100,12 +84,10 @@ impl Scratch {
         scratch
     }
 
-    /// Where the shell writes its arguments.
     fn shell_log(&self) -> PathBuf {
         self.0.join("shell-arguments")
     }
 
-    /// The home the Keeper is given, the folder its `HOME` is.
     fn home(&self) -> PathBuf {
         self.0.join("home")
     }
@@ -114,8 +96,6 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    /// Takes away what the shell wrote before: read after a launcher is opened, the log is
-    /// then what that launcher's shell wrote.
     fn forget_what_the_shell_was_run_with(&self) {
         match std::fs::remove_file(self.shell_log()) {
             Ok(()) => {}
@@ -124,7 +104,6 @@ impl Scratch {
         }
     }
 
-    /// The arguments the shell was run with, once it was.
     fn launched_with(&self) -> Vec<String> {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -141,7 +120,6 @@ impl Scratch {
         }
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -155,7 +133,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -177,7 +154,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main`.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -210,15 +186,13 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// One end of the Link, as a Window holds it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
 }
 
 impl Window {
-    /// Sends a request and waits for its reply, passing over the facts and the output of
-    /// a program that come between.
+    /// Skips the facts and program output that arrive between request and reply.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = RequestId(self.next_id);
         self.next_id += 1;
@@ -233,7 +207,6 @@ impl Window {
         }
     }
 
-    /// Opens the folder as a workspace.
     fn open(&mut self, folder: &Path) -> WorkspaceId {
         let opened = self.ask(Request::OpenFolder {
             path: folder.to_owned(),
@@ -244,7 +217,6 @@ impl Window {
         workspace
     }
 
-    /// The terminals the Keeper lists, in the order they were opened.
     fn terminals(&mut self) -> Vec<TerminalInfo> {
         match self.ask(Request::ListTerminals) {
             Ok(Reply::Terminals(terminals)) => terminals,
@@ -252,7 +224,6 @@ impl Window {
         }
     }
 
-    /// The agent CLIs the Keeper names.
     fn clis(&mut self) -> Vec<yaar_link::AgentCli> {
         match self.ask(Request::ListClis) {
             Ok(Reply::Clis(clis)) => clis,
@@ -276,7 +247,6 @@ fn a_launcher_starts_the_start_command_its_adapter_names_in_a_new_terminal() {
     let home = scratch.home();
     let adapters = adapters(&home);
 
-    // A launcher for each CLI the Keeper names, and the Keeper names every Adapter it has.
     let clis = window.clis();
     let names: Vec<&str> = clis.iter().map(|cli| cli.agent.as_str()).collect();
     assert_eq!(names, ["claude", "pi"]);
@@ -299,7 +269,6 @@ fn a_launcher_starts_the_start_command_its_adapter_names_in_a_new_terminal() {
             program: program.clone(),
             size: SIZE,
         });
-        // In a new terminal: one no terminal had, and listed with the launcher's program.
         let Ok(Reply::TerminalOpened { terminal }) = opened else {
             panic!("{}: no terminal: {opened:?}", cli.agent);
         };
@@ -321,7 +290,6 @@ fn a_launcher_starts_the_start_command_its_adapter_names_in_a_new_terminal() {
             cli.agent
         );
 
-        // The start command its Adapter names, run through the user's shell as a launcher.
         let command = adapters
             .iter()
             .find(|adapter| adapter.name() == cli.agent)
@@ -338,8 +306,6 @@ fn a_launcher_starts_the_start_command_its_adapter_names_in_a_new_terminal() {
         "each CLI has a command of its own"
     );
 
-    // An agent no Adapter has is refused, and no terminal is made for it: the list read
-    // after the refusal, on the same connection, is the one before.
     let before = window.terminals();
     let refused = window.ask(Request::OpenTerminal {
         workspace: workspace.clone(),

@@ -1,66 +1,6 @@
-//! The stand-in language server of the tests (ADR-033 § 3): a server for an invented
-//! language, the stand-in language, whose files end in `.sil`. It sits with the Navigator's
-//! component tests and is started by them and by the Window's tests, through a registry row
-//! of their own, and by nothing the app ships. The review pane's tests start no server: they
-//! play the Navigator's end of the port, as the Keeper's end of the socket is played, and
-//! read the asks the pane makes.
-//!
-//! It follows what its command line says and decides nothing. It speaks the Language
-//! Server Protocol on its standard input and output, as `yaar_navigator::lsp` frames it,
-//! and knows the stand-in language only as this: a name is a run of letters, digits and
-//! `_`; a line `def <name>` defines `<name>`.
-//!
-//! # Its command line
-//!
-//! | Argument | What it does |
-//! | --- | --- |
-//! | `--version` | prints `standin-lsp 1` and ends with 0, or with `--fail-trial` prints `standin-lsp: broken` on its standard error and ends with 3 |
-//! | `--fail-trial` | see `--version`; alone, nothing |
-//! | `--ready <answer\|progress\|notification>` | which readiness it shows, for a row of that rule: `answer` (the default) needs nothing; `progress` sends `window/workDoneProgress/create` for the token `standin`, then `$/progress` `begin`, then, once ready, `end`; `notification` sends `standin/status` with `{"ready": false}`, then, once ready, `{"ready": true}` |
-//! | `--ready-when <file>` | it is ready only once `<file>` exists, looked for every 10 ms after `initialized`; without it, at `initialized` |
-//! | `--fail-initialize` | answers `initialize` with the error -32603 and ends with 1 |
-//! | `--exit-after-ready` | ends with 2 right after it became ready, as a server that dies |
-//! | `--ask-configuration <section>` | after `initialized`, asks `workspace/configuration` for `section` and logs the answer |
-//! | `--log <file>` | appends one JSON object a line to `<file>`, below; `--version` writes none |
-//!
-//! Any other argument, a missing value, or a value a row above does not have, ends with 64 and
-//! a sentence on its standard error: a mistyped command line of a test does not pass as
-//! another one.
-//! # Its log
-//!
-//! Each line one object with `event` and what goes with it: `start` with `pid`, `cwd`,
-//! `args` (every argument but the first) and `env` (the names and values of `HOME`,
-//! `TMPDIR`, `XDG_CACHE_HOME` and every variable whose name starts with `STANDIN_`, where
-//! set); `initialize` with `rootUri`, `initializationOptions` and `capabilities` as
-//! received; `configuration` with `result`, the answer received, as the client sent it;
-//! `request` with `method` and `id`
-//! for every request received; `notification` with `method` for every notification
-//! received, and with `changes`, as received, for `workspace/didChangeWatchedFiles`; `ready`;
-//! `exit` with its code. A line is written before what it tells is answered, so that a test
-//! that reads the log after an answer finds the line.
-//!
-//! # What it answers
-//!
-//! - `initialize`: `{"capabilities": {"hoverProvider": true, "definitionProvider": true,
-//!   "referencesProvider": true, "textDocumentSync": 1}, "serverInfo": {"name":
-//!   "standin-lsp"}}`.
-//! - `textDocument/hover` before it is ready: null. Once ready: the name at the position,
-//!   in the text the client last opened or changed for that document, else the file on
-//!   disk: `{"contents": {"kind": "plaintext", "value": "standin: <name>"}}`; null where
-//!   no name is at the position.
-//! - `textDocument/definition` once ready: every line `def <name>` of every `.sil` file
-//!   under the root, in order of path, then line, for the name at the position, as `Location`s
-//!   whose range is the name; before it is ready, `[]`.
-//! - `textDocument/references` once ready: every whole-word occurrence of the name in
-//!   every `.sil` file under the root, by path, then line, then column; before, `[]`.
-//! - `shutdown`: null; `exit`: it ends with 0 after a `shutdown`, else with 1. At the end
-//!   of its input it ends with 0.
-//! - Any other request: the error -32601. Positions are counted in UTF-16 units.
-//!
-//! The name at a position is read from the same text as hover's, whichever of the three asks
-//! it is. Files under the root are read as they are on disk; folders whose name starts with
-//! `.` are not entered. A line `def <name>` is a line whose first word, after any white
-//! space, is `def`, followed by white space and the name; what follows the name is not read.
+//! Stand-in language server of the tests: `.sil` files, `def <name>` defines `<name>`.
+//! Usage: standin-lsp [--version [--fail-trial]] [--ready answer|progress|notification]
+//! [--ready-when F] [--fail-initialize] [--exit-after-ready] [--ask-configuration S] [--log F]
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -76,16 +16,12 @@ use yaar_navigator::lsp::{
     byte_column, file_uri, path_of_uri, read_frame, utf16_column, write_frame,
 };
 
-/// How often `--ready-when` looks for its file.
 const LOOK_EVERY: Duration = Duration::from_millis(10);
 
-/// The id of the request the stand-in makes for `--ready progress`.
 const PROGRESS_REQUEST: u64 = 1;
 
-/// The id of the request the stand-in makes for `--ask-configuration`.
 const CONFIGURATION_REQUEST: u64 = 2;
 
-/// Which readiness it shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Readiness {
     Answer,
@@ -93,7 +29,6 @@ enum Readiness {
     Notification,
 }
 
-/// What the command line says.
 struct Options {
     version: bool,
     fail_trial: bool,
@@ -149,21 +84,15 @@ fn parse(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
-/// What the process shares between the thread that reads and the one that looks for the
-/// file of `--ready-when`: the one place frames are written from, the log, and whether it
-/// is ready.
 struct Server {
     options: Options,
     out: Mutex<io::Stdout>,
     log: Option<Mutex<File>>,
-    /// Set by the first thread to become ready, before it logs it.
     becoming_ready: AtomicBool,
-    /// Set once the log says so: what answers reads this.
     ready: AtomicBool,
 }
 
 impl Server {
-    /// Appends one line to the log, when there is one.
     fn log(&self, line: Value) {
         if let Some(log) = &self.log {
             let mut text = line.to_string();
@@ -174,7 +103,7 @@ impl Server {
         }
     }
 
-    /// Writes one frame. A client that is gone is found out by the end of its input.
+    /// A client that is gone is found out by the end of its input.
     fn send(&self, message: Value) {
         let mut out = self
             .out
@@ -199,14 +128,11 @@ impl Server {
         self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
     }
 
-    /// Logs the end and ends.
     fn finish(&self, code: i32) -> ! {
         self.log(json!({"event": "exit", "code": code}));
         exit(code)
     }
 
-    /// Becomes ready, once: logs it, answers from now on, shows it as the command line
-    /// says, and dies if it was asked to.
     fn become_ready(&self) {
         if self.becoming_ready.swap(true, Ordering::SeqCst) {
             return;
@@ -228,12 +154,10 @@ impl Server {
     }
 }
 
-/// A name is a run of letters, digits and `_`.
 fn is_word(character: char) -> bool {
     character.is_alphanumeric() || character == '_'
 }
 
-/// The byte ranges of the names of a line.
 fn names(line: &str) -> Vec<(usize, usize)> {
     let mut found = Vec::new();
     let mut start = None;
@@ -253,7 +177,6 @@ fn names(line: &str) -> Vec<(usize, usize)> {
     found
 }
 
-/// The byte range of the name a line `def <name>` defines.
 fn definition(line: &str) -> Option<(usize, usize)> {
     let trimmed = line.trim_start();
     let rest = trimmed.strip_prefix("def")?;
@@ -268,8 +191,6 @@ fn definition(line: &str) -> Option<(usize, usize)> {
         .map(|(_, end)| (from, from + end))
 }
 
-/// Every `.sil` file under `folder`, by path; a folder whose name starts with `.` is not
-/// entered.
 fn sil_files(folder: &Path, into: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return;
@@ -291,7 +212,6 @@ fn sil_files(folder: &Path, into: &mut Vec<PathBuf>) {
     }
 }
 
-/// The state of the one reading thread: what the client told it.
 struct Session {
     server: Arc<Server>,
     root: PathBuf,
@@ -300,7 +220,6 @@ struct Session {
 }
 
 impl Session {
-    /// The text of a document: what the client last opened or changed, else the file.
     fn text_of(&self, path: &Path) -> Option<String> {
         self.documents
             .get(path)
@@ -308,7 +227,6 @@ impl Session {
             .or_else(|| std::fs::read_to_string(path).ok())
     }
 
-    /// The name at the position a text document request names.
     fn name_at(&self, params: &Value) -> Option<String> {
         let path = path_of_uri(params.get("textDocument")?.get("uri")?.as_str()?)?;
         let position = params.get("position")?;
@@ -323,8 +241,6 @@ impl Session {
             .map(|(start, end)| line[start..end].to_owned())
     }
 
-    /// The places of `name` in every `.sil` file under the root, as locations: where `pick`
-    /// finds it in a line.
     fn places(&self, name: &str, pick: impl Fn(&str) -> Vec<(usize, usize)>) -> Vec<Value> {
         let mut files = Vec::new();
         sil_files(&self.root, &mut files);
@@ -494,7 +410,6 @@ impl Session {
         }
     }
 
-    /// What the client answered to a request of the stand-in's.
     fn response(&self, id: &Value, result: &Value) {
         if *id == json!(CONFIGURATION_REQUEST) && self.server.options.ask_configuration.is_some() {
             self.server
@@ -503,7 +418,6 @@ impl Session {
     }
 }
 
-/// The folder the client says it serves.
 fn root_of(params: &Value) -> Option<PathBuf> {
     let uri = params.get("rootUri").and_then(Value::as_str).or_else(|| {
         params

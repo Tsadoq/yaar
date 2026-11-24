@@ -1,7 +1,3 @@
-//! Component test: a login shell that `take_in` starts after `ShellGroup::end` is killed
-//! as it starts, on a real process, so that a caller that has left does not wait for a shell
-//! it no longer wants. The shell is a script of the test's own, never the user's.
-
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -9,12 +5,10 @@ use std::time::{Duration, Instant};
 
 use yaar_link::login::{LoginShell, ShellError, ShellGroup, take_in};
 
-/// How long the shell may take. A shell that is killed at its start is gone within a
-/// fraction of a second, so no run that works comes near it; a shell that is not killed
-/// would wait for it, and the take would fail with the deadline and not with a signal.
+/// A killed shell is gone within a fraction of a second; an unkilled one would run to this
+/// deadline.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// A folder of this test's own, removed when the test ends.
 struct Place(PathBuf);
 
 impl Place {
@@ -34,7 +28,6 @@ impl Drop for Place {
 #[test]
 fn a_shell_started_after_the_group_has_ended_is_killed_at_its_start() {
     let place = Place::new();
-    // A shell that would wait for far longer than the deadline.
     let program = place.0.join("login-shell");
     std::fs::write(&program, "#!/bin/sh\nexec sleep 600\n").expect("write the shell");
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))

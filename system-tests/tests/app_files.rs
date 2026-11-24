@@ -1,11 +1,4 @@
-//! STORE-04: at the end of every test with the stand-in agent, no git command that lists
-//! the files of a worktree names a file of the app.
-//!
-//! The check lives in the drop of the world, so each system test that puts the stand-in on
-//! its search path ends with it, as Claude Code and as pi. The delivery tests hold turns, a
-//! delivery and replies; the tests here show that the check bites: that it names a file of
-//! the app wherever git lists one, that it looks in every worktree git knows, and that a
-//! world which leaves one fails its test.
+//! Shows that the check at the end of a test with the stand-in agent finds a file of the app.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,15 +8,10 @@ use std::time::Duration;
 use yaar_system_tests::standin::Script;
 use yaar_system_tests::{DEADLINE, Repo, World, is_alive, wait_until};
 
-/// A review file as the Claude Code Adapter writes one: 32 hexadecimal digits, a dash, a
-/// number.
 const REVIEW_FILE: &str = "0123456789abcdef0123456789abcdef-1.md";
 
-/// The variable that tells a test run as a child of another which part it plays.
 const CHILD: &str = "YAAR_APP_FILES_CHILD";
 
-/// A world with the stand-in on its search path and a repository `app`, no Keeper: the
-/// check reads git only.
 fn world_with_standins() -> (World, Repo) {
     let mut world = World::new();
     world.agents_on_path();
@@ -31,16 +19,12 @@ fn world_with_standins() -> (World, Repo) {
     (world, repo)
 }
 
-/// The listing as (worktree, line) pairs in an order that does not depend on the order the
-/// commands ran in.
 fn listed(world: &World) -> Vec<(PathBuf, String)> {
     let mut listed = world.app_files_listed();
     listed.sort();
     listed
 }
 
-/// What the check lists for `files` of `worktree` when each is untracked: the line of
-/// `git status` and the line of `git ls-files --others`.
 fn untracked(worktree: &Path, files: &[&str]) -> Vec<(PathBuf, String)> {
     let at = |line: String| (worktree.to_owned(), line);
     files
@@ -58,7 +42,6 @@ fn sorted(mut listed: Vec<(PathBuf, String)>) -> Vec<(PathBuf, String)> {
 fn a_file_of_the_app_left_in_a_worktree_is_named_by_the_check_at_the_end_of_the_test() {
     let (world, app) = world_with_standins();
     let other = world.repository("other");
-    // A worktree of `app` that lies elsewhere than in `repos`, as the app's own would.
     let linked = world.home().join("linked");
     app.git(&[
         "worktree",
@@ -71,7 +54,6 @@ fn a_file_of_the_app_left_in_a_worktree_is_named_by_the_check_at_the_end_of_the_
     app.write(".gitignore", "yaar-ignored.txt\n");
     app.commit("Ignore a file");
 
-    // Files that are not the app's, close to ones that are.
     for decoy in [
         "notes-1.md",
         "0123456789abcdef0123456789abcde-1.md",
@@ -100,8 +82,7 @@ fn a_file_of_the_app_left_in_a_worktree_is_named_by_the_check_at_the_end_of_the_
         app.path(),
         &[".mcp.json", "yaar-note.txt", REVIEW_FILE, "sub/ade-id"],
     );
-    // An ignored file is listed by `git status --ignored` and by the third command, not by
-    // the second.
+    // An ignored file is listed by `git status --ignored` and the third command, not the second.
     wanted.push((app.path().to_owned(), "! yaar-ignored.txt".to_owned()));
     wanted.push((app.path().to_owned(), "yaar-ignored.txt".to_owned()));
     wanted.extend(untracked(other.path(), &[".claude-plugin/plugin.json"]));
@@ -112,7 +93,6 @@ fn a_file_of_the_app_left_in_a_worktree_is_named_by_the_check_at_the_end_of_the_
         "each file, by each command that lists it, in the repository or worktree it lies in"
     );
 
-    // A worktree that is gone, and that git still lists, is passed over.
     fs::remove_dir_all(&linked).expect("remove the linked worktree");
     assert!(
         listed(&world).iter().all(|(folder, _)| folder != &linked),
@@ -154,8 +134,8 @@ fn a_file_of_the_app_that_was_committed_is_named_by_the_listing_of_tracked_files
 #[test]
 fn a_path_git_quotes_is_named_all_the_same() {
     let (world, app) = world_with_standins();
-    // Git writes a name with a letter beyond ASCII in quotes, in octal: the quote sits in
-    // the first part of the path and after the last.
+    // Git quotes a name with a non-ASCII letter, in octal: the opening quote sits on the path's
+    // first part and the closing one after its last.
     app.write("\u{e9}/.mcp.json", "{}");
     app.write("yaar-\u{e9}.txt", "x");
     let listed = listed(&world);
@@ -172,8 +152,8 @@ fn a_path_git_quotes_is_named_all_the_same() {
     );
 }
 
-/// A repository with a tracked file that looks changed to git by its time alone, which
-/// `git status` refreshes in the index unless it is told not to take the lock that needs.
+/// A repository whose tracked file looks changed to git by its time alone, so `git status`
+/// rewrites the index unless told not to take the lock.
 fn repository_with_a_stale_index(world: &World) -> Repo {
     let app = world.repository("app");
     app.write("tracked.txt", "same bytes\n");
@@ -222,16 +202,13 @@ fn a_world_without_the_stand_in_is_not_checked_when_it_is_dropped() {
     assert!(dropped.is_ok(), "a world that put no stand-in on its path");
 }
 
-/// What a child test process did.
 struct Ended {
     code: Option<i32>,
     stdout: String,
     stderr: String,
 }
 
-/// Runs the test `name` of this file in a process of its own, told by `CHILD` to play its
-/// part, and waits for it to end. The child's output goes to files, so that a child that
-/// writes a lot cannot fill a pipe nobody reads.
+/// Output goes to files, so a child that writes a lot cannot fill a pipe nobody reads.
 fn run_as_child(name: &str) -> Ended {
     let scratch = World::new();
     let (out, err) = (
@@ -263,14 +240,10 @@ fn run_as_child(name: &str) -> Ended {
     }
 }
 
-/// A world as a test of an agent has it, with its Keeper running: what a test that fails
-/// at its end must not leave behind.
 fn world_with_keeper() -> (World, Repo) {
     World::with_standin("default", &Script::parse(""))
 }
 
-/// Prints where a child's world lies and which process its Keeper is, for the test that
-/// started the child to look for afterwards.
 fn tell_where(world: &mut World, app: &Repo) {
     let root = app
         .path()
@@ -281,7 +254,6 @@ fn tell_where(world: &mut World, app: &Repo) {
     println!("world: {}\nkeeper: {keeper}", root.display());
 }
 
-/// The folder a child's world lay in, which it printed as `world: <folder>`.
 fn world_of(child: &Ended) -> PathBuf {
     // The libtest harness has written the name of the test on the line before it.
     let (_, told) = child
@@ -291,7 +263,6 @@ fn world_of(child: &Ended) -> PathBuf {
     PathBuf::from(told.lines().next().unwrap_or_default())
 }
 
-/// The process id of the Keeper a child's world started, which it printed as `keeper: <id>`.
 fn keeper_of(child: &Ended) -> u32 {
     let (_, told) = child
         .stdout
@@ -306,8 +277,6 @@ fn keeper_of(child: &Ended) -> u32 {
 const LEAVES_A_FILE: &str = "child_a_test_ends_with_a_file_of_the_app_left_in_its_worktree";
 const FAILS_WITH_A_FILE: &str = "child_a_test_that_fails_ends_with_a_file_of_the_app_left_too";
 
-/// Plays a test that leaves a file of the app and passes, when told to by [`run_as_child`];
-/// otherwise it does nothing.
 #[test]
 fn child_a_test_ends_with_a_file_of_the_app_left_in_its_worktree() {
     if std::env::var(CHILD).as_deref() != Ok(LEAVES_A_FILE) {
@@ -320,8 +289,6 @@ fn child_a_test_ends_with_a_file_of_the_app_left_in_its_worktree() {
     println!("the drop of the world returned");
 }
 
-/// Plays a test that leaves a file of the app and fails for a reason of its own, when told
-/// to by [`run_as_child`]; otherwise it does nothing.
 #[test]
 fn child_a_test_that_fails_ends_with_a_file_of_the_app_left_too() {
     if std::env::var(CHILD).as_deref() != Ok(FAILS_WITH_A_FILE) {

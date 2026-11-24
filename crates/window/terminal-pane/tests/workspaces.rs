@@ -1,7 +1,5 @@
-//! Component test: the terminal pane with two workspaces, on GPUI's test platform with no
-//! window on any screen. The workspace on screen is chosen by a click on its row in the
-//! sidebar or by the key of Next Workspace; the pane is read back through the model it
-//! shows. The test plays the Keeper on the other end of a socket pair.
+//! Component test: two workspaces, chosen by a click on a sidebar row or by the Next Workspace key.
+//! The test plays the Keeper on a socket pair.
 
 mod common;
 
@@ -18,7 +16,6 @@ fn open_two(cx: &mut TestAppContext) -> (Panes, VisualTestContext) {
     open_panes_listing(cx, &[two_workspaces()], |_, _| {})
 }
 
-/// Puts a workspace on screen by a click on its row in the sidebar.
 fn select(workspace: &WorkspaceId, panes: &Panes, cx: &mut VisualTestContext) {
     click_in(&format!("sidebar-workspace-{workspace}"), cx);
     let on_screen = panes
@@ -44,7 +41,6 @@ fn split(panes: &Panes, cx: &mut VisualTestContext) -> bool {
     panes.pane.read_with(cx, |pane, _| pane.split())
 }
 
-/// Whether the focus is in the view of this terminal.
 fn has_the_focus(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) -> bool {
     let view = panes
         .pane
@@ -65,8 +61,6 @@ fn a_workspace_on_screen_shows_its_own_terminals_and_gets_them_back_when_it_retu
     panes.open_terminal(&t1, &mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
 
-    // The other workspace has none: the pane says how to open one, shows no terminal, and
-    // keeps the one of the first alive in its list.
     select(&two, &panes, &mut cx);
     assert_eq!(shown(&panes, &mut cx), []);
     assert_eq!(focused(&panes, &mut cx), None);
@@ -74,7 +68,6 @@ fn a_workspace_on_screen_shows_its_own_terminals_and_gets_them_back_when_it_retu
     assert!(drawn("terminal-how-to-open", &mut cx).is_some());
     assert_eq!(terminals(&panes, &mut cx), std::slice::from_ref(&t1));
 
-    // A terminal opened there is shown, and is of that workspace.
     panes.open_terminal(&t2, &mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
     assert!(drawn("terminal-how-to-open", &mut cx).is_none());
@@ -83,12 +76,10 @@ fn a_workspace_on_screen_shows_its_own_terminals_and_gets_them_back_when_it_retu
         Some(two.clone())
     );
 
-    // Back: the first terminal is shown again with the focus, and the second is not.
     select(&one, &panes, &mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
     assert_eq!(focused(&panes, &mut cx), Some(t1.clone()));
     assert!(drawn("terminal-slot-1", &mut cx).is_none());
-    // Every terminal the window opened is listed, in the order they were opened.
     assert_eq!(terminals(&panes, &mut cx), [t1.clone(), t2.clone()]);
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.workspace(&t1)),
@@ -104,7 +95,6 @@ fn each_workspace_keeps_which_terminal_had_the_focus_and_whether_it_was_split(
     let (one, two) = (workspace_id('1'), workspace_id('2'));
     let (t1, t2, t3, t4) = (terminal('a'), terminal('b'), terminal('c'), terminal('d'));
 
-    // Two terminals in each workspace, opened in turn.
     panes.open_terminal(&t1, &mut cx);
     select(&two, &panes, &mut cx);
     panes.open_terminal(&t2, &mut cx);
@@ -113,8 +103,6 @@ fn each_workspace_keeps_which_terminal_had_the_focus_and_whether_it_was_split(
     select(&two, &panes, &mut cx);
     panes.open_terminal(&t4, &mut cx);
 
-    // The first workspace: split, with the second slot's terminal focused. The second
-    // workspace is not split and has its first terminal on show.
     select(&one, &panes, &mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t3));
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
@@ -128,7 +116,6 @@ fn each_workspace_keeps_which_terminal_had_the_focus_and_whether_it_was_split(
     panes.press_in_the_app::<PreviousTerminal>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
 
-    // Each comes back as it was left, and the other's terminals are in neither slot.
     select(&one, &panes, &mut cx);
     assert!(split(&panes, &mut cx));
     assert_eq!(shown(&panes, &mut cx), [t3.clone(), t1.clone()]);
@@ -150,8 +137,8 @@ fn next_previous_and_split_go_among_the_terminals_of_the_workspace_on_screen(
     let (one, two) = (workspace_id('1'), workspace_id('2'));
     let (t1, t2, t3) = (terminal('a'), terminal('b'), terminal('c'));
 
-    // Opened in the order t1 (one), t2 (two), t3 (one): the list holds the other
-    // workspace's between them.
+    // Opened as t1 (one), t2 (two), t3 (one): the other workspace's terminal sits between them in
+    // the list.
     panes.open_terminal(&t1, &mut cx);
     select(&two, &panes, &mut cx);
     panes.open_terminal(&t2, &mut cx);
@@ -162,7 +149,6 @@ fn next_previous_and_split_go_among_the_terminals_of_the_workspace_on_screen(
         [t1.clone(), t2.clone(), t3.clone()]
     );
 
-    // From the last of this workspace round to its first, never to t2.
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t3));
     panes.press_in_the_app::<NextTerminal>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
@@ -173,14 +159,11 @@ fn next_previous_and_split_go_among_the_terminals_of_the_workspace_on_screen(
     panes.press_in_the_app::<PreviousTerminal>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t3));
 
-    // The split shows two of this workspace's, not the one after in the list.
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), [t3.clone(), t1.clone()]);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t3));
 
-    // The other workspace has one: three terminals are open and there is nothing to split
-    // or to step to.
     select(&two, &panes, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
@@ -199,7 +182,6 @@ fn a_workspace_with_no_terminal_on_screen_keeps_the_focus_on_the_pane_and_keys_d
     panes.open_terminal(&t1, &mut cx);
     select(&workspace_id('2'), &panes, &mut cx);
 
-    // The Frame gives the focus to the pane, which has no terminal to hand it on to.
     cx.update(|window, cx| panes.pane_focus.focus(window, cx));
     assert!(cx.update(|window, _| panes.pane_focus.is_focused(window)));
     assert!(!has_the_focus(&panes, &t1, &mut cx));
@@ -213,10 +195,8 @@ fn a_workspace_with_no_terminal_on_screen_keeps_the_focus_on_the_pane_and_keys_d
         assert_eq!(shown(&panes, &mut cx), [], "after {key}");
         assert_eq!(focused(&panes, &mut cx), None);
     }
-    // The terminal of the first workspace took no key.
     assert!(!has_the_focus(&panes, &t1, &mut cx));
 
-    // Back there, the focus given to the pane goes on to its terminal.
     select(&workspace_id('1'), &panes, &mut cx);
     cx.update(|window, cx| panes.pane_focus.focus(window, cx));
     assert!(has_the_focus(&panes, &t1, &mut cx));
@@ -254,8 +234,6 @@ fn a_terminal_whose_answer_comes_after_another_workspace_came_on_screen_is_not_s
             .read_with(cx, |pane, _| pane.terminals().contains(&late))
     });
 
-    // The second workspace on screen shows what it showed, and the focus stays where it
-    // is. The terminal belongs to the first, which shows it when it returns.
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.workspace(&late)),
@@ -279,9 +257,8 @@ fn a_click_on_another_workspace_with_the_focus_in_a_terminal_moves_the_focus_to_
     panes.open_terminal(&t2, &mut cx);
     assert!(has_the_focus(&panes, &t2, &mut cx));
 
-    // The click on the sidebar's row leaves the focus in the terminal that is drawn
-    // until the workspace changes. Then the other workspace's terminal has it, and the
-    // terminal that is no longer drawn takes no key.
+    // The click on a sidebar row leaves the focus in the terminal drawn until the workspace
+    // changes; then the other workspace's terminal takes it.
     select(&one, &panes, &mut cx);
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
     assert!(has_the_focus(&panes, &t1, &mut cx));
@@ -297,14 +274,11 @@ fn a_click_on_a_workspace_with_no_terminal_with_the_focus_in_a_terminal_moves_th
     panes.open_terminal(&t1, &mut cx);
     assert!(has_the_focus(&panes, &t1, &mut cx));
 
-    // The other workspace has no terminal to hand the focus on to: the pane itself has
-    // it, and the terminal of the first, no longer drawn, does not.
     select(&workspace_id('2'), &panes, &mut cx);
     assert_eq!(shown(&panes, &mut cx), []);
     assert!(cx.update(|window, _| panes.pane_focus.is_focused(window)));
     assert!(!has_the_focus(&panes, &t1, &mut cx));
 
-    // Back, with the focus in the pane: it goes on to the terminal that is shown again.
     select(&workspace_id('1'), &panes, &mut cx);
     assert!(has_the_focus(&panes, &t1, &mut cx));
 }

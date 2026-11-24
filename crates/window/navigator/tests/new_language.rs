@@ -1,9 +1,6 @@
-//! A new language added by one row and no change of code answers hover (LSP-06, NFR-002).
-//!
-//! The first test adds a row to the built-in table as text and asks a hover of a file of that
-//! language. The second reads the Navigator's own source: no string literal of it names a
-//! language, a server, an extension or a file a built-in row names, so that a language is
-//! never a branch of the code that starts servers or answers.
+//! A new language added by one row and no change of code answers hover. The second test checks
+//! that no string literal of the Navigator's source names a language, server, extension or file of
+//! a built-in row.
 
 mod support;
 
@@ -18,8 +15,6 @@ fn a_language_added_by_one_row_answers_hover() {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
     let repo = scratch.repository("project", &[("main.sil", "def alpha\nuse alpha\n")]);
-    // The built-in table, and one row more as text: the stand-in's language, found on the
-    // machine.
     let table = format!("{BUILTIN}\n{}", standin_row("standin", &[], "answer", ""));
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&table));
@@ -42,8 +37,7 @@ fn a_language_added_by_one_row_answers_hover() {
     running.end();
 }
 
-/// Each source file of the Navigator that is not a test program: written out, and the test
-/// below asserts that the list is every such file, so that a new module is not missed.
+/// Every non-test source file of the Navigator; the test asserts the list is complete.
 const SOURCES: [(&str, &str); 15] = [
     ("answers.rs", include_str!("../src/answers.rs")),
     ("clock.rs", include_str!("../src/clock.rs")),
@@ -62,8 +56,8 @@ const SOURCES: [(&str, &str); 15] = [
     ("shell.rs", include_str!("../src/shell.rs")),
 ];
 
-/// Names that must stand in the table and in no string of the source, matched as whole
-/// tokens: a token is a run of letters, digits, `_` and `-`.
+/// Names that must stand in the table and in no string of the source, matched as whole tokens
+/// (a run of letters, digits, `_` and `-`).
 const TOKENS: [&str; 29] = [
     "typescript",
     "typescriptreact",
@@ -96,7 +90,6 @@ const TOKENS: [&str; 29] = [
     "node_modules",
 ];
 
-/// Names matched as text anywhere in a string.
 const TEXTS: [&str; 11] = [
     "TypeScript and JavaScript",
     "tsconfig.json",
@@ -111,9 +104,8 @@ const TEXTS: [&str; 11] = [
     "@typescript",
 ];
 
-/// The text of every string literal of `source`, the part of it before its unit tests,
-/// comments left out. What is cut off is the unit-test module and nothing else: a
-/// `#[cfg(test)]` item before product code would hide that code from the scan.
+/// String literals of `source` before its unit tests, comments left out. Only the unit-test module
+/// is cut: a `#[cfg(test)]` item before product code would hide that code from the scan.
 fn string_literals(source: &str) -> Vec<String> {
     let (code, tests) = source
         .split_once("\n#[cfg(test)]")
@@ -185,8 +177,6 @@ fn string_literals(source: &str) -> Vec<String> {
     literals
 }
 
-/// Whether a raw string starts at `at`: `r` or `br`, any number of `#`, then a quote, and
-/// no letter before.
 fn is_raw_start(chars: &[char], at: usize) -> bool {
     if at > 0 && (chars[at - 1].is_alphanumeric() || chars[at - 1] == '_') {
         return false;
@@ -203,7 +193,6 @@ fn is_raw_start(chars: &[char], at: usize) -> bool {
     rest.get(hashes) == Some(&'"')
 }
 
-/// The tokens of `text`, lowercase.
 fn tokens(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
@@ -226,7 +215,6 @@ fn the_scanner_reads_literals_as_rust_writes_them() {
 
 #[test]
 fn no_string_of_the_navigators_source_names_a_language_a_server_or_a_file_of_a_row() {
-    // The list is every source file but the programs of `src/bin`.
     let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut on_disk: Vec<String> = std::fs::read_dir(&folder)
         .expect("read src")
@@ -264,8 +252,8 @@ fn no_string_of_the_navigators_source_names_a_language_a_server_or_a_file_of_a_r
         hits.join("\n")
     );
 
-    // The names are whole: every name the built-in table gives is among them, so that a
-    // row added to it fails here until its names are listed too.
+    // Every name the built-in table gives is among them, so a row added to it fails here until its
+    // names are listed.
     let named = |name: &str| {
         let lower = name.to_lowercase();
         forbidden.contains(lower.as_str()) || TEXTS.iter().any(|text| text.to_lowercase() == lower)

@@ -1,6 +1,3 @@
-//! Component tests: the calls of the Store that keep and find agent sessions, their turns
-//! and the steps of each turn, on a real database file.
-
 mod support;
 
 use std::ffi::OsStr;
@@ -13,7 +10,6 @@ use yaar_store::{
     TurnEndRecord, TurnId, TurnRecord, WorkspaceId,
 };
 
-/// An id of 32 hexadecimal digits, from a number.
 fn id(n: u128) -> String {
     format!("{n:032x}")
 }
@@ -30,8 +26,6 @@ fn tid(n: u128) -> TurnId {
     TurnId::new(id(n))
 }
 
-/// A session `n` of workspace `workspace`, running in terminal `t<n>`, that its CLI calls
-/// `cli-<n>`.
 fn session(n: u128, workspace: u128) -> SessionRecord {
     SessionRecord {
         id: sid(n),
@@ -46,7 +40,6 @@ fn session(n: u128, workspace: u128) -> SessionRecord {
     }
 }
 
-/// A turn `n` of session `session`, still running.
 fn turn(n: u128, session: u128, number: u32) -> TurnRecord {
     TurnRecord {
         id: tid(n),
@@ -86,7 +79,6 @@ fn ids(sessions: &[SessionRecord]) -> Vec<SessionId> {
 fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
     let scratch = Scratch::new();
     let store = Store::open(&scratch.file()).expect("open");
-    // A session that ended before it was kept: its end and how it came are kept as given.
     let ended = SessionRecord {
         running: false,
         ended: Some(7),
@@ -101,8 +93,6 @@ fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
     };
     put_all(&store, &[session(1, 1), ended.clone(), elsewhere.clone()]);
 
-    // The calls that change a session: one ends, one that ended runs again in another
-    // terminal, and a review of no agent is given to a session.
     put_all(&store, &[session(4, 1), session(5, 1)]);
     store
         .set_ended(&sid(4), EndedBy::KeeperStopped)
@@ -141,7 +131,6 @@ fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
     assert_eq!(session_of(&store, 1), session(1, 1));
     assert_eq!(session_of(&store, 2), ended);
     assert_eq!(session_of(&store, 3), elsewhere);
-    // The session that ended as 7 makes the next end 8.
     assert_eq!(
         session_of(&store, 4),
         SessionRecord {
@@ -237,7 +226,6 @@ fn a_session_is_found_by_the_name_its_cli_gives_it_in_any_workspace() {
         .expect("found");
     assert_eq!(found.id, sid(1));
     assert_eq!(found.workspace, workspace(1));
-    // The same name under another CLI is another session.
     assert_eq!(store.session_of_cli("pi", "cli-1").expect("find"), Some(pi));
     assert_eq!(
         store
@@ -256,13 +244,11 @@ fn a_session_id_or_cli_name_taken_is_refused_and_what_is_kept_stays() {
     let store = Store::open(&scratch.file()).expect("open");
     put_all(&store, &[session(1, 1)]);
 
-    // The id is taken, in another workspace and with other fields.
     let sentence = refusal_of(store.put_session(&SessionRecord {
         cli_session: "other".to_owned(),
         ..session(1, 2)
     }));
     assert!(sentence.contains(&id(1)), "{sentence}");
-    // The CLI's name for it is taken under the same Adapter.
     let sentence = refusal_of(store.put_session(&SessionRecord {
         cli_session: "cli-1".to_owned(),
         ..session(2, 2)
@@ -302,12 +288,8 @@ fn an_end_gets_one_more_than_the_largest_and_how_it_came_is_kept_each_of_three_w
             "session {n}"
         );
     }
-    // The number is the largest of all the workspaces', and one that ends later has the
-    // larger.
     store.set_ended(&sid(4), EndedBy::Cli).expect("end 4");
     assert_eq!(session_of(&store, 4).ended, Some(4));
-    // A session that ends again, as one resumed and quit again, gets the next number and
-    // the new way.
     store.set_ended(&sid(1), EndedBy::ProcessGone).expect("end");
     let again = session_of(&store, 1);
     assert_eq!(
@@ -315,7 +297,6 @@ fn an_end_gets_one_more_than_the_largest_and_how_it_came_is_kept_each_of_three_w
         (Some(5), Some(EndedBy::ProcessGone))
     );
 
-    // Nothing else of a session changes with its end.
     let mut expected = session(2, 1);
     expected.running = false;
     expected.ended = Some(2);
@@ -345,14 +326,12 @@ fn a_session_marked_running_has_neither_end_and_the_terminal_it_runs_in() {
             ..session(1, 1)
         }
     );
-    // The other one is as it was.
     let quit = session_of(&store, 2);
     assert_eq!(
         (quit.running, quit.ended, quit.ended_by),
         (false, Some(2), Some(EndedBy::Cli))
     );
 
-    // Running in no terminal clears the terminal.
     store.set_running(&sid(1), None).expect("resume");
     assert_eq!(session_of(&store, 1).terminal, None);
 
@@ -385,7 +364,6 @@ fn only_the_sessions_that_run_are_listed_in_every_workspace() {
         [sid(1), sid(4)]
     );
 
-    // One that is resumed is listed again, in the place it was first kept.
     store.set_running(&sid(2), None).expect("resume");
     assert_eq!(
         ids(&store.running_sessions().expect("running")),
@@ -438,19 +416,16 @@ fn a_review_of_no_agent_given_to_a_session_leaves_room_for_a_new_one_of_no_agent
         .set_review_agent(&ReviewId::new(id(10)), Some(&sid(1)))
         .expect("give the review");
     assert_eq!(agent_of(&store, 10), Some(id(1)));
-    // The unique index allows a new review of no agent now, and no second of that one.
     store
         .put_review(&review(11, 1, None))
         .expect("a new review of no agent");
     assert_eq!(agent_of(&store, 11), None);
     assert!(store.put_review(&review(12, 1, None)).is_err());
 
-    // A review of one session goes to another, as a takeover does.
     store
         .set_review_agent(&ReviewId::new(id(10)), Some(&sid(2)))
         .expect("move the review");
     assert_eq!(agent_of(&store, 10), Some(id(2)));
-    // Other workspaces keep their own review of no agent.
     store.put_review(&review(13, 2, None)).expect("workspace 2");
 }
 
@@ -471,7 +446,6 @@ fn a_review_given_back_to_no_agent_is_refused_while_the_workspace_has_one_alread
     );
     assert_eq!(agent_of(&store, 10), Some(id(1)));
 
-    // With none of no agent in the way it is allowed.
     store
         .set_review_agent(&ReviewId::new(id(11)), Some(&sid(1)))
         .expect("give the review");
@@ -507,12 +481,10 @@ fn the_steps_of_a_turn_come_back_in_number_order_with_the_lines_of_each_edit_as_
     let edit_none_said = StepRecord::Edit(PathBuf::from("b.rs"), None);
     let edit_empty = StepRecord::Edit(PathBuf::from("c.rs"), Some(vec![]));
     let command = StepRecord::Command("cargo test".to_owned());
-    // Put out of order: a reader still gets them by number.
     store.put_step(&tid(10), 3, &edit_none_said).expect("put 3");
     store.put_step(&tid(10), 1, &edit_many).expect("put 1");
     store.put_step(&tid(10), 4, &edit_empty).expect("put 4");
     store.put_step(&tid(10), 2, &command).expect("put 2");
-    // A step of another turn, with a number of its own.
     store
         .put_step(&tid(11), 1, &StepRecord::Read(PathBuf::from("a.rs")))
         .expect("put");
@@ -539,7 +511,6 @@ fn a_step_number_taken_twice_is_refused_and_the_first_step_stays() {
     let (_, steps) = store.turn(&tid(10)).expect("read").expect("kept");
     assert_eq!(steps, [StepRecord::Read(PathBuf::from("a.rs"))]);
 
-    // Steps count from 1, and belong to a turn that is kept.
     let step = StepRecord::Command("ls".to_owned());
     assert!(store.put_step(&tid(10), 0, &step).is_err());
     let sentence = refusal_of(store.put_step(&tid(99), 1, &step));
@@ -555,7 +526,6 @@ fn a_turn_is_kept_once_for_a_session_that_is_kept_and_a_number_of_it() {
     put_all(&store, &[session(1, 1)]);
     store.put_turn(&turn(10, 1, 1)).expect("put turn");
 
-    // The id is taken; the number is taken in that session; the session is not kept.
     let sentence = refusal_of(store.put_turn(&turn(10, 1, 2)));
     assert!(sentence.contains(&id(10)), "{sentence}");
     let sentence = refusal_of(store.put_turn(&turn(11, 1, 1)));
@@ -647,7 +617,6 @@ fn a_turn_kept_with_a_start_reads_it_back_with_the_turn_and_among_the_turns_of_i
         [started.clone(), turn(11, 1, 2)]
     );
 
-    // The start is not the state recorded at the end, and ending the turn leaves it.
     let end = "d".repeat(40);
     store
         .end_turn(&tid(10), TurnEndRecord::Finished, Some(&end))
@@ -680,7 +649,6 @@ fn a_start_set_later_is_read_back_by_both_calls_and_a_second_one_replaces_the_fi
         store.turn(&tid(11)).expect("turn").expect("kept").0,
         started(&first)
     );
-    // Only the turn named gets it.
     let turns = store.turns_of(&workspace(1)).expect("turns");
     assert_eq!(turns[0].start, None);
     assert_eq!(turns[1], started(&first));
@@ -695,7 +663,6 @@ fn a_start_set_later_is_read_back_by_both_calls_and_a_second_one_replaces_the_fi
         store.turns_of(&workspace(1)).expect("turns")[1],
         started(&second)
     );
-    // A turn that ended keeps what it ended with.
     let ended = &store.turns_of(&workspace(1)).expect("turns")[0];
     assert_eq!(ended.ended, Some(TurnEndRecord::Finished));
     assert_eq!(ended.state.as_deref(), Some("e".repeat(40).as_str()));
@@ -723,7 +690,6 @@ fn the_record_of_a_sessions_cli_is_kept_replaced_and_taken_away_for_that_session
     {
         let store = Store::open(&scratch.file()).expect("open");
         put_all(&store, &[session(1, 1), session(2, 1)]);
-        // A session starts with no record of its CLI's.
         assert_eq!(store.session_cli_record(&sid(1)).expect("read"), None);
 
         store
@@ -735,7 +701,6 @@ fn the_record_of_a_sessions_cli_is_kept_replaced_and_taken_away_for_that_session
         );
         assert_eq!(store.session_cli_record(&sid(2)).expect("read"), None);
 
-        // The last record a report named is the one kept.
         store
             .set_session_cli_record(&sid(1), Some(Path::new("/pi/sessions/moved.jsonl")))
             .expect("set it again");
@@ -744,8 +709,6 @@ fn the_record_of_a_sessions_cli_is_kept_replaced_and_taken_away_for_that_session
             .expect("set the other");
     }
 
-    // What the call returned is what the drive holds for a Store opened anew, and the
-    // record is no part of the session's own record.
     let store = Store::open(&scratch.file()).expect("open again");
     assert_eq!(
         store.session_cli_record(&sid(1)).expect("read"),
@@ -765,7 +728,6 @@ fn the_record_of_a_sessions_cli_is_kept_replaced_and_taken_away_for_that_session
         store.session_cli_record(&sid(2)).expect("read"),
         Some(PathBuf::from("/pi/sessions/two.jsonl"))
     );
-    // Taking away what is not there is no fault.
     store
         .set_session_cli_record(&sid(1), None)
         .expect("take it away again");
@@ -798,8 +760,6 @@ fn a_record_for_a_session_the_store_does_not_hold_is_refused_and_keeps_nothing()
     assert!(sentence.contains(&id(9)), "{sentence}");
     refusal_of(store.set_session_cli_record(&sid(9), None));
     assert_eq!(store.session_cli_record(&sid(9)).expect("read"), None);
-    // Nothing was made for the session: it is still not there, and a session kept later
-    // under that id starts with no record.
     assert_eq!(store.session(&sid(9)).expect("read"), None);
     put_all(&store, &[session(9, 1)]);
     assert_eq!(store.session_cli_record(&sid(9)).expect("read"), None);

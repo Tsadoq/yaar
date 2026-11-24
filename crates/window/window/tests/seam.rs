@@ -1,12 +1,6 @@
-//! Component test: a pane is added to the Window without a change to any pane.
-//!
-//! The third pane is written here, from `yaar_frame` and `gpui_kit` alone. It joins the
-//! Frame beside the unchanged list of the Window program, in a window whose Keeper is the
-//! built program of a world of its own. Its key is bound with the Frame's own `bind`, and
-//! its action reaches it through the routes the shared models hold.
-//!
-//! That the commits which add a pane change no file of another pane is read from the
-//! history, not by this test.
+//! Component test: a pane is added to the Window without a change to any pane. The third pane is
+//! written here from `yaar_frame` and `gpui_kit` alone,
+//! its key bound with the Frame's `bind`, its action routed through the shared models.
 
 mod common;
 
@@ -22,22 +16,12 @@ use yaar_frame::{Asks, BuildPane, Control, Models, Pane, Place};
 
 use common::{key_of, open_composed, wait_until};
 
-actions!(
-    seam,
-    [
-        /// The one action of the third pane.
-        Ping
-    ]
-);
+actions!(seam, [Ping]);
 
-/// A pane that watches the list of workspaces and takes one routed action.
 struct Third {
     focus: FocusHandle,
-    /// How many times the list told it changed.
     notified: usize,
-    /// The folder of the workspace the list had on screen when it last told.
     on_screen: Option<PathBuf>,
-    /// How many times the action reached it.
     pings: usize,
 }
 
@@ -71,7 +55,6 @@ impl Render for Third {
     }
 }
 
-/// The builder of the third pane, which hands the view it made to `kept`.
 fn third(kept: Rc<RefCell<Option<Entity<Third>>>>) -> BuildPane {
     Box::new(move |models, _, cx: &mut App| {
         let view = cx.new(|cx| Third::new(models, cx));
@@ -86,7 +69,7 @@ fn third(kept: Rc<RefCell<Option<Entity<Third>>>>) -> BuildPane {
     })
 }
 
-/// The key of the third pane's action: anywhere, on a key no control of the Window has.
+/// The third pane's action, bound anywhere on a key no control of the Window has.
 fn ping() -> Control {
     Control {
         title: "Ping",
@@ -108,7 +91,6 @@ fn a_third_pane_joins_the_frame_watches_the_shared_model_and_takes_a_routed_acti
     cx.update(|_, cx| yaar_frame::bind(&[ping()], cx));
     let ping_key = ping().key();
 
-    // It joins the Frame: the Window's panes, then it.
     let mut listed: Vec<&str> = yaar_window::panes().iter().map(|pane| pane.name).collect();
     listed.push("third");
     assert_eq!(
@@ -119,8 +101,6 @@ fn a_third_pane_joins_the_frame_watches_the_shared_model_and_takes_a_routed_acti
         cx.debug_bounds("frame-pane-third").is_some()
     });
 
-    // It watches the shared model: a folder opened by a user is the workspace on screen,
-    // and the pane has been told.
     let told = third.read_with(&cx, |third, _| third.notified);
     let folder = window.open_a_folder(&mut cx);
     third.read_with(&cx, |third, _| {
@@ -141,8 +121,6 @@ fn a_third_pane_joins_the_frame_watches_the_shared_model_and_takes_a_routed_acti
         "the shared model's own read"
     );
 
-    // It takes a routed action from where the focus is in the review pane, and nothing
-    // else runs.
     window.click_into_the_review_pane(&mut cx);
     assert!(window.focus_is_in(yaar_review_pane::KEY_CONTEXT, &mut cx));
     window.ran.borrow_mut().clear();
@@ -150,9 +128,8 @@ fn a_third_pane_joins_the_frame_watches_the_shared_model_and_takes_a_routed_acti
     assert_eq!(window.ran.take(), [Ping.name()], "what the key ran");
     assert_eq!(third.read_with(&cx, |third, _| third.pings), 1);
 
-    // And from the terminal pane while it holds no terminal: the key of Next Pane puts the
-    // focus on the pane itself, outside any program. On Linux a key that works anywhere
-    // does nothing inside a terminal, which is why no terminal is open yet.
+    // On Linux a key that works anywhere does nothing inside a terminal, so no terminal is open
+    // yet: Next Pane puts the focus on the pane itself.
     cx.simulate_keystrokes(&key_of("Next Pane"));
     window.ran.borrow_mut().clear();
     assert!(window.focus_is_in(yaar_terminal_pane::KEY_CONTEXT, &mut cx));
@@ -167,8 +144,6 @@ fn a_third_pane_joins_the_frame_watches_the_shared_model_and_takes_a_routed_acti
         "the action opened no terminal"
     );
 
-    // With no pane changed: the review pane and the terminal pane answer their own keys in
-    // the same window, each read through its model.
     window.click_into_the_review_pane(&mut cx);
     let layout = window.review.read_with(&cx, |pane, _| pane.layout());
     cx.simulate_keystrokes("s");

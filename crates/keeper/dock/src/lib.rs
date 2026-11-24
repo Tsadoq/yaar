@@ -1,30 +1,4 @@
-//! Dock (`H-TERM`).
-//!
-//! Owns: pseudo-terminals and their children, the ring of recent output, the environment of each shell, plain quit and stop-everything quit, the watch for the turn marks in the terminal bytes.
-//!
-//! Surface:
-//! - [`Dock`], which opens terminals, hands each the bytes typed for it, tells it its new
-//!   size, tells what its program writes and how the program ended, and stops them all;
-//! - [`TerminalId::random`], the id a caller gives a terminal before it is opened, so
-//!   that the caller can name it in the program's environment;
-//! - [`Start`], what a terminal runs, with [`Start::shell`] for the user's shell and
-//!   [`Start::program`] for any other program, and [`user_shell`]; [`Start::with`], the
-//!   [`Entry`]s of the app a shell of the app gets on top of the user's own environment;
-//! - [`Size`], [`TerminalId`], [`Event`], [`Ending`] and [`DockError`], in the Dock's own
-//!   words: the Keeper program puts them into those of the Link;
-//! - [`Dock::attach`], the newest output of a terminal, kept in a ring of [`RING_BYTES`],
-//!   handed to whoever attaches with nothing lost or told twice after it, and
-//!   [`Dock::redraw`], which asks a terminal's program to draw its screen again.
-//!
-//! The Dock knows nothing of the Link, of Windows or of agents. It runs programs on
-//! pseudo-terminals and passes bytes both ways. Of a program's environment it decides
-//! only what says which terminal the program runs in ([`TERMINAL_VARIABLES`],
-//! [`LEFT_OUT_VARIABLES`]); the rest comes from the caller through [`Start::env`] and
-//! [`Start::with`]. Of what a program writes it keeps the newest [`RING_BYTES`], and it
-//! looks for the runs of bytes the caller asked it to watch for, [`Start::marks`],
-//! telling each as [`Event::Mark`]: what they mean is the caller's to say.
-//!
-//! No interface code belongs here.
+//! Pseudo-terminals and their programs. The Dock knows nothing of the Link, Windows or agents.
 
 mod marks;
 mod pty;
@@ -47,15 +21,10 @@ use std::time::{Duration, Instant};
 
 use terminal::Terminal;
 
-/// How long each step of [`Dock::stop_all`] waits for the programs before the next,
-/// harder one: hang-up, then terminate, then kill.
 pub const STOP_STEP: Duration = Duration::from_secs(1);
 
-/// The signals of [`Dock::stop_all`], in the order they are sent.
 const STOP_SIGNALS: [libc::c_int; 3] = [libc::SIGHUP, libc::SIGTERM, libc::SIGKILL];
 
-/// The signals a program starts with their default action, whatever the Keeper made of
-/// them.
 const RESET_SIGNALS: [libc::c_int; 11] = [
     libc::SIGHUP,
     libc::SIGINT,
@@ -70,13 +39,7 @@ const RESET_SIGNALS: [libc::c_int; 11] = [
     libc::SIGWINCH,
 ];
 
-/// The variables every program of a terminal finds set, whatever the Keeper's own
-/// environment holds: what kind of terminal it runs in. `TERM` names a description every
-/// system has, and the app's emulator answers as the terminal that name stands for.
-/// `TERM_PROGRAM_VERSION` is the app's version, which every crate of the workspace has.
-///
-/// They live here, not with the caller, because they describe the terminal the Dock
-/// makes, the same for every program in it.
+/// `TERM` names a description every system has, which the app's emulator answers.
 pub const TERMINAL_VARIABLES: [(&str, &str); 4] = [
     ("TERM", "xterm-256color"),
     ("COLORTERM", "truecolor"),
@@ -84,10 +47,6 @@ pub const TERMINAL_VARIABLES: [(&str, &str); 4] = [
     ("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION")),
 ];
 
-/// Variables of the Keeper's own environment that no program of a terminal gets: each
-/// names another terminal, a multiplexer or an editor's connection that the Keeper was
-/// started from. A program that found them beside [`TERMINAL_VARIABLES`] would take the
-/// app's terminal for that one, and send it what only that one understands.
 pub const LEFT_OUT_VARIABLES: [&str; 28] = [
     "TERM_SESSION_ID",
     "ITERM_SESSION_ID",
@@ -111,8 +70,6 @@ pub const LEFT_OUT_VARIABLES: [&str; 28] = [
     "TMUX",
     "TMUX_PANE",
     "STY",
-    // An editor's connection, or another editor's terminal: a Keeper started from an
-    // editor must not hand it on, and the app uses no editor connection.
     "CLAUDE_CODE_SSE_PORT",
     "ENABLE_IDE_INTEGRATION",
     "VSCODE_INJECTION",
@@ -121,23 +78,16 @@ pub const LEFT_OUT_VARIABLES: [&str; 28] = [
     "ZED_TERM",
 ];
 
-/// The most bytes that wait for one program to read them; see [`Dock::write`].
 pub const MAX_WAITING_INPUT: usize = 16 * 1024 * 1024;
 
-/// Names one terminal of the Dock: 32 lowercase hexadecimal digits from `/dev/urandom`,
-/// made by [`TerminalId::random`] before the terminal is opened, so that no two terminals
-/// share one, also across restarts of the Keeper.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TerminalId(String);
 
 impl TerminalId {
-    /// The id with this text, as the Keeper hands it back.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
-    /// A new id: 16 bytes of `/dev/urandom` as 32 lowercase hexadecimal digits. Fails
-    /// only when `/dev/urandom` cannot be read.
     pub fn random() -> io::Result<TerminalId> {
         use std::io::Read;
         let mut bytes = [0u8; 16];
@@ -147,7 +97,6 @@ impl TerminalId {
         ))
     }
 
-    /// The text of the id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -159,108 +108,68 @@ impl fmt::Display for TerminalId {
     }
 }
 
-/// The size of a terminal in character cells. A value under 1 is taken as 1.
+/// A value under 1 is taken as 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Size {
-    /// Characters on a line.
     pub columns: u16,
-    /// Lines on the screen.
     pub rows: u16,
 }
 
-/// How the program of a terminal ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ending {
-    /// It exited by itself, with this status.
     Exited(i32),
-    /// A signal ended it: this one.
     Signalled(i32),
 }
 
-/// What the Dock tells about one terminal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    /// The program wrote these bytes. Never empty.
+    /// Never empty.
     Output(Vec<u8>),
-    /// The run of bytes `Start::marks[n]` was found in what the program wrote, also when
-    /// it came in two reads. Told after the [`Event::Output`] that held its last byte,
-    /// once for each time it was found.
+    /// The run `Start::marks[n]` was found, also across two reads. Told after the
+    /// [`Event::Output`] holding its last byte, once per find.
     Mark(usize),
-    /// The program has ended and nothing more is told of this terminal. It comes once,
-    /// last, after every [`Event::Output`] of the terminal.
     Ended(Ending),
 }
 
-/// How many of the newest bytes a program wrote the Dock keeps for each terminal, for a
-/// Window that attaches later: 1 MiB, which P4's measures found enough to give a screen
-/// and its recent history back whole, and little against the memory limit.
 pub const RING_BYTES: usize = 1024 * 1024;
 
-/// One thing a shell of the app gets on top of the user's own environment, beside what
-/// says which terminal it runs in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
-    /// A variable set to this value, as the address of the Keeper's socket or the id of
-    /// the terminal.
     Variable {
-        /// The variable.
         name: OsString,
-        /// Its value.
         value: OsString,
     },
-    /// A variable whose value is a list of paths parted by `:`: `path` is added at its
-    /// end, after what the Keeper's own environment holds, or is its whole value where it
-    /// holds none.
+    /// `path` is added after the Keeper's value with `:`, or is the whole value where it holds
+    /// none.
     PathList {
-        /// The variable.
         name: OsString,
-        /// The path added.
         path: PathBuf,
     },
 }
 
-/// Where the events of one terminal go. Called on a thread of the Dock's own, one event
-/// at a time and in order. It should hand the event on and return: the program's output
-/// waits while it runs.
+/// Runs on a thread of the Dock, one event at a time; the output waits while it runs.
 pub type Events = Box<dyn FnMut(Event) + Send + 'static>;
 
-/// What a terminal runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Start {
-    /// The program, by its path.
     pub program: PathBuf,
-    /// Its arguments, without the program's own name.
     pub args: Vec<OsString>,
-    /// The folder it starts in.
     pub folder: PathBuf,
-    /// The size of its terminal at the start.
     pub size: Size,
-    /// Variables set for the program on top of the Keeper's own environment and of
-    /// [`TERMINAL_VARIABLES`]: what the caller adds, as the id of the terminal. Of two
-    /// with one name, the later wins.
     pub env: Vec<(OsString, OsString)>,
-    /// The runs of bytes to watch for in what the program writes, each told as
-    /// [`Event::Mark`] by its index here. Empty: none is watched for.
     pub marks: Vec<Vec<u8>>,
 }
 
 impl Start {
-    /// The user's shell, [`user_shell`], as a login shell, its one argument `-l`, in
-    /// `folder`.
     pub fn shell(folder: PathBuf, size: Size) -> Start {
         Start::program(user_shell(), vec![OsString::from("-l")], folder, size)
     }
 
-    /// The user's shell, [`user_shell`], as an interactive login shell told to run
-    /// `command`, with the arguments `-l`, `-i`, `-c` and the command, in `folder`: what
-    /// a launcher of an agent CLI runs, so that the CLI finds what it would find typed in
-    /// a shell of the app. The terminal ends when the command does.
     pub fn launcher(folder: PathBuf, size: Size, command: &str) -> Start {
         let args = ["-l", "-i", "-c", command].map(OsString::from).to_vec();
         Start::program(user_shell(), args, folder, size)
     }
 
-    /// Any program, with these arguments, in `folder`.
     pub fn program(program: PathBuf, args: Vec<OsString>, folder: PathBuf, size: Size) -> Start {
         Start {
             program,
@@ -272,20 +181,10 @@ impl Start {
         }
     }
 
-    /// This start with the app's `entries` added to [`Start::env`], each worked out from
-    /// the Keeper's own environment: a [`Entry::Variable`] as it is, a [`Entry::PathList`]
-    /// added after that variable's value.
-    /// Two entries of one call that name one variable build on each other.
-    /// Nothing else of the environment changes: the program's environment differs from
-    /// the Keeper's by these entries, by [`TERMINAL_VARIABLES`] and by
-    /// [`LEFT_OUT_VARIABLES`] alone.
     pub fn with(self, entries: &[Entry]) -> Start {
         self.with_environment(entries, |name| std::env::var_os(name))
     }
 
-    /// [`Start::with`], with the look at the Keeper's environment handed in. Entries of
-    /// one call that name one variable build on each other, so that two paths added to
-    /// one list are both there; what the Keeper holds is the base of the first.
     fn with_environment(
         mut self,
         entries: &[Entry],
@@ -312,8 +211,6 @@ impl Start {
     }
 }
 
-/// What `name` holds for the entries of one call of [`Start::with`]: what an earlier
-/// entry of the call gave it, else what the Keeper's environment holds, else nothing.
 fn held_value(
     added: &HashMap<OsString, OsString>,
     keeper: &impl Fn(&OsStr) -> Option<OsString>,
@@ -326,28 +223,18 @@ fn held_value(
         .unwrap_or_default()
 }
 
-/// The user's shell: `SHELL` from the Keeper's environment when it names, by an absolute
-/// path, a file that can be run; else the shell of the user's entry in the system's list
-/// of users; else `/bin/sh`. The rule is the Link's, which the Window uses too.
+/// `SHELL` when an absolute path to a runnable file; else the user's entry in the user list; else
+/// `/bin/sh`.
 pub use yaar_link::user_shell;
 
-/// Why the Dock did not do what it was asked.
 #[derive(Debug)]
 pub enum DockError {
-    /// The terminal could not be made, or its program could not be started: it is not
-    /// there, it cannot be run, or its folder is not there.
     Start {
-        /// The program that was to run.
         program: PathBuf,
-        /// What the system said.
         reason: io::Error,
     },
-    /// The Dock holds no terminal by this id: it never opened one, its program has
-    /// ended, or [`Dock::stop_all`] is under way and the terminal no longer takes what is
-    /// typed to it, although its program may still be there.
+    /// No terminal by this id: never opened, its program ended, or [`Dock::stop_all`] is under way.
     UnknownTerminal(TerminalId),
-    /// The Dock holds a terminal by this id already, running or ended: an id names one
-    /// terminal only.
     TakenId(TerminalId),
 }
 
@@ -365,29 +252,19 @@ impl fmt::Display for DockError {
 
 impl std::error::Error for DockError {}
 
-/// What the Dock and the threads of its terminals share.
 pub(crate) struct Inner {
     state: Mutex<State>,
-    /// Told when a terminal's events are over, and when a call of `open` is done.
     told: Condvar,
-    /// The sessions of terminals whose end was told while a process of theirs was still
-    /// there. Kept apart from `state` because finding who is left takes a look at every
-    /// process of the system. Only sessions that are not empty are kept: see
-    /// [`Inner::left_behind_sessions`].
+    /// Separate from `state`: finding who is left looks at every process of the system.
     left_behind: Mutex<Vec<session::Remembered>>,
 }
 
 #[derive(Default)]
 struct State {
-    /// Every id given to `open` that made a terminal, and an `open` that is making one.
     taken: HashSet<TerminalId>,
-    /// The terminals whose end has not been told.
     live: HashMap<TerminalId, Arc<Terminal>>,
-    /// Terminals whose thread of events has not finished.
     untold: usize,
-    /// How many calls of `open` are making a terminal.
     opening: usize,
-    /// How many calls of `stop_all` are running: no terminal is opened meanwhile.
     stopping: usize,
 }
 
@@ -398,12 +275,10 @@ impl Inner {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The terminal no longer runs a program.
     pub(crate) fn forget(&self, id: &TerminalId) {
         self.state().live.remove(id);
     }
 
-    /// A terminal's events are over.
     pub(crate) fn told(&self) {
         let mut state = self.state();
         state.untold -= 1;
@@ -411,14 +286,11 @@ impl Inner {
         self.told.notify_all();
     }
 
-    /// Notes the session of a terminal whose program is gone when a process is left in it.
     pub(crate) fn leave_behind(&self, session: libc::pid_t) {
         let mut left = self
             .left_behind
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Sessions that have emptied since are let go, so the list stays as long as what
-        // is really left behind.
         *left = left
             .iter()
             .filter_map(session::Remembered::renewed)
@@ -426,10 +298,8 @@ impl Inner {
         left.extend(session::Remembered::of(session));
     }
 
-    /// The sessions with a process left behind by a terminal that has ended, as they are
-    /// now. A session whose last process is gone is let go here, and it is let go
-    /// before the system can give its id to a process that starts a session of its own,
-    /// which a stop would then signal as if it were ours.
+    /// A session whose last process is gone is let go here, before the system reuses its id for a
+    /// new session that a stop would signal.
     fn left_behind_sessions(&self) -> Vec<libc::pid_t> {
         let mut left = self
             .left_behind
@@ -451,24 +321,12 @@ impl Inner {
     }
 }
 
-/// The terminals of the Keeper and the programs in them.
-///
-/// Each terminal is a pseudo-terminal whose program runs in a session of its own, with
-/// the terminal as its controlling terminal. A thread of the Dock reads what the program
-/// writes and hands it to the terminal's [`Events`]; what is written to a terminal waits
-/// in a queue of its own, so that no call of the Dock waits for a program.
-///
-/// Shared by the Keeper's threads: every call takes `&self`. Dropping it stops every
-/// program, as [`Dock::stop_all`] does.
 pub struct Dock {
     inner: Arc<Inner>,
-    /// Three threads for each terminal opened: one reads the program's output, one writes
-    /// what is typed to it, one collects it.
     threads: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl Dock {
-    /// A Dock that holds no terminal.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Dock {
         Dock {
@@ -481,29 +339,15 @@ impl Dock {
         }
     }
 
-    /// Opens a terminal of `start.size` under the name `id`, which the caller made with
-    /// [`TerminalId::random`], and starts `start.program` in it. From then on `events` is
-    /// told what the program writes, and at last how it ended.
-    ///
-    /// The program gets the Keeper's environment without [`LEFT_OUT_VARIABLES`], with
-    /// [`TERMINAL_VARIABLES`] and then `start.env` set on top; its standard input, output
-    /// and error are the terminal; and it holds no other descriptor of the Keeper: no
-    /// socket, no pipe, no other terminal. An `id` the Dock holds already is refused with
-    /// [`DockError::TakenId`], and nothing is started. While [`Dock::stop_all`] runs, no
-    /// terminal is opened: [`DockError::Start`] says so.
     pub fn open(&self, id: TerminalId, start: Start, events: Events) -> Result<(), DockError> {
         {
             let mut state = self.inner.state();
-            // A terminal opened while the others are being stopped would be missed by the
-            // stop, and the stop would wait for it.
             if state.stopping > 0 {
                 return Err(DockError::Start {
                     program: start.program,
                     reason: io::Error::other("the Dock is stopping every terminal"),
                 });
             }
-            // The id is claimed before anything is made, so that two calls with one id
-            // cannot both start a program.
             if !state.taken.insert(id.clone()) {
                 return Err(DockError::TakenId(id));
             }
@@ -542,9 +386,8 @@ impl Dock {
             .stderr(Stdio::from(slave.try_clone()?));
         #[cfg(target_os = "macos")]
         let descriptors = pty::descriptor_limit();
-        // SAFETY: the closure runs between fork and exec and calls only what is safe
-        // there: `setsid`, `ioctl` and `fcntl`, with no allocation and no lock. An error
-        // is made from the error number alone.
+        // SAFETY: the closure runs between fork and exec and calls only `setsid`, `ioctl`, `signal`
+        // and `fcntl`: no allocation, no lock.
         unsafe {
             command.pre_exec(move || {
                 if libc::setsid() < 0 {
@@ -553,15 +396,14 @@ impl Dock {
                 if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
                     return Err(io::Error::last_os_error());
                 }
-                // A Keeper started as a daemon may ignore some signals, and a program
-                // inherits that: it would not take the hang-up of a closing terminal.
+                // A daemonised Keeper may ignore signals and a program inherits that: it would not
+                // take the hang-up of a closing terminal.
                 for signal in RESET_SIGNALS {
                     libc::signal(signal, libc::SIG_DFL);
                 }
-                // The standard library on macOS makes some descriptors and only then
-                // marks them close-on-exec, so one made by another thread at that moment
-                // reaches here open. Marked, not closed: the library reports a failed
-                // `exec` through a pipe of its own.
+                // std on macOS makes some descriptors and only then marks them close-on-exec, so
+                // one made by another thread at that moment reaches here open. Marked, not closed:
+                // std reports a failed `exec` through a pipe of its own.
                 #[cfg(target_os = "macos")]
                 for descriptor in 3..descriptors {
                     libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC);
@@ -570,8 +412,8 @@ impl Dock {
             });
         }
         let spawned = command.spawn();
-        // The command holds the slave. While it or ours is open here, the end of the
-        // program would not show on the master.
+        // The command holds the slave: while it or ours is open here, the program's end would not
+        // show on the master.
         drop(command);
         drop(slave);
         let child = spawned?;
@@ -585,10 +427,7 @@ impl Dock {
         let mut started = Vec::with_capacity(3);
         let served = self.serve(id, &terminal, child, events, &mut started);
         if served.is_err() && !started.is_empty() {
-            // A program nobody serves is not left running. The thread that collects it, which
-            // did start, ends the others.
-            //
-            // SAFETY: `kill` only sends.
+            // SAFETY: `kill` only sends. The waiter thread, which did start, ends the others.
             unsafe { libc::kill(terminal.pid(), libc::SIGKILL) };
         }
         let mut threads = self.threads();
@@ -597,9 +436,6 @@ impl Dock {
         served
     }
 
-    /// Starts the three threads of a terminal, the ones that start in `started`. A thread
-    /// that cannot start is an error of the call, with nothing of the terminal left in the
-    /// Dock's books.
     fn serve(
         &self,
         id: &TerminalId,
@@ -620,10 +456,7 @@ impl Dock {
         match waiting {
             Ok(thread) => started.push(thread),
             Err(error) => {
-                // The closure and the child with it are gone: kill and collect the
-                // program here.
-                //
-                // SAFETY: `kill` only sends, and the program is ours and not yet collected.
+                // SAFETY: `kill` only sends, to our own program, not yet collected.
                 unsafe {
                     libc::kill(terminal.pid(), libc::SIGKILL);
                     libc::waitpid(terminal.pid(), std::ptr::null_mut(), 0);
@@ -668,11 +501,7 @@ impl Dock {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Hands `bytes` to the program of `terminal`, after everything handed to it before,
-    /// and returns at once: the bytes wait until the program reads them. While
-    /// [`MAX_WAITING_INPUT`] bytes wait, what more is handed is dropped, and nothing
-    /// reports it: the call still returns `Ok`. A terminal whose program has ended, or that
-    /// [`Dock::stop_all`] is stopping, takes nothing: [`DockError::UnknownTerminal`].
+    /// Returns at once. Past [`MAX_WAITING_INPUT`] waiting bytes, more is dropped silently.
     pub fn write(&self, terminal: &TerminalId, bytes: &[u8]) -> Result<(), DockError> {
         if self.inner.live(terminal)?.type_in(bytes) {
             Ok(())
@@ -681,32 +510,18 @@ impl Dock {
         }
     }
 
-    /// Gives `terminal` a new size. The system tells its program with the signal for a
-    /// changed window size.
     pub fn resize(&self, terminal: &TerminalId, size: Size) -> Result<(), DockError> {
         pty::set_size(self.inner.live(terminal)?.master(), size)
-            // The system refuses only when the terminal has been closed under the Dock.
             .map_err(|_| DockError::UnknownTerminal(terminal.clone()))
     }
 
-    /// How many terminals hold a program that has not ended. The Keeper stays while this
-    /// is not 0.
     pub fn running(&self) -> usize {
         self.inner.state().live.len()
     }
 
-    /// Hands `attach` the newest output of `terminal` the Dock kept, at most
-    /// [`RING_BYTES`], and whether older output was dropped to keep within that, while no
-    /// [`Event`] of the terminal is told: what `attach` arranges for the output that
-    /// follows, as adding a Window to those it goes to, gets every byte after the kept
-    /// ones, and none twice. The kept output may begin in the middle of a character or of
-    /// an escape sequence. The terminal's output waits while `attach` runs, so it should
-    /// add the Window where the events go and return, and call nothing of the Dock. Nor
-    /// should the caller hold, while it calls `attach`, a lock that the terminal's
-    /// [`Events`] takes: the output is told under the lock `attach` waits for, so the
-    /// two would wait for each other.
-    /// Refused with [`DockError::UnknownTerminal`] for a terminal whose program has ended,
-    /// or that the Dock never opened.
+    /// Calls `attach` with the kept output and whether older output was dropped, while no event is
+    /// told: later output reaches what `attach` sets up, none twice. It must return at once and not
+    /// call the Dock, and the caller must hold no lock that the [`Events`] take.
     pub fn attach(
         &self,
         terminal: &TerminalId,
@@ -716,34 +531,20 @@ impl Dock {
         Ok(())
     }
 
-    /// Asks the program of `terminal` to draw its screen again: the signal for a changed
-    /// window size, sent to the terminal's foreground process group, also when the size
-    /// did not change.
     pub fn redraw(&self, id: &TerminalId) -> Result<(), DockError> {
         let terminal = self.inner.live(id)?;
         // SAFETY: `tcgetpgrp` only reads, from a descriptor the terminal keeps open.
         let group = unsafe { libc::tcgetpgrp(terminal.master()) };
         if group <= 0 {
-            // The system refuses only when the terminal has been closed under the Dock.
             return Err(DockError::UnknownTerminal(id.clone()));
         }
-        // SAFETY: `kill` only sends; a group that went since the look answers `ESRCH`,
-        // which means there is no program left to ask.
+        // SAFETY: `kill` only sends; `ESRCH` from a vanished group is fine.
         unsafe { libc::kill(-group, libc::SIGWINCH) };
         Ok(())
     }
 
-    /// Stops every program and what it started, and returns when none is left: the
-    /// hang-up signal to every process of each terminal's session, then to those still
-    /// there after [`STOP_STEP`] the terminate signal, and after one more step the kill
-    /// signal. A terminal's session is the one its program leads: the program, its
-    /// children, and the jobs a shell put in process groups of their own, also those still
-    /// there when the program has ended. A process that left the session, as a daemon
-    /// does, is not reached. Each terminal's [`Events`] is told its end, as when a program
-    /// ends by itself.
-    ///
-    /// What waits to be typed to a program is dropped at once, and while the stop runs
-    /// [`Dock::open`] refuses.
+    /// Hangs up, then after [`STOP_STEP`] terminates, then kills every process of each terminal's
+    /// session. A process that left its session, as a daemon does, is not reached.
     pub fn stop_all(&self) {
         let sessions = self.begin_stopping();
         let _stopping = Stopping(&self.inner);
@@ -753,8 +554,7 @@ impl Dock {
                 break;
             }
             for pid in members {
-                // SAFETY: `kill` only sends; a process that went since the listing
-                // answers `ESRCH`, which is what is wanted of it.
+                // SAFETY: `kill` only sends; `ESRCH` from a vanished process is fine.
                 unsafe { libc::kill(pid, signal) };
             }
             let deadline = Instant::now() + STOP_STEP;
@@ -772,13 +572,11 @@ impl Dock {
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
             }
         }
-        // What the stop has emptied is let go now, not at the next stop.
+        // Called for its side effect: lets go now of the sessions the stop emptied, not at the next
+        // stop.
         self.inner.left_behind_sessions();
     }
 
-    /// Refuses further terminals, waits for those being made, stops what is typed to the
-    /// terminals there are, and gives the sessions to stop: the programs' ids are the
-    /// sessions'. The lock is not held while waiting for the signals.
     fn begin_stopping(&self) -> Vec<libc::pid_t> {
         let terminals: Vec<Arc<Terminal>> = {
             let mut state = self.inner.state();
@@ -797,8 +595,8 @@ impl Dock {
         }
         let mut sessions: Vec<libc::pid_t> =
             terminals.iter().map(|terminal| terminal.pid()).collect();
-        // Read after the live ones: a terminal is put here before it is forgotten, so one
-        // that ended between the two reads is in this list.
+        // Read after the live ones: a terminal enters this list before it is forgotten, so none is
+        // missed.
         sessions.extend(self.inner.left_behind_sessions());
         sessions.sort_unstable();
         sessions.dedup();
@@ -806,7 +604,6 @@ impl Dock {
     }
 }
 
-/// Ends the refusal of new terminals when a stop is over, however it ends.
 struct Stopping<'a>(&'a Inner);
 
 impl Drop for Stopping<'_> {
@@ -817,7 +614,6 @@ impl Drop for Stopping<'_> {
 
 impl Drop for Dock {
     fn drop(&mut self) {
-        // Nothing the Dock started outlives it.
         self.stop_all();
         for thread in std::mem::take(&mut *self.threads()) {
             let _ = thread.join();
@@ -848,7 +644,6 @@ mod tests {
         assert_eq!(one.to_string(), one.as_str());
     }
 
-    /// A session leader that is killed and collected when the test ends, however it ends.
     struct Leader(std::process::Child);
 
     impl Drop for Leader {
@@ -858,7 +653,6 @@ mod tests {
         }
     }
 
-    /// A process that leads a session of its own, as a program of a terminal does.
     fn session_leader() -> Leader {
         let mut command = Command::new("sleep");
         command.arg("300");
@@ -884,9 +678,7 @@ mod tests {
 
         dock.stop_all();
         leader.0.wait().expect("collect the leader");
-        // Its id is free for any process to take as a session of its own: a later stop
-        // would signal that one's processes if the Dock still named it.
-        // Read as the stop left it: asking for the sessions would let it go by itself.
+        // Read the list directly: `left_behind_sessions` would itself let the emptied session go.
         assert!(
             dock.inner.left_behind.lock().expect("the list").is_empty(),
             "the emptied session is still kept"
@@ -898,8 +690,6 @@ mod tests {
         let dock = Dock::new();
         let leader = session_leader();
         let session = leader.0.id() as libc::pid_t;
-        // The list names a session by this id that is not the leader's: the one that was
-        // noted emptied, and the id went to a process that began a session of its own.
         let forged = session::Remembered::of(session)
             .expect("the leader is in its session")
             .begun_at_another_time();
@@ -911,7 +701,6 @@ mod tests {
 
         let stopping = Instant::now();
         dock.stop_all();
-        // The stop must not have signalled that process: it is not the Dock's.
         let mut leader = leader;
         assert!(
             leader.0.try_wait().expect("ask the leader").is_none(),
@@ -930,7 +719,6 @@ mod tests {
         let mut leader = session_leader();
         let session = leader.0.id() as libc::pid_t;
         dock.inner.leave_behind(session);
-        // Looking at the list, as every stop does, does not let go of what is there.
         assert_eq!(dock.inner.left_behind_sessions(), vec![session]);
         assert_eq!(dock.inner.left_behind_sessions(), vec![session]);
         leader.0.kill().expect("kill the leader");

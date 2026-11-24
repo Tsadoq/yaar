@@ -1,11 +1,5 @@
-//! A stop time told to a Navigator that runs is in force at once (NAV-17), shown with the
-//! stand-in language server and a clock of the test's own.
-//!
-//! Every wait is for a state the Navigator tells, with a deadline; no test sleeps. A clause
-//! that says a server is still there is read after a barrier: the Navigator handles one event
-//! at a time, in order, and tells one list of its servers for each `OnScreen` ask that changes
-//! nothing, so the list told for a later ask comes after everything an earlier one made it do,
-//! and the stop time told before it is the one the clock is read against.
+//! Waits are for told states with a deadline, never sleeps. Events are handled in order, so a
+//! server list read after `barrier` reflects every earlier ask.
 
 mod support;
 
@@ -17,7 +11,6 @@ use support::*;
 use yaar_link::{RepositoryId, WorkspaceId};
 use yaar_navigator::{Ask, Clock, STOP_AFTER, ServerState, State, Told, WorkspaceRoot};
 
-/// A time that moves only when the test moves it.
 struct TestClock {
     base: Instant,
     offset: Mutex<Duration>,
@@ -42,7 +35,6 @@ impl Clock for TestClock {
     }
 }
 
-/// What a workspace of a repository is, for the Navigator.
 fn root_of(workspace: &WorkspaceId, repository: &RepositoryId, folder: &Path) -> WorkspaceRoot {
     WorkspaceRoot {
         id: workspace.clone(),
@@ -51,8 +43,6 @@ fn root_of(workspace: &WorkspaceId, repository: &RepositoryId, folder: &Path) ->
     }
 }
 
-/// Sends `OnScreen(Some(workspace))` again, which changes nothing and is told as the list of
-/// the Navigator's servers, and gives that list.
 fn barrier(running: &mut Running, workspace: &WorkspaceId) -> Vec<ServerState> {
     running.ask(Ask::OnScreen(Some(workspace.clone())));
     match running.wait_told("the list of servers told for the ask", DEADLINE, |told| {
@@ -63,14 +53,12 @@ fn barrier(running: &mut Running, workspace: &WorkspaceId) -> Vec<ServerState> {
     }
 }
 
-/// The pid of the stand-in's server of `workspace` in a list.
 fn pid_in(list: &[ServerState], workspace: &WorkspaceId) -> Option<u32> {
     list.iter()
         .find(|state| state.workspace == *workspace && state.language == "standin")
         .and_then(|state| state.pid)
 }
 
-/// A row whose one server is the stand-in found on the machine's search path.
 fn row(log: &Path) -> String {
     format!(
         "[standin]\n\
@@ -87,9 +75,6 @@ fn row(log: &Path) -> String {
     )
 }
 
-/// A Navigator on a clock of the test's own with `ws1`, a workspace with a server, and `ws2`,
-/// one with none, both listed; `ws1` is on screen and its server ready. Gives the
-/// Navigator, the clock, the two workspaces and the pid of `ws1`'s server.
 fn started(
     scratch: &Scratch,
     log: &str,
@@ -121,8 +106,6 @@ fn a_shorter_stop_time_told_to_a_running_navigator_stops_an_idle_server_that_the
     let scratch = Scratch::new();
     let (mut running, clock, ws1, ws2, pid) = started(&scratch, "shorter.log");
 
-    // Off screen. Two minutes is well short of the ten the Navigator started with: the server
-    // stays, so the stop that follows is the new time's and no other.
     let list = barrier(&mut running, &ws2);
     assert_eq!(pid_in(&list, &ws1), Some(pid));
     clock.advance(Duration::from_secs(120));
@@ -130,8 +113,7 @@ fn a_shorter_stop_time_told_to_a_running_navigator_stops_an_idle_server_that_the
     assert_eq!(pid_in(&list, &ws1), Some(pid), "stopped by the old time");
     assert!(is_alive(pid));
 
-    // A minute told: the two minutes already passed are more than it, and the very next look
-    // at the clock stops the server, before the list that says so.
+    // The two minutes passed exceed the minute told: the next look at the clock stops the server.
     running.ask(Ask::StopAfter(Duration::from_secs(60)));
     let list = barrier(&mut running, &ws2);
     assert_eq!(pid_in(&list, &ws1), None, "the idle server is still listed");
@@ -145,19 +127,15 @@ fn a_longer_stop_time_told_to_a_running_navigator_keeps_an_idle_server_past_the_
     let scratch = Scratch::new();
     let (mut running, clock, ws1, ws2, pid) = started(&scratch, "longer.log");
 
-    // Twenty minutes told while the server is on screen, then it goes off screen.
     running.ask(Ask::StopAfter(Duration::from_secs(20 * 60)));
     let list = barrier(&mut running, &ws2);
     assert_eq!(pid_in(&list, &ws1), Some(pid));
 
-    // Fifteen minutes: past the ten the Navigator started with, short of the twenty told.
     clock.advance(Duration::from_secs(15 * 60));
     let list = barrier(&mut running, &ws2);
     assert_eq!(pid_in(&list, &ws1), Some(pid), "stopped by the old time");
     assert!(is_alive(pid));
 
-    // The twenty told, reached: the control half, so that the server was kept by the time and
-    // not by something else.
     clock.advance(Duration::from_secs(5 * 60));
     let list = barrier(&mut running, &ws2);
     assert_eq!(pid_in(&list, &ws1), None);

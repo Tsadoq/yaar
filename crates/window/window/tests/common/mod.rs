@@ -1,10 +1,3 @@
-//! What the component tests of the composed Window share: the Window opened as the program
-//! opens it, in a world of its own with its real Keeper behind a tap, and the few things
-//! a user does that every test needs (a click into a pane, a folder opened, a key pressed).
-//!
-//! A test file starts with `mod common;` and takes what it needs.
-
-// Each test program takes what it needs of this.
 #![allow(dead_code)]
 
 use std::cell::RefCell;
@@ -30,54 +23,37 @@ use yaar_terminal_pane::TerminalPane;
 
 pub use yaar_system_tests::DEADLINE;
 
-/// How a wait rests between two looks.
 const PAUSE: Duration = Duration::from_millis(1);
 
-/// The composed Window of one test, in a world of its own, with a tap on its link.
 pub struct Composed {
-    // Fields are dropped in this order. The programs the Keeper started are listed while it
-    // still runs, the tap goes before the world it leads into, and once the world has
-    // ended the Keeper the test waits until the programs are gone too.
+    // Drop order: the programs are listed while the Keeper runs, the tap goes before its world,
+    // and once the Keeper has ended the test waits until the programs are gone too.
     _listing: ListingPrograms,
     pub tap: Tap,
     pub world: World,
     pub frame: Entity<Frame>,
     pub models: Models,
-    /// The review pane, as the test reads it.
     pub review: Entity<ReviewPane>,
-    /// The terminal pane, as the test reads it.
     pub terminals: Entity<TerminalPane>,
-    /// The actions the keystrokes ran since the list was last taken, by name, as the
-    /// test platform tells them. A key the focused element took itself runs none.
+    /// The actions the keystrokes ran since the list was last taken; a key the focused element took
+    /// runs none.
     pub ran: Rc<RefCell<Vec<&'static str>>>,
     _watching_the_keys: Subscription,
-    /// The repositories the test made, each opened as a workspace.
     pub repositories: Vec<Repo>,
-    /// The agent the walk of the reviews started, once it did.
     pub agent: Option<RunningAgent>,
-    /// The session a restart cut off, when the test made one before it opened the Window.
     pub cut_off: Option<CutOff>,
-    /// Counts what the test makes, for names of its own.
     made: u32,
     _waiting: WaitingForPrograms,
 }
 
-/// An agent a test started in a terminal of the workspace on screen, and what the walk of
-/// the reviews holds of it.
 pub struct RunningAgent {
-    /// The terminal it runs in.
     pub terminal: TerminalId,
-    /// Its session.
     pub session: SessionId,
-    /// The review of that session, which the review pane shows.
     pub review: ReviewId,
-    /// The thread the walk wrote, once it wrote one.
     pub thread: Option<ThreadId>,
 }
 
-/// The processes the Keeper started, listed while it still runs: dropping this reads them
-/// off the process table, which says no more once the Keeper is gone and its children
-/// belong to the system.
+/// Listed while the Keeper runs: once it is gone its children belong to the system.
 struct ListingPrograms {
     keeper: u32,
     into: Rc<RefCell<Vec<u32>>>,
@@ -89,9 +65,6 @@ impl Drop for ListingPrograms {
     }
 }
 
-/// Waits until every process the Keeper started has ended. The world ends the Keeper
-/// alone, and its terminals' programs end after it, when the closed terminal hangs up on
-/// them: a test that started a process waits until it is gone.
 struct WaitingForPrograms {
     started: Rc<RefCell<Vec<u32>>>,
 }
@@ -100,8 +73,8 @@ impl Drop for WaitingForPrograms {
     fn drop(&mut self) {
         let started = self.started.borrow().clone();
         let gone = wait_for(DEADLINE, || started.iter().all(|pid| !is_alive(*pid)));
-        // A test that already failed says why; a second panic in its unwinding would end
-        // the process before it did.
+        // A second panic in the unwinding of a failed test would end the process before it says
+        // why.
         if !gone && !std::thread::panicking() {
             let left: Vec<u32> = started.into_iter().filter(|pid| is_alive(*pid)).collect();
             panic!("the programs of the Keeper did not end with it: {left:?}");
@@ -109,11 +82,6 @@ impl Drop for WaitingForPrograms {
     }
 }
 
-/// Opens the Window as `yaar_window::open` does: `yaar_window::init`, then the Frame with
-/// one builder for each entry of `yaar_window::panes()`, and after them `extra`. The
-/// review pane's and the terminal pane's builders are wrapped to keep the view the test
-/// reads; nothing else of the composition differs. The Keeper is the built program of a
-/// new world, reached through a tap, and the call returns once it has answered.
 pub fn open_composed(
     cx: &mut TestAppContext,
     extra: Vec<BuildPane>,
@@ -123,8 +91,6 @@ pub fn open_composed(
     open_composed_in(world, cx, extra)
 }
 
-/// [`open_composed`] in a world the test made and started a Keeper in, which holds what
-/// the test put there: a Window started against a Keeper that already holds state.
 pub fn open_composed_in(
     world: World,
     cx: &mut TestAppContext,
@@ -133,8 +99,6 @@ pub fn open_composed_in(
     open_composed_with(world, cx, extra, true, None)
 }
 
-/// [`open_composed_in`] for a second Window of the same test, after the Keeper of the world
-/// was started again: the app was prepared by the first, and its keys are not bound twice.
 pub fn open_another_composed_in(
     world: World,
     cx: &mut TestAppContext,
@@ -143,10 +107,6 @@ pub fn open_another_composed_in(
     open_composed_with(world, cx, extra, false, None)
 }
 
-/// [`open_composed_in`] with a Navigator started as the program starts one, on
-/// `navigator`, which [`navigator_for`] makes for the world: the composed Window with the
-/// real Keeper and the real Navigator, and the stand-in language server beneath. The test
-/// ends the Navigator, through the quit of the app, with [`Composed::end_the_navigator`].
 pub fn open_composed_with_a_navigator(
     world: World,
     cx: &mut TestAppContext,
@@ -156,27 +116,19 @@ pub fn open_composed_with_a_navigator(
     open_composed_with(world, cx, extra, true, Some(navigator))
 }
 
-/// How the Navigator of a test finds the stand-in language server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Found {
-    /// Installed on the machine: a copy of the stand-in named `standin-lsp` in a folder of
-    /// the world, which is the Navigator's search path.
     OnTheMachine,
-    /// The project's own: the file `tools/standin-lsp` of the repository, which the test
-    /// puts there ([`put_the_standin_in`]). A server inside a repository runs only after the
-    /// user said yes.
+    /// `tools/standin-lsp` in the repository; a server inside a repository runs only after the user
+    /// said yes.
     InTheProject,
 }
 
-/// The folder of the world that holds what the Navigator of a test keeps: the downloads, the
-/// user's registry (none), the copy of the stand-in.
 fn navigator_data(world: &World) -> PathBuf {
     world.home().with_file_name("navigator-data")
 }
 
-/// The Navigator's cache folder in a world: where the Keeper, whose home is the world's,
-/// finds the app's cache, `yaar_link::cache_dir()` of its environment, and the Navigator's
-/// folder in it. The Keeper writes an export only there.
+/// The Keeper writes an export only in the cache folder of its own environment.
 pub fn navigator_cache(world: &World) -> PathBuf {
     let cache = if cfg!(target_os = "macos") {
         world.home().join("Library/Caches")
@@ -188,16 +140,12 @@ pub fn navigator_cache(world: &World) -> PathBuf {
         .join(yaar_navigator::CACHE_FOLDER)
 }
 
-/// The registry of a test's Navigator: one row, `standin`, for the invented language whose
-/// files end in `.sil` and for `extra_extensions` (each mapped to the same language id),
-/// started when the worktree holds `marker`, with one server, the stand-in, found as `found`
-/// says.
+/// One registry row, `standin`, for the invented `.sil` language and `extra_extensions`, started
+/// when the worktree holds `marker`.
 pub fn standin_row(found: Found, marker: &str, extra_extensions: &[&str]) -> String {
     standin_row_started_with(found, marker, extra_extensions, &[])
 }
 
-/// [`standin_row`] with the stand-in started with `args`, each of which may name a variable
-/// of the row (`{root}`).
 pub fn standin_row_started_with(
     found: Found,
     marker: &str,
@@ -232,18 +180,12 @@ pub fn standin_row_started_with(
     )
 }
 
-/// The configuration of the Navigator of a test in `world`: the registry `row`, every folder
-/// in the world, the Navigator's cache where the Keeper of the world takes its exports
-/// ([`navigator_cache`]), the stand-in on the search path when it is installed on the
-/// machine, a short search path and environment of the world's own for the servers, and no
-/// download: nothing of the user's is read, and nothing leaves the machine.
 pub fn navigator_for(world: &World, found: Found, row: &str) -> NavigatorConfig {
     let data = navigator_data(world);
     let folder = data.join("machine");
     std::fs::create_dir_all(&folder).expect("make the folder of the machine's programs");
     let mut search_path = Vec::new();
     if found == Found::OnTheMachine {
-        // A second window of the test finds the copy there, which the first may run.
         let copy = folder.join("standin-lsp");
         if !copy.exists() {
             std::fs::copy(yaar_system_tests::program("standin-lsp"), &copy)
@@ -272,10 +214,8 @@ pub fn navigator_for(world: &World, found: Found, row: &str) -> NavigatorConfig 
     }
 }
 
-/// Puts a copy of the stand-in language server in the repository as the project's own,
-/// `tools/standin-lsp`, and keeps it out of what git sees (the exclude file of the
-/// repository, which no change and no commit holds): the worktree has the file, and the
-/// review has no row for it.
+/// Kept out of what git sees (the exclude file): the worktree has the file, the review has no row
+/// for it.
 pub fn put_the_standin_in(repository: &Repo) {
     let program = repository.path().join("tools/standin-lsp");
     std::fs::create_dir_all(program.parent().expect("a folder above")).expect("make tools");
@@ -297,8 +237,7 @@ fn open_composed_with(
     let keeper = world.keeper_pid().expect("the world's Keeper runs");
     let tap = world.tap();
 
-    // A real socket and a real process: the connection is read by a thread, and answered
-    // by a program, that the test executor cannot see.
+    // A real socket and a real process: a thread and a program the test executor cannot see.
     cx.executor().allow_parking();
     let ran: Rc<RefCell<Vec<&'static str>>> = Rc::default();
     let watching = cx.update(|cx| {
@@ -334,14 +273,13 @@ fn open_composed_with(
         models,
     } = cx
         .update(|cx| match navigator {
-            // As the program opens its window.
             Some(navigator) => yaar_window::open_panes(tap.socket(), builders, navigator, cx),
             None => yaar_frame::open(tap.socket(), yaar_window::VERSION, builders, cx),
         })
         .expect("open the composed Window on the test platform");
     let mut cx = VisualTestContext::from_window(window, cx);
-    // The window a user types in is the active one; GPUI tells no focus change to a window
-    // that is not, and the terminal pane hands the focus on by one.
+    // The window a user types in is the active one; GPUI tells no focus change to a window that is
+    // not.
     cx.update(|window, _| window.activate_window());
 
     wait_until(
@@ -396,17 +334,13 @@ fn open_composed_with(
     )
 }
 
-/// Gives the repository the identity of a user, in its own configuration. The Keeper commits
-/// with whatever identity git finds, and in a world git reads no global configuration: where
-/// git guesses one from the machine's names (macOS) a commit goes through, and where it does
-/// not (Linux) git refuses it.
+/// In a world git reads no global configuration: macOS guesses an identity, Linux refuses the
+/// commit.
 pub fn give_an_identity(repository: &Repo) {
     repository.git(&["config", "user.name", "A Test"]);
     repository.git(&["config", "user.email", "test@example.invalid"]);
 }
 
-/// A new repository of `world` with something to review: on a branch that left `main` with
-/// one commit, and with one more change that is not committed.
 pub fn repository_to_review(world: &World, name: &str) -> Repo {
     let repository = world.repository(name);
     give_an_identity(&repository);
@@ -417,35 +351,20 @@ pub fn repository_to_review(world: &World, name: &str) -> Repo {
     repository
 }
 
-/// What [`a_session_cut_off`] leaves: the workspace, the session of Claude Code a restart cut
-/// off, and the id that CLI gave the session.
 pub struct CutOff {
-    /// The repository of the workspace, opened in the Keeper.
     pub repo: Repo,
-    /// The workspace the session worked in.
     pub workspace: WorkspaceId,
-    /// The session, listed resumable by the Keeper that started after the kill.
     pub session: SessionId,
-    /// The id the CLI gave its session, which its resume command names.
     pub cli_session: String,
-    /// The file that, once made, lets a stand-in that follows the world's `default` script
-    /// end. Nobody makes it before the test does.
     pub gate: PathBuf,
 }
 
-/// The size of the terminals a client of the world opens.
 const CLIENT_SIZE: TerminalSize = TerminalSize {
     columns: 100,
     rows: 30,
 };
 
-/// Brings `world` to the state a restart of the machine leaves: a workspace with a session
-/// of Claude Code that was running when everything was killed, and a Keeper started again
-/// on what the first one kept, which lists the session as resumable. A client of the world
-/// opens the repository and its launcher, as a Window would, and is gone before the
-/// Keeper is killed; the stand-in on the world's search path follows the script `default`,
-/// which holds at [`CutOff::gate`] and then ends. The world has a Keeper running when this
-/// returns, and no Window is open on it.
+/// Brings `world` to the state a restart leaves: a resumable Claude Code session, no Window open.
 pub fn a_session_cut_off(world: &mut World) -> CutOff {
     world.agents_on_path();
     let gate = world.home().with_file_name("cut-off-gate");
@@ -465,7 +384,6 @@ pub fn a_session_cut_off(world: &mut World) -> CutOff {
     let session = session_where(&mut client, &workspace, |session| {
         session.state != SessionState::NotRunning
     });
-    // The id the CLI gave itself is written down when the stand-in starts.
     assert!(
         wait_for(DEADLINE, || !world.agent_log("default").session.is_empty()),
         "the stand-in wrote down no session id"
@@ -488,8 +406,6 @@ pub fn a_session_cut_off(world: &mut World) -> CutOff {
     }
 }
 
-/// The session of `workspace` that `wanted` accepts, once the Keeper lists one: the list is
-/// asked for again until it does.
 fn session_where(
     client: &mut yaar_system_tests::Client,
     workspace: &WorkspaceId,
@@ -510,7 +426,6 @@ fn session_where(
         .unwrap_or_else(|| panic!("no such session came: {:?}", client.agents()))
 }
 
-/// Keeps the app running until `holds` says yes. Fails at the deadline, naming `what`.
 pub fn wait_until(
     cx: &mut VisualTestContext,
     what: &str,
@@ -519,10 +434,8 @@ pub fn wait_until(
     wait_until_telling(cx, what, holds, |_| None);
 }
 
-/// Like [`wait_until`], and the failure at the deadline also says what `held` reads of the
-/// app at that moment, so that a wait that failed on a loaded machine can be told from one
-/// that failed on a fault. `held` is read once, after the deadline, and no wait lasts
-/// longer for it.
+/// On failure also says what `held` reads of the app, to tell a wait that failed on a loaded
+/// machine from a fault.
 pub fn wait_until_telling(
     cx: &mut VisualTestContext,
     what: &str,
@@ -545,7 +458,6 @@ pub fn wait_until_telling(
     }
 }
 
-/// Where the element drawn under `selector` was laid out in the last frame, if one was.
 pub fn drawn(
     selector: &str,
     cx: &mut VisualTestContext,
@@ -554,8 +466,6 @@ pub fn drawn(
     cx.debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
 }
 
-/// The key, as the table binds it on this system, of the control of the Window titled
-/// `title`.
 pub fn key_of(title: &str) -> String {
     yaar_window::controls()
         .into_iter()
@@ -564,21 +474,15 @@ pub fn key_of(title: &str) -> String {
         .key()
 }
 
-/// The control of the Window with this key, as the table binds it on this system.
 pub fn control_of(key: &str) -> Option<Control> {
     yaar_window::controls()
         .into_iter()
         .find(|control| control.key() == key)
 }
 
-/// How many rows of the review pane a failure message lists.
 const ROWS_TOLD: usize = 12;
 
 impl Composed {
-    /// What the review pane holds, as a sentence for the message of a wait that failed: the
-    /// view, the notice, the list of references, how many rows there are and the first of
-    /// them, which rows have a name of the notes drawn, and the last requests that reached
-    /// the Keeper through the tap. Read from the pane's own surface, nothing is changed.
     pub fn what_the_review_pane_holds(&self, cx: &mut VisualTestContext) -> String {
         let (view, notice, references, rows) = self.review.read_with(cx, |pane, _| {
             (
@@ -607,9 +511,6 @@ impl Composed {
         )
     }
 
-    /// What the Frame and the terminal pane show, as a sentence for the message of a wait
-    /// that failed: the workspaces listed with the one on screen, the notice of the Frame,
-    /// the terminal pane's notice, and the non-empty lines of the terminal that has its keys.
     pub fn what_the_frame_and_the_terminals_show(&self, cx: &mut VisualTestContext) -> String {
         let (on_screen, listed) = self.models.workspaces.read_with(cx, |list, _| {
             let listed: Vec<String> = list
@@ -644,8 +545,6 @@ impl Composed {
         )
     }
 
-    /// Waits for an element that is drawn under `selector`, and gives the point `inset`
-    /// right of its left edge, in the middle of its height.
     pub fn point_in(
         &self,
         selector: &str,
@@ -660,18 +559,14 @@ impl Composed {
         point(bounds.left() + px(2.), bounds.center().y)
     }
 
-    /// Clicks on the bar of the review pane, which puts the focus in the pane whichever view
-    /// it shows (Flow draws no first row) and pauses no follow.
+    /// Focuses the pane whichever view it shows (Flow draws no first row) and pauses no follow.
     pub fn click_into_the_review_pane(&self, cx: &mut VisualTestContext) {
         let at = self.point_in("review-bar", cx);
         cx.simulate_click(at, Modifiers::none());
     }
 
-    /// Puts the focus out of a terminal, as a user does with the pane's bar, and waits until
-    /// it is out. Off macOS the keys of the app that are not kept belong to the program while
-    /// a terminal has the focus, so a step that presses one first leaves the terminal. On
-    /// macOS the Cmd keys work in a terminal, and the focus stays where it is: that is what
-    /// the step is shown with there.
+    /// Off macOS the app's keys that are not kept belong to the program while a terminal has the
+    /// focus.
     pub fn leave_the_terminal_off_macos(&self, cx: &mut VisualTestContext) {
         if cfg!(target_os = "macos") || !self.focus_is_in(PROGRAM_CONTEXT, cx) {
             return;
@@ -682,7 +577,6 @@ impl Composed {
         });
     }
 
-    /// Clicks at the left end of an element, once it is drawn.
     pub fn click_into(&mut self, cx: &mut VisualTestContext, selector: &'static str) {
         let mut found = None;
         wait_until(cx, selector, |cx| {
@@ -696,8 +590,6 @@ impl Composed {
         );
     }
 
-    /// Shows Changes in the review pane by a click on its name in the bar, which pauses no
-    /// follow, and waits until it is on screen with its first row drawn.
     pub fn show_the_changes_view(&self, cx: &mut VisualTestContext) {
         let at = self.point_in("review-view-changes", cx);
         cx.simulate_click(at, Modifiers::none());
@@ -708,9 +600,7 @@ impl Composed {
         });
     }
 
-    /// Whether some line of the screen of `terminal`, as its emulator holds it, holds `mark`.
-    /// What a program prints is read from the screen, as a user reads it; a shell's prompt
-    /// is no mark, so a test waits for a mark the program prints itself.
+    /// A shell's prompt is no mark: wait for one the program prints itself.
     pub fn shows_on_screen(
         &self,
         terminal: &TerminalId,
@@ -726,7 +616,6 @@ impl Composed {
             })
     }
 
-    /// Whether the focus is inside an element that sets this key context.
     pub fn focus_is_in(&self, context: &str, cx: &mut VisualTestContext) -> bool {
         cx.update(|window, _| {
             window
@@ -736,11 +625,8 @@ impl Composed {
         })
     }
 
-    /// Ends the Navigator the Window started through the quit of the app, the product's one
-    /// end of a Navigator, and proves it gone: by the time the call returns the process of
-    /// no server it had told is left (the quit waited for them: nothing here does). Does
-    /// nothing for a Window opened with none. The app has quit afterwards, so a test calls it
-    /// last.
+    /// Quits the app, which ends the Navigator, and asserts that none of its servers outlived the
+    /// quit. The app has quit afterwards, so a test calls it last.
     pub fn end_the_navigator(&mut self, cx: &mut VisualTestContext) {
         let pids: Vec<u32> = self.models.navigation.read_with(cx, |navigation, _| {
             navigation
@@ -759,27 +645,19 @@ impl Composed {
         );
     }
 
-    /// Gives the world back and lets go of the rest of this Window: its tap ends first,
-    /// since a tap that outlived its world could not be woken to end once the world's
-    /// folder was removed. The Window itself stays on the test platform, with its link
-    /// lost once the world's Keeper ends. For a test that ends the Keeper and starts
-    /// another in the same world, and opens a second Window against it; the Keeper must
-    /// hold no program, since this waits until the programs it listed have ended.
+    /// The tap is dropped before the world: a tap that outlived its world could not be woken. The
+    /// Keeper must hold no program, since dropping the rest waits until the listed ones have ended.
     pub fn into_world(self) -> World {
         let Composed { world, tap, .. } = self;
         drop(tap);
         world
     }
 
-    /// A number no earlier call gave, for a name of the test's own.
     pub fn next(&mut self) -> u32 {
         self.made += 1;
         self.made
     }
 
-    /// A new repository of the world with one change to review, opened as a workspace by
-    /// the key of Open Folder and the dialog, as a user does it. Returns its folder, once
-    /// the workspace is on screen and the review pane draws its first row.
     pub fn open_a_folder(&mut self, cx: &mut VisualTestContext) -> PathBuf {
         let name = format!("opened-{}", self.next());
         let repository = repository_to_review(&self.world, &name);
@@ -789,9 +667,6 @@ impl Composed {
         folder
     }
 
-    /// Opens `folder` as a workspace by the key of Open Folder and the dialog, as a user
-    /// does it, and waits until the workspace is on screen and the review pane draws its
-    /// first row.
     pub fn open_this_folder(&mut self, folder: &std::path::Path, cx: &mut VisualTestContext) {
         let folder = folder.to_owned();
         cx.simulate_keystrokes(&key_of("Open Folder…"));
@@ -813,19 +688,12 @@ impl Composed {
         });
     }
 
-    /// Starts the stand-in in a launcher terminal of the workspace on screen, as the offer
-    /// made on attaching does, and has the Window show what the keys of the reviews act on:
-    /// that terminal focused, and the review of its session in the review pane. The agent
-    /// is kept in [`Composed::agent`].
     pub fn start_an_agent(&mut self, cx: &mut VisualTestContext) {
         let workspace = self
             .models
             .workspaces
             .read_with(cx, |list, _| list.selected().cloned())
             .expect("a workspace is on screen before an agent is started");
-        // What the review pane asks for when its offer to start an agent is taken: the
-        // launcher of the CLI for the review shown, the one of no agent for now. The pane
-        // of the terminals opens it and gives it the focus.
         let mut shown = None;
         wait_until(cx, "the review pane to hold a review", |cx| {
             shown = self
@@ -878,9 +746,6 @@ impl Composed {
         });
     }
 
-    /// Brings the review of `session` into the review pane by Next Review, from the pane:
-    /// the pane need not show it at first, and a key that went through the reviews has left
-    /// another one up. At most once for each review there is.
     pub fn show_the_review_of(&mut self, session: &SessionId, cx: &mut VisualTestContext) {
         wait_until(cx, "the session among those the review pane names", |cx| {
             self.review.read_with(cx, |pane, _| {

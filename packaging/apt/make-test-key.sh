@@ -1,20 +1,8 @@
 #!/bin/bash
-# Makes a THROWAWAY signing key for CI and tests. It has no passphrase and expires after
-# seven days. It is NOT the key of the published repository and must never sign a release.
-#
-#   make-test-key.sh [<gnupg-home>]
-#
-# Without an argument the keyring is a new temporary folder. Standard output is two shell
-# assignments and nothing else (gpg's own messages go to standard error), so a caller can
-# take them over:
-#
-#   eval "$(packaging/apt/make-test-key.sh)"
-#   export GNUPGHOME YAAR_APT_KEY
-#   packaging/apt/make-apt-repo.sh <repo-dir> <deb>...
-#
-# Delete the folder afterwards:  gpgconf --homedir "$GNUPGHOME" --kill gpg-agent; rm -rf "$GNUPGHOME"
-#
-# Needs: gpg (gnupg).
+# Makes a THROWAWAY signing key for CI and tests (no passphrase, expires in 7 days), never the
+# repository's.
+# make-test-key.sh [<gnupg-home>]; without an argument the keyring is a new temporary folder.
+# Stdout: GNUPGHOME and YAAR_APT_KEY assignments for `eval`; gpg's messages go to stderr.
 set -euo pipefail
 umask 077
 if [ $# -ge 1 ]; then

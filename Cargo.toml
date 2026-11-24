@@ -1,5 +1,3 @@
-# One workspace, one crate per component of the architecture. The rules between the crates
-# are checked by `cargo xtask layout`.
 [workspace]
 resolver = "3"
 members = [
@@ -36,48 +34,31 @@ yaar-adapter-pi = { path = "crates/keeper/adapter-pi" }
 yaar-system-tests = { path = "system-tests" }
 yaar-navigator = { path = "crates/window/navigator" }
 yaar-text-search = { path = "crates/window/text-search" }
-# GPUI through the fork's kit, at an exact version: raised by hand, with the patch script
-# of patches/ and the speed check on the reference Mac.
-# Without the kit's icon set: the app ships only the icons it uses, and uses none yet.
+# Exact version, raised by hand with the patch script of patches/.
+# Without the kit's icon set: the app ships only the icons it uses.
 gpui-kit = { version = "=0.9.1", default-features = false, features = ["component"] }
 libc = "0.2"
 serde_json = "1"
 toml = "1"
-# The line diff, at an exact version: the hunks have to stay those of git's histogram diff.
-# Without its printer of unified diffs, which the app does not use.
+# At an exact version: the hunks have to stay those of git's histogram diff.
 imara-diff = { version = "=0.2.0", default-features = false }
-# Unpacks the recorded changes that the tests of the diff are held to. For tests only: no
-# program a user gets holds it. Not older than 0.9.1, which bounds what a block unpacks to.
+# For tests only. Not older than 0.9.1, which bounds what a block unpacks to.
 ruzstd = "=0.9.1"
-# SQLite compiled into the Keeper, at an exact version: the binding fixes the version of
-# SQLite itself.
+# At an exact version: the binding fixes the version of SQLite itself.
 rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled"] }
-# Hands what one thread reads to the thread that draws.
 async-channel = "2.5"
-# The terminal emulator of the Terminal pane, at an exact version: the app paints its
-# grid and encodes the keys itself, and the answers it gives programs rest on this
-# version's handling of the escape sequences. Without its optional serde support.
+# At an exact version: the answers the app gives programs rest on its handling of the escape
+# sequences.
 alacritty_terminal = { version = "=0.26.0", default-features = false }
-# The watcher of the worktrees, at an exact version: the one the measures of the agents'
-# events were taken with. Through the system's own notices: FSEvents on macOS, inotify on
-# Linux. Without the alternative of kqueue on macOS, and without serde.
 notify = { version = "=8.2.2", default-features = false, features = ["macos_fsevent"] }
-# The Navigator's downloads of language servers: one plain GET to the publisher's address,
-# with no async runtime. TLS through rustls with ring, both in the Window already beneath
-# the toolkit; the certificates the system trusts, read with rustls-native-certs, which is
-# there too. No root list of its own and no other provider.
+# TLS through rustls with ring, both already linked by the Window beneath the toolkit.
 ureq = { version = "=3.5.2", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "=0.8.5"
-# The digest of a download, from the ring rustls already links.
 ring = "=0.17.14"
-# Unpacking a download: gzip, and tar inside it. Without tar's extended attributes.
 flate2 = "=1.1.11"
 tar = { version = "=0.4.46", default-features = false }
-# A file's address for a language server, and back.
 url = "=2.5.9"
-# Text match: the two libraries ripgrep is built from, at the versions the measures of the
-# design were taken with.
 ignore = "=0.4.34"
 grep-searcher = "=0.1.17"
 grep-regex = "=0.1.14"
@@ -85,7 +66,6 @@ grep-matcher = "=0.1.9"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
-missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
@@ -100,8 +80,8 @@ opt-level = 3
 [profile.dev.package.yaar-diff]
 opt-level = 3
 
-# Text match has a time limit a test holds it to too (TEXT-03): the walk and the search are
-# built as the app ships them.
+# The text match has a time limit a test holds it to too, so it and the walk and search
+# crates below are built optimised, as the app ships them.
 [profile.dev.package.yaar-text-search]
 opt-level = 3
 
@@ -130,7 +110,7 @@ opt-level = 3
 opt-level = 3
 debug = false
 
-# The one changed file of GPUI: the older frame source is the default on macOS.
-# See patches/README.md.
+# The vendored GPUI is patched so that the older frame source is the default on macOS
+# (patches/README.md).
 [patch.crates-io]
 gpui-pre-apple = { path = "vendor/gpui-pre-apple-0.3.12" }

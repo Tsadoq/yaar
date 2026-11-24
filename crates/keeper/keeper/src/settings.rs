@@ -1,32 +1,6 @@
-//! The user's settings, between the Link and the Store: what a Window reads when it
-//! connects, and what it keeps when the user sets one.
-//!
-//! The Store keeps every setting the user set, those of the whole app, those of each
-//! workspace and those of each repository, and the Link carries every kind:
-//!
-//! | The Link's | The Store's | Refused, with nothing kept or told |
-//! | --- | --- | --- |
-//! | `Setting::FlowForm` | `Setting::FlowForm` | `UnknownWorkspace` for a workspace the Store does not hold |
-//! | `Setting::ServersInRepository` | `Setting::ServersInRepository` | `Failed` for a repository it does not hold |
-//! | `Setting::TurnEnd` | `Setting::TurnEnd` | never |
-//! | `Setting::StopAfter` | `Setting::StopAfter` | `Failed` for 0 seconds |
-//! | `Setting::Theme`, `System` | `Theme::System` | never |
-//! | `Setting::Theme`, `Named("Light")`, `Named("Dark")` | `Theme::Light`, `Theme::Dark`, so that a Store of slice 5 reads them as it wrote them | never |
-//! | `Setting::Theme`, any other name | `Theme::Named` | `Failed` for an empty name, or one the Store refuses |
-//! | `Setting::TerminalPlace` | `Setting::TerminalPlace` | never |
-//! | `Setting::KeepStates` | `Setting::KeepStates` | `Failed` for 0 days |
-//! | `Setting::OptionKey` | `Setting::OptionKey` | never |
-//! | `Setting::WorktreesFolder` | `Setting::WorktreesFolder` | `Failed` for a repository it does not hold, and for a folder `Workspaces::check_worktrees_folder` refuses, with its sentence |
-//!
-//! A folder for worktrees is checked against the repository's worktrees before it is kept,
-//! which only the Workspaces part can do: its set is `wiring::set_worktrees_folder`'s, beside
-//! the creation of a worktree that reads it.
-//! Every setting the Store lists is sent, each mapped back the same way.
-//!
-//! `GetSettings` waits the Keeper's turn, and a kept setting is told as
-//! `Fact::SettingChanged` to every Window under the same turn, after the reply of the
-//! request that set it: a Window that asks for the settings never takes an older list for a
-//! newer one.
+//! The user's settings between the Link and the Store.
+//! A kept setting is told as `Fact::SettingChanged` after the reply of the request that set it, so
+//! a Window never takes an older list for a newer one.
 
 use yaar_link::{
     Fact, FlowForm, OptionKey, Refusal, Reply, Setting, TerminalPlace, ThemeChoice, TurnEndSelects,
@@ -34,8 +8,6 @@ use yaar_link::{
 
 use crate::wiring::Kept;
 
-/// `Request::GetSettings`: every setting the Store keeps that the Link has a word for, as
-/// `Reply::Settings`, in the Store's order.
 pub(crate) fn get(kept: &Kept) -> Result<Reply, Refusal> {
     let kept = kept.store.settings().map_err(failed)?;
     Ok(Reply::Settings(
@@ -43,11 +15,8 @@ pub(crate) fn get(kept: &Kept) -> Result<Reply, Refusal> {
     ))
 }
 
-/// `Request::SetSetting`: keeps `setting` in the Store, answers `Reply::Done` once it is
-/// there, and puts `Fact::SettingChanged` with it into `facts`, for every Window. A
-/// setting of a workspace the Keeper does not know is refused with
-/// `Refusal::UnknownWorkspace`, and one of a repository it does not know with
-/// `Refusal::Failed`, and nothing is kept or told.
+/// Refused with `UnknownWorkspace` for an unknown workspace and `Failed` for an unknown repository;
+/// nothing is kept or told.
 pub(crate) fn set(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Result<Reply, Refusal> {
     let (workspace, form) = match &setting {
         Setting::FlowForm { workspace, form } => (workspace, form),
@@ -82,11 +51,7 @@ pub(crate) fn set(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Resul
     Ok(Reply::Done)
 }
 
-/// `Request::SetSetting` of a setting of a repository: keeps the user's answer on the
-/// language servers inside it in the Store, answers `Reply::Done` once it is there, and puts
-/// `Fact::SettingChanged` with it into `facts`. A repository the Keeper does not know is
-/// refused with `Refusal::Failed` naming it, and nothing is kept or told. The answer is the
-/// repository's, whichever of its worktrees the Window has on screen.
+/// The answer is the repository's, whichever of its worktrees the Window has on screen.
 fn set_of_repository(
     kept: &Kept,
     repository: &yaar_link::RepositoryId,
@@ -113,10 +78,6 @@ fn set_of_repository(
     Ok(Reply::Done)
 }
 
-/// `Request::SetSetting` of a setting of the whole app: keeps it in the Store, as the module
-/// doc's table maps it, answers `Reply::Done` once it is there, and puts
-/// `Fact::SettingChanged` with it into `facts`. A value the table refuses is refused with
-/// `Refusal::Failed` naming the setting, and nothing is kept or told.
 fn set_of_app(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Result<Reply, Refusal> {
     kept.store
         .set_setting(&store_setting_of_app(&setting)?)
@@ -125,7 +86,6 @@ fn set_of_app(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Result<Re
     Ok(Reply::Done)
 }
 
-/// A setting of the Store in the Link's words; none for a kind the Link has no word for.
 fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
     match setting {
         yaar_store::Setting::FlowForm { workspace, form } => Some(Setting::FlowForm {
@@ -175,11 +135,8 @@ fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
     }
 }
 
-/// A setting of the whole app in the Store's words. The two themes the app is built with
-/// are the Store's `Light` and `Dark`, so that the row a Store of slice 5 wrote is read the
-/// same; any other name is `Named`, which the Store refuses when it is empty or too long.
-/// A setting that is not one of the whole app's is refused with `Refusal::Failed`: `set`
-/// keeps those apart, so no request reaches that arm.
+/// Any theme but the app's own maps to `Named`, which the Store refuses when empty or too long.
+/// `set` routes the other kinds apart: the refusal arm is unreachable by a request.
 fn store_setting_of_app(setting: &Setting) -> Result<yaar_store::Setting, Refusal> {
     Ok(match setting {
         Setting::TurnEnd(selects) => yaar_store::Setting::TurnEnd(match selects {
@@ -214,7 +171,6 @@ fn store_setting_of_app(setting: &Setting) -> Result<yaar_store::Setting, Refusa
     })
 }
 
-/// A form of Flow in the Store's words.
 fn store_form(form: FlowForm) -> yaar_store::FlowForm {
     match form {
         FlowForm::Timeline => yaar_store::FlowForm::Timeline,
@@ -222,7 +178,6 @@ fn store_form(form: FlowForm) -> yaar_store::FlowForm {
     }
 }
 
-/// The refusal of a call the Store failed.
 fn failed(error: impl std::fmt::Display) -> Refusal {
     Refusal::Failed {
         reason: error.to_string(),
@@ -237,10 +192,6 @@ mod tests {
 
     use super::*;
 
-    /// `set` keeps the settings of a workspace and of a repository apart, so that no request
-    /// reaches the conversion of the whole app's settings with one of them; the conversion
-    /// still answers with the Link's refusal, a sentence naming the setting, and does not
-    /// panic.
     #[test]
     fn a_setting_that_is_not_the_whole_apps_is_refused_with_the_links_refusal() {
         let not_the_apps = [

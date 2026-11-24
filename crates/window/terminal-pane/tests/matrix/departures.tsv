@@ -2,43 +2,43 @@ legacy	ctrl-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between th
 legacy	ctrl-shift-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
 legacy	shift-pageup		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
 legacy	shift-pagedown		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
-legacy	alt-e	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-legacy	alt-i	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-legacy	alt-n	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-legacy	alt-u	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-legacy	alt-`	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+legacy	alt-e	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+legacy	alt-i	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+legacy	alt-n	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+legacy	alt-u	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+legacy	alt-`	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
 legacy	ctrl-shift-c	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
 legacy	ctrl-shift-v	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
 appcursor	ctrl-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
 appcursor	ctrl-shift-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
 appcursor	shift-pageup		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
 appcursor	shift-pagedown		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
-appcursor	alt-e	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-appcursor	alt-i	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-appcursor	alt-n	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-appcursor	alt-u	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-appcursor	alt-`	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+appcursor	alt-e	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+appcursor	alt-i	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+appcursor	alt-n	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+appcursor	alt-u	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+appcursor	alt-`	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
 appcursor	ctrl-shift-c	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
 appcursor	ctrl-shift-v	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
 kitty1	ctrl-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
 kitty1	ctrl-shift-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
 kitty1	shift-pageup		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
 kitty1	shift-pagedown		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
-kitty1	alt-e	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-kitty1	alt-i	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-kitty1	alt-n	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-kitty1	alt-u	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-kitty1	alt-`	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty1	alt-e	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty1	alt-i	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty1	alt-n	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty1	alt-u	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty1	alt-`	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
 kitty1	ctrl-shift-c	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
 kitty1	ctrl-shift-v	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
 kitty3	ctrl-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
 kitty3	ctrl-shift-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
 kitty3	shift-pageup		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
 kitty3	shift-pagedown		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
-kitty3	alt-e	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-kitty3	alt-i	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-kitty3	alt-n	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-kitty3	alt-u	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
-kitty3	alt-`	macos	dead key: with Option as characters macOS composes it through the input method, which TERM-03 shows; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty3	alt-e	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty3	alt-i	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty3	alt-n	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty3	alt-u	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
+kitty3	alt-`	macos	dead key: with Option as characters macOS composes it through the input method; no bytes are sent by the key itself (on Linux, where Option is Meta, its rows stay in the matrix)
 kitty3	ctrl-shift-c	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
 kitty3	ctrl-shift-v	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program

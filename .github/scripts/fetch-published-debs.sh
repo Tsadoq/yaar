@@ -1,27 +1,7 @@
 #!/bin/bash
-# The .deb files of the releases already published, for the pool of the apt repository, so
-# that a new release adds its packages beside the older ones.
-#
-#   GH_TOKEN=<token> .github/scripts/fetch-published-debs.sh <out-dir>
-#
-# Lists the published releases of this repository (`gh release list --exclude-drafts
-# --json tagName`); for each, downloads its *.deb and its SHA256SUMS into a folder of its own
-# (`gh release download <tag> --pattern '*.deb' --pattern SHA256SUMS`), checks each .deb
-# against that SHA256SUMS (refuses a mismatch), and moves the .deb files into <out-dir>.
-# None published: <out-dir> is made empty. Reaches GitHub's own addresses only.
-#
-# Exit codes: 0 done; 1 a mismatch or a failed download; 2 usage error.
-#
-# Beyond the header's list: GH_TOKEN and GITHUB_REPOSITORY (the repository, Owner/Name, which
-# the runner sets) must be set, else it refuses before any gh call, exit 1. The list asks for
-# 1000 releases (gh's own default is 30, and a published version that dropped out of the list
-# would drop out of the apt repository). A list that fails is a failure, never "none
-# published". A release tag must be letters, digits, '.', '_', '+', '~' and '-', and start
-# with none of '-' or '.'. A .deb with no line of its own, or with more than one line (even
-# two that agree), in its release's SHA256SUMS, a release with .deb files and no SHA256SUMS,
-# and one .deb name in two releases are refused.
-# Nothing is put into <out-dir> before every release has been checked, so a refusal leaves it
-# empty; an <out-dir> that holds files is refused.
+# The .deb files of the published releases, for the apt pool, each checked against its SHA256SUMS.
+# GH_TOKEN=<token> .github/scripts/fetch-published-debs.sh <out-dir> (empty until all are checked)
+# Asks for 1000 releases: gh lists 30 by default and a dropped version would leave the repository.
 set -euo pipefail
 
 NAME=fetch-published-debs.sh

@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{Hello, Message, PROTOCOL_VERSION, handshake, write_message};
 
-/// A socket path short enough for every system, in a folder of this test's own.
 struct Place(PathBuf);
 
 impl Place {
@@ -117,7 +116,6 @@ fn a_second_keeper_on_the_same_socket_steps_back() {
         Exit::AlreadyRunning
     );
 
-    // The first one is untouched by the attempt.
     write_message(&mut window, &Message::Shutdown).expect("shutdown");
     assert_eq!(first.join().expect("join").expect("run"), Exit::Shutdown);
 }
@@ -143,8 +141,7 @@ fn the_keeper_still_leaves_when_its_socket_file_was_removed_under_it() {
     let mut window = connect(&place.socket());
     handshake(&mut window, &Hello::for_this_process("test-window")).expect("hello");
 
-    // Something else removes the file. Nobody can reach the Keeper any more, and it
-    // must not stay for ever because of that.
+    // Nobody can reach the Keeper once the file is gone; it must still leave.
     std::fs::remove_file(place.socket()).expect("remove the socket file");
     drop(window);
 
@@ -156,7 +153,6 @@ fn the_keeper_still_leaves_when_its_socket_file_was_removed_under_it() {
     assert_eq!(keeper.join().expect("join").expect("run"), Exit::Idle);
 }
 
-/// Connects and says hello, retrying while the stale file is still in the way.
 fn connect_live(socket: &Path) -> UnixStream {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -170,7 +166,6 @@ fn connect_live(socket: &Path) -> UnixStream {
     }
 }
 
-/// A path for a socket in the folder of `place` that is `length` bytes long, to the byte.
 fn socket_of(place: &Place, length: usize) -> PathBuf {
     let folder = place.0.as_os_str().len() + "/".len();
     let path = place.0.join("s".repeat(length - folder));
@@ -178,8 +173,8 @@ fn socket_of(place: &Place, length: usize) -> PathBuf {
     path
 }
 
-/// A socket path too long to bind by one byte, that no other test and no other run asks
-/// for. The folder of the short place it leads to is removed when the test ends.
+/// One byte past what a socket path may hold. Its short path's folder is removed when the test
+/// ends.
 struct TooLong {
     wanted: PathBuf,
     short: PathBuf,
@@ -216,8 +211,6 @@ fn start_at(socket: &Path, place: &Place) -> JoinHandle<std::io::Result<Exit>> {
     std::thread::spawn(move || run(options))
 }
 
-/// Connects as a Window does, by the path the Keeper was asked to listen at, and says
-/// hello. Waits for a Keeper to listen there.
 fn attach_as_a_window(wanted: &Path) -> (UnixStream, Hello) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -240,8 +233,7 @@ fn attach_as_a_window(wanted: &Path) -> (UnixStream, Hello) {
 fn a_socket_path_longer_than_the_system_allows_is_served_at_the_short_one_both_sides_compute() {
     let place = Place::new();
 
-    // What the system allows, to the byte: a Keeper told to listen at a path of that
-    // length listens at the path itself, and a Window finds it there.
+    // The longest path the system allows: the Keeper listens at the path itself.
     let fits = socket_of(&place, yaar_link::SOCKET_PATH_MAX);
     let keeper = start_at(&fits, &place);
     let (mut window, who) = attach_as_a_window(&fits);
@@ -253,8 +245,7 @@ fn a_socket_path_longer_than_the_system_allows_is_served_at_the_short_one_both_s
     write_message(&mut window, &Message::Shutdown).expect("shutdown");
     assert_eq!(keeper.join().expect("join").expect("run"), Exit::Shutdown);
 
-    // One byte more, in the same folder, and the system itself refuses the path: the
-    // Keeper cannot be listening there.
+    // One byte more: the system refuses the path, so the Keeper cannot listen there.
     let long = TooLong::new(&place);
     assert_eq!(
         long.wanted.as_os_str().len(),
@@ -265,18 +256,16 @@ fn a_socket_path_longer_than_the_system_allows_is_served_at_the_short_one_both_s
 
     let keeper = start_at(&long.wanted, &place);
 
-    // A Window is told the long path, as the Keeper was, and finds the Keeper.
     let (mut window, who) = attach_as_a_window(&long.wanted);
     assert_eq!(who.app_version, "test-keeper");
     assert_eq!(who.pid, std::process::id());
 
-    // Where they met is the short path, computed from the long one alone: the same
-    // Keeper answers there to whoever goes straight to it.
+    // The Window met the Keeper at the short path, computed from the long one alone: going there
+    // directly reaches the same Keeper.
     let mut direct = UnixStream::connect(&long.short).expect("the short path is bound");
     let theirs = handshake(&mut direct, &Hello::for_this_process("test-window")).expect("hello");
     assert_eq!(theirs, who);
-    // The folder of the short path is the user's alone, and the lock lies beside the
-    // socket that is really bound.
+    // The lock lies beside the socket that is really bound.
     yaar_link::check_private_folder(long.folder()).expect("a folder for the user alone");
     assert!(long.folder().join("keeper.sock.lock").is_file());
 
@@ -321,7 +310,6 @@ fn the_keeper_does_not_start_in_a_short_folder_that_is_not_the_users_own() {
         .expect("join")
         .expect_err("the Keeper must not start there");
     assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
-    // Nothing was put there: no socket, no lock.
     let left: Vec<_> = std::fs::read_dir(long.folder())
         .expect("read the folder")
         .collect();

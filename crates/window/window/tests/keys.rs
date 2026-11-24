@@ -1,17 +1,5 @@
-//! Component test: the keys the app keeps for itself, in the composed Window with the
-//! built Keeper beneath it and a real shell in a real terminal.
-//!
-//! The program that listens is `World::key_recorder`, started by its path typed in the
-//! shell of the terminal: it puts its terminal in raw mode and writes down every byte it
-//! reads, in a file the test reads from outside the app. What reached the program is what
-//! that file holds. A key is followed by a sentinel, text typed into the same terminal
-//! whose bytes are known, and what the file holds up to it is what the keys before it
-//! sent: a key that sends nothing is shown by the sentinel arriving first. The test waits
-//! for facts with a deadline and never for time.
-//!
-//! What a key ran is read from a keystroke observer on the window, by the name of the
-//! action. A key the focused element took itself, as a terminal takes the keys it sends to
-//! its program, runs no action and is not reported.
+//! The keys the app keeps for itself, over the built Keeper with a real shell. A sentinel typed
+//! after each key shows what the key sent (nothing, if the sentinel arrives first).
 
 mod common;
 
@@ -32,16 +20,13 @@ const SYSTEM: &str = if cfg!(target_os = "macos") {
     "linux"
 };
 
-/// The bytes a terminal in the legacy state receives for each key, as the terminal pane's
-/// own test of them holds them: the expected bytes of TERM-01, which this test reads
-/// rather than copies.
+/// The bytes a terminal in the legacy state receives for each key, read from the terminal pane's
+/// own test.
 const LEGACY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../terminal-pane/tests/matrix/legacy.tsv"
 ));
 
-/// The keys of the documented list on the system the test runs on, as the table binds
-/// them.
 fn documented() -> BTreeSet<String> {
     let mut keys: Vec<&str> = vec![
         "ctrl-tab",
@@ -51,8 +36,6 @@ fn documented() -> BTreeSet<String> {
     ];
     if cfg!(target_os = "macos") {
         keys.extend([
-            // Copy and paste, and every key of the Frame, of the terminal pane and of the
-            // Window program that works anywhere: each is a Cmd key.
             "cmd-c",
             "cmd-v",
             "cmd-o",
@@ -69,28 +52,22 @@ fn documented() -> BTreeSet<String> {
             "cmd-[",
             "cmd-d",
             "cmd-q",
-            // The controls of a review attached at an agent's terminal, of slice 6.
             "cmd-alt-v",
             "cmd-alt-x",
             "cmd-alt-a",
-            // The launchers and the resume control of the terminal pane, of slice 7.
             "cmd-shift-t",
             "cmd-alt-c",
             "cmd-shift-r",
-            // The answers to a question for leave, of slice 7.
             "cmd-alt-e",
             "cmd-alt-shift-e",
-            // The settings screen and a new worktree, of the Frame, of slice 9.
             "cmd-,",
             "cmd-shift-n",
-            // The terminal pane's Clear, Select All and scroll keys, of slice 9.
             "cmd-k",
             "cmd-a",
             "cmd-home",
             "cmd-end",
             "cmd-up",
             "cmd-down",
-            // The Window program's own: Close Window, Hide, Hide Others and Minimize.
             "cmd-w",
             "cmd-h",
             "cmd-alt-h",
@@ -127,12 +104,7 @@ fn the_documented_list_of_kept_keys_is_what_the_window_keeps() {
     }
 }
 
-// ---------------------------------------------------------------------------- the data
-
-/// One row of the legacy state of the matrix that holds on this system.
 struct Row {
-    /// The key as the matrix writes it, with the text it types after `->` where it types
-    /// one.
     key: String,
     bytes: Vec<u8>,
 }
@@ -163,17 +135,15 @@ fn matrix() -> Vec<Row> {
     rows
 }
 
-/// A key without the text it types: `alt-a->å` is `alt-a`. The text follows the last
-/// `->` that has any after it, as `ctrl->` is Ctrl with `>`.
+/// The text follows the last `->` that has any after it, as `ctrl->` is Ctrl with `>`.
 fn without_text(key: &str) -> &str {
     key.rfind("->")
         .filter(|at| *at + 2 < key.len())
         .map_or(key, |at| &key[..at])
 }
 
-/// A key of the matrix as the platform delivers it. GPUI's parser cannot write the key `-`
-/// together with its text, so the matrix calls it `minus` and the platform's name for it is
-/// put back here.
+/// GPUI's parser cannot write the key `-` with its text, so the matrix says `minus` and the name is
+/// put back.
 fn keystroke(key: &str, os: gpui_kit::OperatingSystem) -> Keystroke {
     let mut keystroke = Keystroke::parse_with_os(key, os)
         .unwrap_or_else(|error| panic!("the matrix writes the key {key:?}: {error}"));
@@ -183,20 +153,13 @@ fn keystroke(key: &str, os: gpui_kit::OperatingSystem) -> Keystroke {
     keystroke
 }
 
-// ------------------------------------------------------------------------------ the walk
-
-/// The test's hold on the window, the recorder and what the recorder has been read up to.
 struct Walk {
     window: Composed,
     cx: VisualTestContext,
     recorder: TerminalId,
-    /// The file the recorder writes.
     file: PathBuf,
-    /// How many sentinels were typed.
     sentinels: u32,
-    /// How much of the file was read: up to the end of the last sentinel.
     read: usize,
-    /// What went wrong, as one line each, to be shown together at the end of a leg.
     differences: Vec<String>,
 }
 
@@ -207,8 +170,6 @@ impl Walk {
             .read_with(&self.cx, |pane, _| (pane.shown(), pane.split()))
     }
 
-    /// Whether the window is as `click_into_the_recorder` leaves it: the recorder alone on
-    /// screen, and the focus in its view.
     fn in_the_recorder(&mut self) -> bool {
         let (shown, split) = self.pane_state();
         if split || shown != [self.recorder.clone()] {
@@ -223,10 +184,9 @@ impl Walk {
         self.cx.update(|window, _| focus.is_focused(window))
     }
 
-    /// Puts the window back as it was: not in the split view, the recorder the terminal
-    /// shown, a click into its view. Each key is pressed after a click in the review
-    /// pane, because Split View and Previous Terminal may move the focus into a terminal,
-    /// where on Linux the next key of the app does nothing.
+    /// Puts the window back: no split view, the recorder shown and clicked into. Split View and
+    /// Previous Terminal are each pressed after a click in the review pane: either may move the
+    /// focus into a terminal, where on Linux the next key of the app does nothing.
     fn click_into_the_recorder(&mut self) {
         let terminals = self
             .window
@@ -258,21 +218,16 @@ impl Walk {
         self.window.click_into_the_review_pane(&mut self.cx);
     }
 
-    /// Whether the focus is in the review pane and in no program.
     fn in_the_review_pane(&mut self) -> bool {
         self.window
             .focus_is_in(yaar_review_pane::KEY_CONTEXT, &mut self.cx)
             && !self.window.focus_is_in(PROGRAM_CONTEXT, &mut self.cx)
     }
 
-    /// Answers the dialog for a folder and closes the field for a base, when a key
-    /// opened one.
     fn tidy(&mut self) {
         if self.cx.did_prompt_for_paths() {
             self.cx.simulate_path_prompt_response(|_| None);
         }
-        // What a key may have opened takes the focus, and Escape closes it: the field for
-        // a base, the field for a new worktree's branch and the settings screen.
         for (selector, what) in [
             ("frame-base-field", "the field for the base"),
             ("frame-worktree-field", "the field for the new branch"),
@@ -287,10 +242,8 @@ impl Walk {
         }
     }
 
-    /// Presses a key as the platform delivers it, and gives the names of the actions it
-    /// ran. A key that opens a terminal, a shell or an agent's launcher, is waited for until
-    /// the terminal is in the pane, so that it does not arrive in the middle of a later step
-    /// and take the focus from the pane a later key is pressed in.
+    /// A key that opens a terminal is waited for until the terminal is in the pane, so that it
+    /// does not land in a later step and take the focus from the pane a later key is pressed in.
     fn press(&mut self, key: &str) -> Vec<&'static str> {
         let terminals = self
             .window
@@ -313,8 +266,6 @@ impl Walk {
         ran
     }
 
-    /// Types a sentinel into the focused terminal, waits until the file ends with it, and
-    /// gives the bytes the file gained before it.
     fn sentinel(&mut self) -> Vec<u8> {
         self.sentinels += 1;
         let text = format!("<s{}>", self.sentinels);
@@ -334,7 +285,6 @@ impl Walk {
         gained
     }
 
-    /// Fails at the end of the leg, with every difference of it in one message.
     fn assert_no_difference(&mut self, leg: &str, checked: usize) {
         let differences = std::mem::take(&mut self.differences);
         assert!(
@@ -346,17 +296,11 @@ impl Walk {
     }
 }
 
-/// The set-up: a repository opened, a terminal opened by its key, the key recorder started
-/// in it, and its file existing and holding the first sentinel.
 fn set_up(cx: &mut TestAppContext) -> Walk {
     let (mut window, mut cx) = open_composed(cx, Vec::new());
     window.open_a_folder(&mut cx);
-    // The test platform can neither hide the app, hide the others nor minimise a window
-    // (its calls are `unimplemented!()`), and closing the window would end the walk. A
-    // handler of the test's own, registered after the app's, takes each of these four
-    // actions first and does nothing, so that each key is shown to run the action of its
-    // row and to reach no program; what the handlers do is the conventions checklist's
-    // (hiding and minimising) and the walk of the actions' (closing a window).
+    // The test platform cannot hide the app, hide the others or minimise (`unimplemented!()`), and
+    // closing the window would end the walk: a handler registered after the app's takes them first.
     cx.update(|_, app| {
         app.on_action(|_: &yaar_frame::CloseWindow, _| {});
         app.on_action(|_: &yaar_frame::HideApp, _| {});
@@ -390,16 +334,12 @@ fn set_up(cx: &mut TestAppContext) -> Walk {
     walk.cx
         .simulate_input(&format!("{} {}", script.display(), walk.file.display()));
     walk.cx.simulate_keystrokes("enter");
-    // The file exists once the shell has started the recorder and the recorder has put its
-    // terminal in raw mode: what is typed from here on is recorded as typed.
     let path = walk.file.clone();
     wait_until(&mut walk.cx, "the key recorder to run", |_| path.exists());
     assert_eq!(walk.sentinel(), b"", "the file holds only what was typed");
     walk
 }
 
-/// The controls of the Window that `keep` accepts and whose key the matrix does not
-/// hold, each key once.
 fn controls_the_matrix_does_not_hold(keep: impl Fn(&Control) -> bool) -> Vec<Control> {
     let held: BTreeSet<String> = matrix()
         .iter()
@@ -420,21 +360,18 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
 ) {
     let mut walk = set_up(cx);
     let quit = key_of("Quit");
-    // The quit that stops everything would stop the Keeper of this walk and every
-    // program in it: the walk of the actions presses it, last.
+    // The quit that stops everything would stop this walk's Keeper, so this test leaves it out;
+    // the test of the actions presses it.
     let stop = key_of("Quit and Stop Agents");
     let kept = yaar_window::kept_keys();
     let kept_keys: BTreeSet<String> = kept.iter().map(Control::key).collect();
 
-    // ---- Leg 1: with a terminal focused, each kept key runs its app action.
     let mut checked = 0;
     for control in kept
         .iter()
         .filter(|control| control.key() != quit && control.key() != stop)
     {
         walk.click_into_the_recorder();
-        // A key that works anywhere would run its action wherever the focus is, so the
-        // focus is checked before the press and not left to the sentinel that follows.
         if !walk.in_the_recorder() {
             walk.differences.push(format!(
                 "{}: the focus was not in the recorder before it",
@@ -451,8 +388,6 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
             ));
         }
         walk.tidy();
-        // A kept key never reaches the program: the sentinel is the first thing the file
-        // gains after it.
         walk.click_into_the_recorder();
         let sent = walk.sentinel();
         if !sent.is_empty() {
@@ -463,8 +398,6 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
         }
         checked += 1;
     }
-    // Next Pane and Previous Pane take the focus out of the terminal and, pressed again,
-    // bring it back to the focused terminal, whose view then takes what is typed.
     for title in ["Next Pane", "Previous Pane"] {
         let key = key_of(title);
         walk.click_into_the_recorder();
@@ -482,8 +415,6 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
             walk.differences
                 .push(format!("{title} twice: the focus is not in the recorder"));
         }
-        // Neither press sent the program anything: the sentinel is the first thing the
-        // file gains.
         let sent = walk.sentinel();
         if !sent.is_empty() {
             walk.differences
@@ -493,9 +424,6 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
     }
     walk.assert_no_difference("kept keys with a terminal focused", checked);
 
-    // ---- Leg 2: with a terminal focused, no other key runs an action, and each reaches
-    // the program as TERM-01 says for the legacy state, or, for a key of the app that the
-    // matrix does not hold, reaches it at all.
     walk.click_into_the_recorder();
     walk.sentinel();
     let rows = matrix();
@@ -539,7 +467,6 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
     }
     walk.assert_no_difference("the other keys with a terminal focused", checked);
 
-    // ---- Leg 3: with another pane focused, no key reaches the program.
     let mut every: Vec<String> = rows.iter().map(|row| row.key.clone()).collect();
     every.extend(
         controls_the_matrix_does_not_hold(|_| true)
@@ -553,9 +480,6 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
         .filter(|key| without_text(key) != quit && without_text(key) != stop)
         .filter(|key| seen.insert(without_text(key).to_owned()))
     {
-        // A key of this leg may have opened a terminal or moved the pane's focus on to
-        // another one: the recorder is made the terminal the pane holds the focus of again
-        // before each key, so that a key that leaks reaches the file that is read.
         walk.click_into_the_recorder();
         walk.click_into_the_review_pane();
         if !walk.in_the_review_pane() {
@@ -568,8 +492,8 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
         checked += 1;
     }
     if !cfg!(target_os = "macos") {
-        // The last key of the test on Linux, where Quit was pressed in the terminal and
-        // reached the program, so that here it is pressed where it runs.
+        // On Linux Quit reaches the program when pressed in the terminal, so it is pressed here,
+        // where it runs.
         walk.click_into_the_recorder();
         walk.click_into_the_review_pane();
         if !walk.in_the_review_pane() {
@@ -594,14 +518,11 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
         "a key reached the program while another pane had the focus"
     );
 
-    // ---- Quit comes last of all on macOS, where it is a kept key. The test platform does
-    // not end the app, and the test ends here.
+    // On macOS Quit is a kept key and comes last: the test platform does not end the app.
     if cfg!(target_os = "macos") {
         walk.click_into_the_recorder();
         let ran = walk.press(&quit);
         assert_eq!(ran, [yaar_window::Quit.name()], "what {quit} ran");
-        // The test platform keeps the app running, so a key typed after it shows that Quit,
-        // a kept key, sent the program nothing.
         assert_eq!(walk.sentinel(), b"", "{quit} reached the program");
     }
 }

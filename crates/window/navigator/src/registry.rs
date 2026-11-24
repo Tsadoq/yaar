@@ -1,105 +1,13 @@
-//! The registry of language servers: one TOML format for the built-in table, [`BUILTIN`],
-//! compiled into the app, and for the user's own file, [`USER_FILE`] in the app's data
-//! folder (FR-069, FR-071, NFR-002).
-//!
-//! # The format
-//!
-//! Each top-level table is one row, named by its key: one language, or a family of
-//! languages its servers serve, as `typescript` serves TypeScript and JavaScript. A row is
-//! the one entry that adds a language (NFR-002): it holds everything that differs between
-//! languages and servers, and the code that starts a server holds no name of either.
-//!
-//! The keys of a row:
-//!
-//! | Key | Type | What it is | When left out |
-//! | --- | --- | --- | --- |
-//! | `title` | string | the name the Window shows, `Rust` | the row's name |
-//! | `extensions` | table of strings | file extension, with no dot, to the LSP `languageId` | required in a row of the built-in table, and in a user's row whose name no built-in row has |
-//! | `markers` | array of strings | files at a worktree's root that start the row's server when the workspace comes on screen | none: the server starts at the first ask about one of its files |
-//! | `old_side.link` | array of strings | names of folders linked, wherever the worktree holds one, into an export at the same place: the dependencies the old code reads (ADR-016 point 7) | none |
-//! | `old_side.environment` | table of strings | variables added, for a server of an old side only, after the server's `environment` | none |
-//! | `server` | array of tables | the row's servers, in the order the app prefers them within each kind of FR-060 (ADR-015 point 5) | required: a row with none is an error |
-//!
-//! The keys of a server (`[[<row>.server]]`):
-//!
-//! | Key | Type | What it is | When left out |
-//! | --- | --- | --- | --- |
-//! | `name` | string | the server's name, as the offer and the line of its state name it, and the folder its download is unpacked into | required in the built-in table; in the user's file, the row's name |
-//! | `command` | array of strings | the user's own server: its program, then its arguments. Only in the user's file, where every server must name it | no registered server |
-//! | `project` | array of strings | the project's own copy: paths relative to the worktree's root, or absolute (after a variable such as `{env:NAME}` is put in) for one outside it | none |
-//! | `machine` | array of strings | names of a copy installed on the machine: each file of that name in every folder of the search path, in the path's order | none |
-//! | `trial` | array of strings | the arguments of the trial run of a candidate; one that ends with success is accepted | no trial: a candidate counts as started when it answers `initialize` |
-//! | `args` | array of strings | the arguments a copy found by `project`, `machine` or a download is started with | none |
-//! | `ready` | table | the readiness rule, below | `{ kind = "answer" }` |
-//! | `capabilities` | table | merged into the client capabilities the driver sends in `initialize`, key by key, the server's winning | nothing added |
-//! | `initialization_options` | table | sent as `initializationOptions` | none sent |
-//! | `settings` | table | the answer to the server's `workspace/configuration`: for an item with a `section`, the value at that section, its parts split at `.`; for one with none, the whole table; null where there is none | every item null |
-//! | `environment` | table of strings | variables added to the environment the server runs in, the server's winning | none |
-//! | `download` | array of tables | what the app downloads, one table for each [`Platform`], below. Never in the user's file (FR-073) | nothing to offer |
-//!
-//! A readiness rule (`ready`) is one of three kinds (ADR-015 point 2):
-//! - `{ kind = "answer" }`: ready once the server answered `initialize`;
-//! - `{ kind = "progress" }`: ready once one `$/progress` began and every one begun has
-//!   ended;
-//! - `{ kind = "notification", method = "…", match = { … } }`: ready once a notification
-//!   of `method` arrives whose `params` hold every key of `match` with an equal value.
-//!
-//! A download (`[[<row>.server.download]]`) holds: `platform`, one of [`Platform`]'s
-//! names; `version`, a string that is not empty and holds no `/`; `url`, the publisher's
-//! own address; `sha256`, the digest of the bytes fetched, exactly 64 lowercase
-//! hexadecimal digits; `archive`, `tar.gz` or `gz` ([`Archive`]); `strip`, the number of
-//! leading parts of each path dropped from a `tar.gz` (0 when left out); `program`, the
-//! server's program inside the unpacked folder, or for `gz` the name the one file is
-//! written as; `size`, the number of bytes fetched, above 0. Every key but `strip` is
-//! required: a download that lacks one, or whose `sha256` is not 64 lowercase hexadecimal
-//! digits, is an error of its row, so that no row can download what no digest guards.
-//! Two downloads of one server for the same platform are an error of the row too.
-//!
-//! The strings of a server's `command`, `project`, `machine`, `args`, `capabilities`,
-//! `initialization_options`, `settings` and `environment`, and of the row's `old_side`, may
-//! name these variables, written `{name}`, which are put in when the server is looked for or
-//! starts ([`expand`]): `{root}`, the folder the server serves; `{worktree}`, the folder of
-//! the worktree, the same as `{root}` but for an old side; `{target}`, a build folder of the
-//! app's own for this server; `{platform}`, the machine's [`Platform`] name; `{servers}`,
-//! the folder the server's download is unpacked into; `{env:NAME}`, the value `NAME` has in
-//! the environment the servers run in (`NavigatorConfig::environment`, with what the login
-//! shell added). A string that names any other is an error of its row.
-//!
-//! A `{env:NAME}` whose `NAME` the environment does not hold, or holds as the empty text,
-//! is no error when the servers are looked for: the `project`, `machine` or `command` entry
-//! that names it is passed over and the row's other entries are looked at, so that a row
-//! may name a place that exists only on some machines. A `project` entry that is absolute
-//! once expanded names a file outside the worktree, as `{env:CARGO_HOME}/bin/rust-analyzer`
-//! does, and is not joined to the worktree's root; a candidate there asks no question,
-//! since it lies outside the repository. In an `args` or `environment` string a `NAME`
-//! that is not held makes the candidate fail to start, and the next is tried.
-//!
-//! # The user's file
-//!
-//! A row of the user's file whose name a built-in row has takes that row's place whole,
-//! with `title`, `extensions`, `markers` and `old_side` taken from the built-in row when the
-//! user's row names none: the user's servers are the only ones tried for those files, and
-//! none is ever downloaded (FR-073). A user's row with a new name adds a language. Every
-//! server of a user's row must name `command`, and none may name `download`; a row with a
-//! server that breaks either rule is reported and passed over. A user's server that names
-//! no `name` is named as its row, so that the least a user writes for a language the
-//! built-in table knows is its command:
-//!
-//! ```toml
-//! [[rust.server]]
-//! command = ["/path/to/rust-analyzer"]
-//! ```
-//! A user's server may name
-//! `project` and `machine` too, tried after every registered command in the order of
-//! FR-060. A user's row is [`Row::registered`].
-//!
-//! # Reading
-//!
-//! [`Registry::read`] reads the built-in text and then the user's, row by row (NAV-15): a
-//! text that is not TOML at all gives no row and one [`RowError`] with no row name; a row
-//! that is not a table, holds a key the format does not have (in the row, a server or a
-//! download), a value of the wrong type, a variable the format does not have, or breaks a
-//! rule above, is reported in a [`RowError`] and passed over, and every other row is read.
+//! Language-server rows, in one TOML format for the built-in table and the user's file.
+//! `ready`: `answer` (`initialize` answered), `progress` (a `$/progress` began and all have ended),
+//! or `notification` (`method`, and `match`: keys `params` must hold with equal values).
+//! `download`: `platform`, `version`, `url`, `sha256`, `archive` (`tar.gz` or `gz`), `strip`,
+//! `program`, `size`; all but `strip` required, so nothing downloads without a digest.
+//! Variables: `{root}`, `{worktree}`, `{target}`, `{platform}`, `{servers}`, `{env:NAME}`. An unset
+//! or empty `{env:NAME}` skips the `project`, `machine` or `command` entry that names it.
+//! Every server of a user's row names `command`; none downloads. A user's row named like a
+//! built-in one replaces its servers, inheriting the `title`, `extensions`, `markers` and
+//! `old_side` it leaves out. `old_side.link` names dependency folders linked into an export.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -107,27 +15,20 @@ use std::path::Path;
 use serde_json::Value;
 use toml::de::{DeTable, DeValue};
 
-/// The built-in table: `crates/window/navigator/registry.toml`, compiled in.
 pub const BUILTIN: &str = include_str!("../registry.toml");
 
-/// The name of the user's registry in the app's data folder.
 pub const USER_FILE: &str = "language-servers.toml";
 
-/// A machine the built-in rows can download for, named as Node and npm name them.
+/// Named as Node and npm name them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Platform {
-    /// macOS on Apple silicon: `darwin-arm64`.
     DarwinArm64,
-    /// macOS on Intel: `darwin-x64`.
     DarwinX64,
-    /// Linux with glibc on x86-64: `linux-x64`.
     LinuxX64,
-    /// Linux with glibc on arm64: `linux-arm64`.
     LinuxArm64,
 }
 
 impl Platform {
-    /// Every platform, in the order above.
     pub const ALL: [Platform; 4] = [
         Platform::DarwinArm64,
         Platform::DarwinX64,
@@ -135,7 +36,6 @@ impl Platform {
         Platform::LinuxArm64,
     ];
 
-    /// The machine this program was built for; none on any other.
     pub fn current() -> Option<Platform> {
         match (std::env::consts::OS, std::env::consts::ARCH) {
             ("macos", "aarch64") => Some(Platform::DarwinArm64),
@@ -146,7 +46,6 @@ impl Platform {
         }
     }
 
-    /// Its name in a row: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`.
     pub fn name(self) -> &'static str {
         match self {
             Platform::DarwinArm64 => "darwin-arm64",
@@ -156,130 +55,79 @@ impl Platform {
         }
     }
 
-    /// The platform of a name; none for a name that is no platform's.
     pub fn named(name: &str) -> Option<Platform> {
         Platform::ALL.into_iter().find(|p| p.name() == name)
     }
 }
 
-/// The kind of file a download is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Archive {
-    /// A gzip-compressed tar file: its entries are unpacked, `strip` leading parts of each
-    /// path dropped.
     TarGz,
-    /// One gzip-compressed file: unpacked to the name `program`, and made executable.
     Gz,
 }
 
-/// What a server downloads for one platform.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Download {
-    /// The machine.
     pub platform: Platform,
-    /// The version pinned.
     pub version: String,
-    /// The publisher's own address of the file.
     pub url: String,
-    /// The SHA-256 digest of the bytes fetched, in lowercase hexadecimal.
     pub sha256: String,
-    /// The kind of file.
     pub archive: Archive,
-    /// Leading parts of each path dropped from a `tar.gz`.
     pub strip: u32,
-    /// The server's program in the unpacked folder, relative to it.
     pub program: String,
-    /// The number of bytes fetched.
     pub size: u64,
 }
 
-/// A readiness rule (ADR-015 point 2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ready {
-    /// Ready once the server answered `initialize`.
     Answer,
-    /// Ready once one `$/progress` began and every one begun has ended.
     Progress,
-    /// Ready once a notification of `method` arrives whose `params` hold every key of
-    /// `matches` with an equal value.
     Notification {
-        /// The notification's method.
         method: String,
-        /// What its parameters must hold.
         matches: serde_json::Map<String, serde_json::Value>,
     },
 }
 
-/// What a row says of the old side of a diff (ADR-016 point 7).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OldSide {
-    /// Names of folders linked, wherever the worktree holds one, into an export at the
-    /// same place.
     pub link: Vec<String>,
-    /// Variables added for a server of an old side only.
     pub environment: Vec<(String, String)>,
 }
 
-/// One server of a row, read.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Server {
-    /// Its name.
     pub name: String,
-    /// The user's own server: its program and its arguments.
     pub command: Option<Vec<String>>,
-    /// The project's own copy: paths relative to the worktree's root.
     pub project: Vec<String>,
-    /// Names of a copy installed on the machine.
     pub machine: Vec<String>,
-    /// The arguments of the trial run; none when the server names no `trial`.
     pub trial: Option<Vec<String>>,
-    /// The arguments a found copy is started with.
     pub args: Vec<String>,
-    /// The readiness rule.
     pub ready: Ready,
-    /// Merged into the client capabilities: an object, empty when the server names none.
     pub capabilities: serde_json::Value,
-    /// Sent as `initializationOptions`.
     pub initialization_options: Option<serde_json::Value>,
-    /// The answer to `workspace/configuration`: an object, empty when the server names
-    /// none.
     pub settings: serde_json::Value,
-    /// Variables added to the environment the server runs in.
     pub environment: Vec<(String, String)>,
-    /// What the app downloads, one for each platform the server names.
     pub downloads: Vec<Download>,
 }
 
 impl Server {
-    /// The download for `platform`, if the server has one.
     pub fn download(&self, platform: Platform) -> Option<&Download> {
         self.downloads.iter().find(|d| d.platform == platform)
     }
 }
 
-/// One row of the registry, read: a language and its servers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
-    /// Its name: the table's key.
     pub name: String,
-    /// The name the Window shows.
     pub title: String,
-    /// Whether it came from the user's file.
     pub registered: bool,
-    /// File extension, with no dot, to the LSP `languageId`, in the order written.
     pub extensions: Vec<(String, String)>,
-    /// Files at a worktree's root that start the row's server when the workspace comes on
-    /// screen.
     pub markers: Vec<String>,
-    /// What the old side needs.
     pub old_side: OldSide,
-    /// Its servers, in the order written.
     pub servers: Vec<Server>,
 }
 
 impl Row {
-    /// The first server of the row with a download for `platform`, and that download: what
-    /// the offer to download names. None for a registered row.
     pub fn download(&self, platform: Platform) -> Option<(&Server, &Download)> {
         if self.registered {
             return None;
@@ -289,7 +137,6 @@ impl Row {
             .find_map(|server| server.download(platform).map(|d| (server, d)))
     }
 
-    /// The LSP `languageId` of a file of this row, by its extension.
     pub fn language_id(&self, path: &Path) -> Option<&str> {
         let extension = path.extension()?.to_str()?;
         self.extensions
@@ -299,39 +146,25 @@ impl Row {
     }
 }
 
-/// Which text a [`RowError`] was found in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
-    /// The built-in table.
     Builtin,
-    /// The user's file.
     User,
 }
 
-/// A row that could not be read, and was passed over; or a text that is not TOML, which
-/// gave no row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowError {
-    /// Where.
     pub source: Source,
-    /// The row's name; none when the whole text could not be read.
     pub row: Option<String>,
-    /// Why, as a sentence.
     pub reason: String,
 }
 
-/// The rows of the built-in table and of the user's file, merged: a user's row in the
-/// place of the built-in row of its name, a user's row of a new name after every built-in
-/// row, each text's rows in the order written.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Registry {
     rows: Vec<Row>,
 }
 
 impl Registry {
-    /// Reads `builtin` and then `user`, row by row, as the module doc says. Gives the
-    /// registry of every row read, and one [`RowError`] for each row passed over and for a
-    /// text that is not TOML, in the order found.
     pub fn read(builtin: &str, user: Option<&str>) -> (Registry, Vec<RowError>) {
         let mut errors = Vec::new();
         let mut rows = Vec::new();
@@ -356,52 +189,34 @@ impl Registry {
         (Registry { rows }, errors)
     }
 
-    /// Every row, in the registry's order.
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
 
-    /// The row named `name`.
     pub fn row(&self, name: &str) -> Option<&Row> {
         self.rows.iter().find(|row| row.name == name)
     }
 
-    /// The row whose `extensions` hold the extension of `path`: the first in the
-    /// registry's order. None for a file of a language no row knows.
     pub fn for_path(&self, path: &Path) -> Option<&Row> {
         self.rows.iter().find(|row| row.language_id(path).is_some())
     }
 }
 
-/// The values of the variables a row may name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Vars {
-    /// `{root}`: the folder the server serves.
     pub root: String,
-    /// `{worktree}`: the folder of the worktree.
     pub worktree: String,
-    /// `{target}`: a build folder of the app's own for this server.
     pub target: String,
-    /// `{platform}`: the machine's platform name; empty where it has none.
     pub platform: String,
-    /// `{servers}`: the folder the server's download is unpacked into; empty where nothing
-    /// is downloaded.
     pub servers: String,
-    /// `{env:NAME}`: the environment the servers run in. None where no environment is
-    /// known, as when a row is read: every `{env:NAME}` then puts in nothing. Some, as
-    /// when a server is looked for or started: a `NAME` it does not hold, or holds as the
-    /// empty text or as text that is not UTF-8, is an error of [`expand`].
+    /// None where no environment is known, as when a row is read: every `{env:NAME}` then puts in
+    /// nothing. Some: a `NAME` it lacks, or holds empty or not UTF-8, is an error of [`expand`].
     pub env: Option<Vec<(OsString, OsString)>>,
 }
 
-/// The names of the variables a row may name.
 pub const VARIABLES: [&str; 5] = ["root", "worktree", "target", "platform", "servers"];
 
-/// `text` with each `{name}` of [`VARIABLES`], and each `{env:NAME}`, replaced by its value in
-/// `vars`. `{{` and `}}` stand for `{` and `}`. Gives the name of the first variable that is
-/// none of these, or of a `{` with no `}`, as the error; and `env:NAME` for a `{env:NAME}` the
-/// environment of `vars` does not hold ([`Vars::env`]). A `NAME` is letters, digits and
-/// underscores and does not start with a digit: `{env:}` and `{env:A B}` name no variable.
+/// `{{` and `}}` stand for `{` and `}`.
 pub fn expand(text: &str, vars: &Vars) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -432,7 +247,6 @@ pub fn expand(text: &str, vars: &Vars) -> Result<String, String> {
             });
             rest = &after[end + 1..];
         } else {
-            // A closing brace on its own is no part of a variable.
             out.push('}');
             rest = after;
         }
@@ -441,7 +255,6 @@ pub fn expand(text: &str, vars: &Vars) -> Result<String, String> {
     Ok(out)
 }
 
-/// Whether `name` can be the `NAME` of an `{env:NAME}`.
 fn is_env_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars
@@ -450,8 +263,7 @@ fn is_env_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// What `name` is in `env`, its first entry of that name: none where it is not there, is the
-/// empty text (a `{env:CARGO_HOME}/bin` would name the root folder's `/bin`) or is not UTF-8.
+/// The first entry of that name; empty counts as absent (`{env:CARGO_HOME}/bin` would name `/bin`).
 fn env_value<'a>(env: &'a [(OsString, OsString)], name: &str) -> Option<&'a str> {
     env.iter()
         .find(|(key, _)| key == name)
@@ -459,7 +271,6 @@ fn env_value<'a>(env: &'a [(OsString, OsString)], name: &str) -> Option<&'a str>
         .filter(|value| !value.is_empty())
 }
 
-/// [`expand`] applied to every string inside `value`, keys left as they are.
 pub fn expand_json(value: &serde_json::Value, vars: &Vars) -> Result<serde_json::Value, String> {
     Ok(match value {
         Value::String(text) => Value::String(expand(text, vars)?),
@@ -478,9 +289,8 @@ pub fn expand_json(value: &serde_json::Value, vars: &Vars) -> Result<serde_json:
     })
 }
 
-/// A TOML value with its tables in the order they were written: `toml::Table` is sorted by
-/// key, and the order of the rows, of a row's extensions and of an environment is the
-/// text's.
+/// A TOML value that keeps its tables in written order: `toml::Table` sorts by key, and the
+/// order of rows, of a row's extensions and of an environment is the text's.
 enum Node {
     Text(String),
     Whole(i64),
@@ -491,8 +301,6 @@ enum Node {
     Map(Vec<(String, Node)>),
 }
 
-/// The value of `value` as a [`Node`], its tables put back in the order of their keys in
-/// the text (by the key's position there).
 fn node_of(value: &DeValue<'_>) -> Result<Node, String> {
     Ok(match value {
         DeValue::String(text) => Node::Text(text.to_string()),
@@ -517,9 +325,8 @@ fn node_of(value: &DeValue<'_>) -> Result<Node, String> {
     })
 }
 
-/// Where in the text `key` is first written, as its own key or as a part of the header or
-/// key of anything under it: the span the parser records for a key that a later header
-/// names again is the later one's.
+/// Where `key` is first written, as its own key or in the header or key of anything under it:
+/// the span the parser records for a key a later header names again is the later one's.
 fn first_written(start: usize, value: &DeValue<'_>) -> usize {
     match value {
         DeValue::Table(table) => table
@@ -534,7 +341,6 @@ fn first_written(start: usize, value: &DeValue<'_>) -> usize {
     }
 }
 
-/// The entries of `table`, in the order of their keys in the text.
 fn entries(table: &DeTable<'_>) -> Result<Vec<(String, Node)>, String> {
     let mut found = table
         .iter()
@@ -553,8 +359,6 @@ fn entries(table: &DeTable<'_>) -> Result<Vec<(String, Node)>, String> {
         .collect())
 }
 
-/// The top-level entries of `text`, in the order written, each with its value or the
-/// reason it could not be read; a text that is not TOML gives none and one error.
 fn nodes(
     text: &str,
     source: Source,
@@ -590,11 +394,9 @@ fn nodes(
         .collect()
 }
 
-/// What a table's entries are looked up by, with the keys the format has checked.
 struct Fields<'a>(&'a [(String, Node)]);
 
 impl<'a> Fields<'a> {
-    /// The entries of `node`, which must be a table holding no key outside `allowed`.
     fn of(node: &'a Node, what: &str, allowed: &[&str]) -> Result<Fields<'a>, String> {
         let Node::Map(entries) = node else {
             return Err(format!("{what} is not a table"));
@@ -661,7 +463,6 @@ fn json_of(node: &Node, what: &str) -> Result<Value, String> {
     })
 }
 
-/// A table of `node` as a JSON object whose strings name only variables the format has.
 fn object_of(node: &Node, what: &str) -> Result<Value, String> {
     if !matches!(node, Node::Map(_)) {
         return Err(format!("{what} must be a table"));
@@ -671,7 +472,6 @@ fn object_of(node: &Node, what: &str) -> Result<Value, String> {
     Ok(value)
 }
 
-/// `text` as it is, if it names only variables the format has.
 fn checked(text: String, what: &str) -> Result<String, String> {
     expand(&text, &Vars::default()).map_err(|name| unknown_variable(what, &name))?;
     Ok(text)
@@ -691,8 +491,7 @@ fn checked_pairs(node: &Node, what: &str) -> Result<Vec<(String, String)>, Strin
         .collect()
 }
 
-/// The sentence for an unknown variable, or for a `{` never closed, which [`expand`] tells
-/// by the `{` its error starts with: no variable's name can.
+/// [`expand`] tells an unclosed `{` by the `{` its error starts with: no variable's name can.
 fn unknown_variable(what: &str, name: &str) -> String {
     if name.starts_with('{') {
         format!("{what} holds `{name}`, a `{{` with no `}}`")
@@ -701,9 +500,6 @@ fn unknown_variable(what: &str, name: &str) -> String {
     }
 }
 
-/// The row `name` of the text of `source`, read; `base` is the built-in row of that name
-/// when `source` is the user's file. A row that cannot be read is put in `errors` and gives
-/// none.
 fn read_row(
     name: &str,
     node: Result<Node, String>,
@@ -765,7 +561,6 @@ fn row_of(name: &str, node: &Node, source: Source, base: Option<&Row>) -> Result
         Some(_) => return Err("`server` must be an array of tables".to_string()),
     };
     if source == Source::Builtin {
-        // A download is kept in a folder of its server's name.
         for (at, server) in servers.iter().enumerate() {
             if servers[..at].iter().any(|other| other.name == server.name) {
                 return Err(format!("names two servers `{}`", server.name));
@@ -1027,7 +822,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The row names of a registry, in its order.
     fn names(registry: &Registry) -> Vec<&str> {
         registry
             .rows()
@@ -1036,7 +830,6 @@ mod tests {
             .collect()
     }
 
-    /// The row names of the errors, in the order found; an empty string for none.
     fn error_rows(errors: &[RowError]) -> Vec<&str> {
         errors
             .iter()
@@ -1044,7 +837,6 @@ mod tests {
             .collect()
     }
 
-    /// The reason of the error naming `row`.
     fn reason<'a>(errors: &'a [RowError], row: &str) -> &'a str {
         errors
             .iter()
@@ -1059,7 +851,6 @@ mod tests {
         registry
     }
 
-    /// One built-in row that reads, named `name`, with one extension named like it.
     fn good(name: &str) -> String {
         format!(
             "[{name}]\nextensions = {{ {name} = \"{name}\" }}\n\
@@ -1067,13 +858,10 @@ mod tests {
         )
     }
 
-    // NAV-15, the built-in table
-
     #[test]
     fn the_built_in_table_reads_with_no_error_in_the_order_written() {
         let registry = read_ok(BUILTIN, None);
 
-        // Written typescript, python, rust: not the order of the keys.
         assert_eq!(names(&registry), ["typescript", "python", "rust"]);
         let servers = |row: &str| -> Vec<&str> {
             registry
@@ -1103,8 +891,6 @@ mod tests {
         assert_eq!(tsgo.name, "tsgo");
 
         for section in ["js/ts", "typescript", "javascript"] {
-            // The key under a section is found by its parts, as the server's
-            // `workspace/configuration` answer finds it.
             let value = ["tsserver", "automaticTypeAcquisition", "enabled"]
                 .iter()
                 .try_fold(&tsgo.settings[section], |at, part| at.get(part));
@@ -1153,7 +939,6 @@ mod tests {
         assert_eq!(tsgo.command, None);
         assert_eq!(tsgo.downloads.len(), 4);
 
-        // No `trial`, and a section's rule of its own.
         let python = registry.row("python").unwrap();
         assert_eq!(python.servers[0].trial, None);
         let rust = registry.row("rust").unwrap();
@@ -1172,7 +957,6 @@ mod tests {
             rust.servers[0].initialization_options,
             Some(json!({ "checkOnSave": false, "cargo": { "targetDir": "{target}" } }))
         );
-        // A server with no `capabilities` has an empty object, not none.
         assert_eq!(typescript.servers[0].capabilities, json!({}));
         assert_eq!(typescript.servers[0].initialization_options, None);
         assert_eq!(python.servers[0].settings, json!({}));
@@ -1189,11 +973,8 @@ mod tests {
         assert_eq!((ty.archive, ty.strip), (Archive::TarGz, 1));
     }
 
-    // NAV-15, row by row
-
     #[test]
     fn a_row_that_cannot_be_read_is_reported_and_passed_over_and_the_rows_after_it_are_read() {
-        // Rows are named so that the order of the text differs from the order of the keys.
         let text = format!(
             "{zeta}\n\
              [yak]\ncolour = \"red\"\nextensions = {{ y = \"y\" }}\n\
@@ -1251,7 +1032,6 @@ mod tests {
 
     #[test]
     fn a_variable_the_format_does_not_have_is_an_error_of_its_row_wherever_it_is_written() {
-        // Each text puts one unknown variable in one place the format expands.
         let places = [
             ("args", "args = [\"{nothere}\"]"),
             ("project", "project = [\"{nothere}\"]"),
@@ -1290,7 +1070,6 @@ mod tests {
         assert_eq!(errors[0].source, Source::Builtin);
         assert!(!errors[0].reason.is_empty());
 
-        // The user's file broken: the built-in rows stay, and the error says whose it is.
         let builtin = good("a");
         let (registry, errors) = Registry::read(&builtin, Some("[[[ nonsense"));
         assert_eq!(names(&registry), ["a"]);
@@ -1326,7 +1105,6 @@ mod tests {
             "server = { name = \"a\" }",
         ];
         for wrong in wrongs {
-            // A row with `extensions` first, so that only the line under test can be wrong.
             let head = if wrong.starts_with("extensions") {
                 ""
             } else {
@@ -1372,8 +1150,6 @@ mod tests {
 
     #[test]
     fn a_row_is_where_its_name_is_first_written_even_when_its_own_header_comes_later() {
-        // The row's first mention is a header of something under it; its own header is
-        // written after another row's.
         let by_servers = "[[z.server]]\nname = \"z\"\nmachine = [\"z\"]\n\
                           [b]\nextensions = { b = \"b\" }\n[[b.server]]\nname = \"b\"\nmachine = [\"b\"]\n\
                           [z]\nextensions = { z = \"z\" }\n";
@@ -1458,9 +1234,6 @@ mod tests {
         assert_eq!(error_rows(&errors), ["e", "f", "g", "h", "i", "j"]);
     }
 
-    // NAV-15, downloads
-
-    /// A built-in row `a` with one server holding `download` tables written as `downloads`.
     fn with_downloads(downloads: &str) -> String {
         format!("[a]\nextensions = {{ a = \"a\" }}\n[[a.server]]\nname = \"a\"\n{downloads}\n")
     }
@@ -1475,7 +1248,6 @@ mod tests {
         text
     }
 
-    /// The seven keys of a download that reads, with one of them replaced or taken out.
     fn download_with(key: &str, value: Option<&str>) -> String {
         let mut lines: Vec<(&str, String)> = vec![
             ("platform", "\"linux-x64\"".into()),
@@ -1593,8 +1365,6 @@ mod tests {
         );
     }
 
-    // NAV-15, a server's own keys
-
     #[test]
     fn a_built_in_server_needs_a_name_and_may_not_name_a_command() {
         let text = "[a]\nextensions = { a = \"a\" }\n[[a.server]]\nmachine = [\"a\"]\n\
@@ -1609,8 +1379,6 @@ mod tests {
         assert!(reason(&errors, "c").contains("colour"));
         assert!(reason(&errors, "d").contains("same"));
     }
-
-    // NAV-15, the user's file
 
     const BUILTIN_RUST: &str = "[rust]\ntitle = \"Rust\"\nmarkers = [\"Cargo.toml\"]\n\
         [rust.extensions]\nrs = \"rust\"\n\
@@ -1627,7 +1395,6 @@ mod tests {
                     [[rust.server]]\ncommand = [\"/opt/ra2\"]\nproject = [\"p/ra\"]\nmachine = [\"ra\"]\n";
         let registry = read_ok(&builtin, Some(user));
 
-        // In the built-in row's place, not after the rows that follow it.
         assert_eq!(names(&registry), ["first", "rust", "last"]);
         let rust = registry.row("rust").unwrap();
         assert!(rust.registered);
@@ -1635,7 +1402,6 @@ mod tests {
         assert_eq!(rust.extensions, [("rs".to_string(), "rust".to_string())]);
         assert_eq!(rust.markers, ["Cargo.toml"]);
         assert_eq!(rust.old_side.link, ["target"]);
-        // None of the built-in servers, and none ever downloaded.
         assert_eq!(rust.servers.len(), 2);
         assert_eq!(rust.servers[0].name, "mine");
         assert_eq!(
@@ -1643,11 +1409,9 @@ mod tests {
             Some(vec!["/opt/ra".into(), "--x".into()])
         );
         assert!(rust.servers.iter().all(|s| s.downloads.is_empty()));
-        // A server with no name is named as its row; it may name project and machine too.
         assert_eq!(rust.servers[1].name, "rust");
         assert_eq!(rust.servers[1].project, ["p/ra"]);
         assert_eq!(rust.servers[1].machine, ["ra"]);
-        // The built-in row of another name is as it was.
         assert!(!registry.row("first").unwrap().registered);
     }
 
@@ -1741,11 +1505,8 @@ mod tests {
             registry.for_path(Path::new("main.sil")).unwrap().name,
             "standin"
         );
-        // A title left out is the row's name.
         assert_eq!(registry.row("bee").unwrap().title, "bee");
     }
-
-    // Variables
 
     fn vars() -> Vars {
         Vars {
@@ -1782,7 +1543,6 @@ mod tests {
         assert_eq!(expand("{{root}}", &vars()), Ok("{root}".to_string()));
         assert_eq!(expand("{{{root}}}", &vars()), Ok("{/r}".to_string()));
         assert_eq!(expand("a}}b{{c", &vars()), Ok("a}b{c".to_string()));
-        // A lone closing brace is no part of a variable: it stays as it is.
         assert_eq!(expand("a}b", &vars()), Ok("a}b".to_string()));
     }
 
@@ -1806,7 +1566,6 @@ mod tests {
         assert_eq!(expand("{root}", &vars), Ok("{target}".to_string()));
     }
 
-    /// The variables of `vars()` with the environment `pairs`.
     fn with_env(pairs: &[(&str, &str)]) -> Vars {
         Vars {
             env: Some(
@@ -1826,10 +1585,8 @@ mod tests {
             expand("{env:CARGO_HOME}/bin|{env:HOME}|{env:A_1}|{root}", &vars),
             Ok("/c/bin|/h|x y|/r".to_string())
         );
-        // The first entry of a name wins, as it does where a server's environment is made.
         let twice = with_env(&[("A", "first"), ("A", "second")]);
         assert_eq!(expand("{env:A}", &twice), Ok("first".to_string()));
-        // A value put in is not read again, and the names are case-sensitive.
         let braces = with_env(&[("A", "{root}")]);
         assert_eq!(expand("{env:A}", &braces), Ok("{root}".to_string()));
         assert_eq!(
@@ -1857,7 +1614,6 @@ mod tests {
             expand_json(&json!({ "k": ["{env:MISSING}"] }), &vars),
             Err("env:MISSING".to_string())
         );
-        // No environment is known: a row is being read, and every name puts in nothing.
         assert_eq!(
             expand("a{env:MISSING}b", &Vars::default()),
             Ok("ab".to_string())
@@ -1876,7 +1632,6 @@ mod tests {
                 "{name:?}"
             );
         }
-        // Other spellings are no variable either.
         assert_eq!(expand("{env}", &vars), Err("env".to_string()));
         assert_eq!(expand("{Env:A}", &vars), Err("Env:A".to_string()));
         assert_eq!(expand("{env: A}", &vars), Err("env: A".to_string()));

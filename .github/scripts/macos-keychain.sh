@@ -1,55 +1,7 @@
 #!/bin/bash
-# The keychain of the job release-sign-macos: made from the repository's secrets, used to
-# sign, removed at the end. Runs only in that job, on a run that publishes; no test runs it
-# and no agent runs it on a Mac of the owner's: it is reviewed by reading.
-#
-#   .github/scripts/macos-keychain.sh import
-#   .github/scripts/macos-keychain.sh remove
-#
-# import, with these variables (the secrets of the environment `release`):
-#   MACOS_CERTIFICATE_P12        the Developer ID Application certificate with its private
-#                                key, and Apple's Developer ID Certification Authority (G2)
-#                                certificate beside it, exported together as a .p12 file,
-#                                in base64
-#   MACOS_CERTIFICATE_PASSWORD   the password the .p12 was exported with
-#   APPLE_NOTARY_KEY_P8          the text of the App Store Connect API key file
-#                                AuthKey_<key id>.p8
-#   APPLE_NOTARY_KEY_ID          that key's id
-#   APPLE_NOTARY_ISSUER_ID       the issuer id of the team's keys (a UUID)
-#   1. Refuses, naming the variable and never its value, when any is empty; refuses when
-#      packaging/macos/team-id holds no line that is not a comment.
-#   2. Makes a random password (`openssl rand -hex 24`), never printed; creates
-#      $RUNNER_TEMP/yaar-signing.keychain-db with it; `security set-keychain-settings -lut
-#      21600`; unlocks it; decodes the .p12 to $RUNNER_TEMP/yaar-signing/cert.p12 (folder of
-#      mode 700); `security import ... -k <keychain> -P "$MACOS_CERTIFICATE_PASSWORD" -T
-#      /usr/bin/codesign -f pkcs12`; `security set-key-partition-list -S apple-tool:,apple:
-#      -s -k <password> <keychain>`; puts the keychain first in the user's search list,
-#      keeping the others (`security list-keychains -d user -s <keychain> <the old ones>`,
-#      the old list kept in $RUNNER_TEMP/yaar-signing/search-list); deletes cert.p12.
-#   3. Finds the one valid identity "Developer ID Application: <name> (<team id>)" in that
-#      keychain (`security find-identity -v -p codesigning <keychain>`). Refuses when there
-#      is none, with the sentence: "no valid Developer ID Application identity in the .p12:
-#      export the certificate together with its key and Apple's Developer ID Certification
-#      Authority (G2) certificate" (without the intermediate the identity is not valid on a
-#      Mac that has not got it); refuses when there are several; refuses when <team id> is
-#      not the line of packaging/macos/team-id. Writes its SHA-1 hash as SIGN_IDENTITY and
-#      the keychain's path as SIGN_KEYCHAIN into $GITHUB_ENV.
-#   4. Writes APPLE_NOTARY_KEY_P8 to $RUNNER_TEMP/yaar-signing/AuthKey.p8 (mode 600), and
-#      NOTARY_KEY=<that path>, NOTARY_KEY_ID, NOTARY_ISSUER into $GITHUB_ENV.
-#   5. Checks the notary key before anything is signed: `xcrun notarytool history --key
-#      <path> --key-id <id> --issuer <issuer>` (it signs in to Apple and uploads nothing)
-#      must exit 0; otherwise refuses with "the notary key was refused by Apple: check its
-#      id, its issuer and its access" and notarytool's own message.
-#   Prints only: "keychain made; signing identity: <the identity's name>; notary key
-#   accepted".
-# remove: deletes the keychain (`security delete-keychain`), puts the search list back as it
-# was before import, and deletes $RUNNER_TEMP/yaar-signing. Succeeds when there is nothing to
-# remove.
-#
-# No value of a secret is ever printed, put on a command line other tools log, or written
-# outside $RUNNER_TEMP/yaar-signing.
-#
-# Exit codes: 0 done; 1 a refusal or a failed command (a sentence says which); 2 usage error.
+# The signing keychain of the job release-sign-macos, made from the secrets and removed at the end.
+# .github/scripts/macos-keychain.sh import | remove  (import writes SIGN_*, NOTARY_* to $GITHUB_ENV)
+# The .p12 must hold Apple's Developer ID CA (G2) too, or the identity is invalid elsewhere.
 set -euo pipefail
 umask 077
 
@@ -63,14 +15,11 @@ fail() { echo "$SELF: $*" >&2; exit 1; }
 MODE=$1
 case $MODE in import | remove) ;; *) usage ;; esac
 
-# Never printed, never put in a command: the names of the places only.
 [ -n "${RUNNER_TEMP:-}" ] || [ "$MODE" = import ] || fail "RUNNER_TEMP is empty: the keychain of this job cannot be found"
 FOLDER="${RUNNER_TEMP:-}/yaar-signing"
 KEYCHAIN="${RUNNER_TEMP:-}/yaar-signing.keychain-db"
 OLD_LIST="$FOLDER/search-list"
 
-# What a step of this script says when a tool fails: its own words, kept in a file of the
-# folder (mode 600) and shown only then. None of them holds a secret.
 LOG=""
 run() { # <what> <command>...: runs it with its output kept; on failure says what it was
   local what=$1; shift
@@ -81,8 +30,8 @@ run() { # <what> <command>...: runs it with its output kept; on failure says wha
 }
 
 if [ "$MODE" = remove ]; then
-  # Everything that can be removed is tried, then the first failure is reported: a keychain
-  # that stays behind must not keep the key file with it.
+  # Every removal is tried even after one fails, so a keychain left behind does not keep the key
+  # file with it; each failure is named and the exit status is 1.
   status=0
   if [ -f "$OLD_LIST" ]; then
     old=()
@@ -104,7 +53,6 @@ if [ "$MODE" = remove ]; then
   exit "$status"
 fi
 
-# ---- import
 for v in MACOS_CERTIFICATE_P12 MACOS_CERTIFICATE_PASSWORD APPLE_NOTARY_KEY_P8 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID; do
   [ -n "${!v:-}" ] || fail "$v is empty: the secret of that name is not set in the environment of this job"
 done
@@ -120,18 +68,14 @@ TEAM=$(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' -e 's/^[[:space:]]*//' 
 [ -n "${RUNNER_TEMP:-}" ] || fail "RUNNER_TEMP is empty: there is no folder of this job to keep the keychain in"
 [ -n "${GITHUB_ENV:-}" ] || fail "GITHUB_ENV is empty: there is no file to hand the identity to the next steps in"
 
-# A folder of this job's own, readable by nobody else.
 mkdir -p "$FOLDER"
 chmod 700 "$FOLDER"
 LOG="$FOLDER/last-output"
 : > "$LOG"
-# Whatever happens below, the key file does not stay on the disk; `remove` takes the rest.
 trap 'rm -f "$FOLDER/cert.p12"' EXIT
 
-# 2. The keychain. Its password is random, lives in this shell only and is never printed.
 PASSWORD=$(openssl rand -hex 24)
 run "reading the keychain search list" security list-keychains -d user
-# One path per line, quotes and indentation taken off, kept to put the list back.
 sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//' "$LOG" > "$OLD_LIST"
 old=()
 while IFS= read -r line; do
@@ -149,11 +93,9 @@ run "importing the certificate (a wrong MACOS_CERTIFICATE_PASSWORD gives this to
 rm -f "$FOLDER/cert.p12"
 run "letting codesign use the key without asking" \
   security set-key-partition-list -S apple-tool:,apple: -s -k "$PASSWORD" "$KEYCHAIN"
-# The new keychain first, the user's others after it.
 run "putting the keychain in the search list" \
   security list-keychains -d user -s "$KEYCHAIN" ${old[@]+"${old[@]}"}
 
-# 3. The one valid identity, and whose it is.
 run "listing the signing identities" security find-identity -v -p codesigning "$KEYCHAIN"
 IDENT_RE='^[[:space:]]*[0-9]+\) ([0-9A-F]{40}) "(Developer ID Application: .*)"$'
 HASH=""; NAME=""; COUNT=0
@@ -176,7 +118,6 @@ IDENT_TEAM=${BASH_REMATCH[1]}
   printf 'SIGN_KEYCHAIN=%s\n' "$KEYCHAIN"
 } >> "$GITHUB_ENV"
 
-# 4. The notary key: a file of mode 600, and the three values the packaging script reads.
 KEYFILE="$FOLDER/AuthKey.p8"
 printf '%s\n' "$APPLE_NOTARY_KEY_P8" > "$KEYFILE"
 chmod 600 "$KEYFILE"
@@ -186,8 +127,7 @@ chmod 600 "$KEYFILE"
   printf 'NOTARY_ISSUER=%s\n' "$APPLE_NOTARY_ISSUER_ID"
 } >> "$GITHUB_ENV"
 
-# 5. The key is tried with Apple before anything is signed: `history` signs in and uploads
-#    nothing.
+# `history` signs in to Apple and uploads nothing, so a bad key shows before anything is signed.
 if ! xcrun notarytool history --key "$KEYFILE" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" > "$LOG" 2>&1; then
   cat "$LOG" >&2
   fail "the notary key was refused by Apple: check its id, its issuer and its access"

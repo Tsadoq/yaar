@@ -1,13 +1,6 @@
-//! Component test: code intelligence in the composed Window on GPUI's test platform, with
-//! the pane, the real Navigator and the real Keeper joined, and the stand-in language
-//! server beneath. Keys, clicks and the wheel go in; what the pane shows is read back through
-//! its model. Nothing of the answers is told by the test: the Navigator asks the stand-in, and
-//! asks the Keeper, through the Window, to write the old side.
-//!
-//! A name's place on screen: the text of a line is drawn by an element whose selector is
-//! `review-text-<row>-<side>:<text>`, and the font of the pane is of fixed width, so the
-//! middle of the character at offset `k` is `left + (k + 0.5) * cell`, the cell being the
-//! element's width over the text's characters.
+//! Code intelligence in the composed Window, with the real Navigator and a stand-in server.
+//! A line's text is the element `review-text-<row>-<side>:<text>`, fixed-width: the middle of the
+//! character at offset `k` is `left + (k + 0.5) * cell`.
 
 mod common;
 
@@ -28,17 +21,12 @@ use common::{
     open_composed_with_a_navigator, standin_row, standin_row_started_with, wait_until,
 };
 
-/// The file the change leaves in place, which defines the names the change uses.
 const LIB: &str = "def total\ndef old_name\n";
-/// `main.sil` as the base has it: its second line uses `old_name`.
 const MAIN_BEFORE: &str = "def main\nuse old_name\n";
-/// `main.sil` as the worktree has it: that line is gone and one using `total` is there.
 const MAIN_AFTER: &str = "def main\nuse total\n";
 const REMOVED: &str = "use old_name";
 const ADDED: &str = "use total";
 
-/// The repository of the test: `lib.sil` and `main.sil` committed on `main`, then `main.sil`
-/// changed in the worktree on a branch of its own. Gives it and the commit of the base.
 fn repository_with_a_change(world: &World) -> (Repo, String) {
     let repository = world.repository("code");
     give_an_identity(&repository);
@@ -50,7 +38,6 @@ fn repository_with_a_change(world: &World) -> (Repo, String) {
     (repository, base)
 }
 
-/// The index of the row of the pane whose text of `side` is `text`, once it is drawn.
 fn row_of(window: &Composed, side: &str, text: &str, cx: &mut VisualTestContext) -> usize {
     let mut found = None;
     wait_until(cx, &format!("the row of {text} on its {side} side"), |cx| {
@@ -62,7 +49,6 @@ fn row_of(window: &Composed, side: &str, text: &str, cx: &mut VisualTestContext)
     found.expect("the row is drawn")
 }
 
-/// Clicks on the first byte of `name` in the text of a row, by the rule in the header.
 fn click_name(row: usize, side: &str, text: &str, name: &str, cx: &mut VisualTestContext) {
     let bounds = drawn(&format!("review-text-{row}-{side}:{text}"), cx).expect("the text is drawn");
     let cell = bounds.size.width / text.chars().count() as f32;
@@ -78,7 +64,6 @@ fn click_name(row: usize, side: &str, text: &str, name: &str, cx: &mut VisualTes
     );
 }
 
-/// What the pane shows as the hover, once the Navigator answered it.
 fn answered_hover(window: &Composed, cx: &mut VisualTestContext) -> HoverShown {
     let mut found = None;
     wait_until(cx, "the answer to the hover", |cx| {
@@ -91,25 +76,19 @@ fn answered_hover(window: &Composed, cx: &mut VisualTestContext) -> HoverShown {
     found.expect("the hover is answered")
 }
 
-/// The pane shows the state of the server of the code on screen as `state`.
 fn the_line_says(state: &str, cx: &mut VisualTestContext) -> bool {
     drawn(&format!("review-servers-state:{state}"), cx).is_some()
 }
 
-/// The file the stand-in of a side logs to: `{root}/../standin.log`, beside the folder it
-/// serves, so that each side has a log of its own (the worktree's parent for the new side,
-/// the folder the export lies in for the old). The Navigator expands `{root}` as the folder
-/// of the side, and the stand-in makes no folder, so the log lies where one already is.
+/// Each side's stand-in logs beside the folder it serves; the Navigator expands `{root}`.
 const LOG_BESIDE_ROOT: &str = "{root}/../standin.log";
 
-/// The log of the stand-in that serves `root`, as the row writes it.
 fn log_beside(root: &Path) -> PathBuf {
     root.parent()
         .expect("the folder a server serves has a parent")
         .join("standin.log")
 }
 
-/// The lines of a stand-in's log, one JSON object each; none while it has not been made.
 fn log_of(log: &Path) -> Vec<String> {
     std::fs::read_to_string(log)
         .unwrap_or_default()
@@ -118,8 +97,6 @@ fn log_of(log: &Path) -> Vec<String> {
         .collect()
 }
 
-/// How many requests of `method` the stand-in logged. The window's tests read the log as
-/// text, which is what its lines are: `"event":"request"` and `"method":"<method>"`.
 fn requests(log: &Path, method: &str) -> usize {
     log_of(log)
         .iter()
@@ -130,7 +107,6 @@ fn requests(log: &Path, method: &str) -> usize {
         .count()
 }
 
-/// The folders the stand-in of `log` was started in, from the `cwd` of each `start` line.
 fn started_in(log: &Path) -> Vec<PathBuf> {
     log_of(log)
         .iter()
@@ -145,7 +121,6 @@ fn started_in(log: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-// WIN-10
 #[gpui_kit::test]
 fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_removed_line_from_the_old_side_the_keeper_exported(
     cx: &mut TestAppContext,
@@ -154,7 +129,6 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     world.start_keeper();
     let (repository, base) = repository_with_a_change(&world);
     let folder = repository.path().to_owned();
-    // Read before the Window opens the folder: from then on a server may run in it.
     let status = repository.git(&["status", "--porcelain"]);
     let navigator = navigator_for(
         &world,
@@ -170,8 +144,6 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     window.open_this_folder(&folder, &mut cx);
     window.show_the_changes_view(&mut cx);
 
-    // The reviewer comes to a name of an added line: the pane names the server of that file,
-    // which the Navigator found, started, and says is ready.
     let added = row_of(&window, "new", ADDED, &mut cx);
     window.click_into_the_review_pane(&mut cx);
     click_name(added, "new", ADDED, "total", &mut cx);
@@ -198,7 +170,6 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     assert_eq!(hover.place.path, PathBuf::from("main.sil"));
     assert_eq!((hover.place.line, hover.place.name.as_str()), (2, "total"));
 
-    // Go to definition opens the file view of the file that defines it, at the line.
     cx.simulate_keystrokes("g d");
     let mut shown = None;
     wait_until(&mut cx, "the file view of the definition", |cx| {
@@ -220,7 +191,6 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     assert!(drawn("review-file-at", &mut cx).is_some());
     assert!(drawn(&format!("review-row-{added}"), &mut cx).is_none());
 
-    // The return control comes back to the place left in the diff.
     cx.simulate_keystrokes("escape");
     assert_eq!(
         window
@@ -236,10 +206,8 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     );
     assert!(drawn(&format!("review-row-{added}"), &mut cx).is_some());
 
-    // Hover on a removed line asks for the old side, which the Keeper writes into the cache
-    // folder the Navigator named. The first answer is found by text match while it is
-    // written (the old side's server is not there yet), so the test waits for the old
-    // side's server to be ready, and asks again.
+    // The first hover on the old side is answered by text match while the Keeper writes the
+    // export, so the test waits for the old side's server to be ready and asks again.
     let removed = row_of(&window, "old", REMOVED, &mut cx);
     click_name(removed, "old", REMOVED, "old_name", &mut cx);
     assert_eq!(
@@ -282,8 +250,6 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     assert!(!hover.guessed, "the old side's server answered");
     assert_eq!(hover.place.tree, Tree::Version(base.clone()));
 
-    // The old side is the export the Keeper wrote in the app's cache folder of this world, and
-    // the worktree no longer holds the name the answer is about.
     let into = exported_by_the_keeper(&window).expect("the Keeper was asked to export the base");
     assert!(
         into.starts_with(navigator_cache(&window.world)),
@@ -297,15 +263,10 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
         std::fs::read_to_string(folder.join("main.sil")).expect("the worktree's file"),
         MAIN_AFTER
     );
-    // The repository holds nothing of it.
     assert_eq!(repository.git(&["status", "--porcelain"]), status);
 
-    // Which server answered: each side's stand-in logs beside its own root. The answer was
-    // read before this, and a server logs a request before it answers, so what an answer
-    // came from is in a log by now. The new side's server was started in the worktree and
-    // was asked only about the added line; the old side's was started in the export and
-    // answered the removed line, once: the first hover on it is answered by text match while
-    // the export is written, so only the second reaches the server.
+    // A server logs a request before it answers. The new side's server had the added line's
+    // hover; the old side's only the second hover of the removed line, the first a text match.
     let (new_log, old_log) = (log_beside(&folder), log_beside(&into));
     assert_ne!(new_log, old_log, "the two sides share a log");
     assert_eq!(
@@ -328,21 +289,17 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     );
 
     window.end_the_navigator(&mut cx);
-    // The end of the Navigator removed what it exported, and the call waited for that.
     assert!(
         !Path::new(&into).exists(),
         "the export outlived the Navigator"
     );
 }
 
-/// A composed Window with a Navigator, on the repository of the test with the stand-in
-/// running for the file on screen: gives it, its context and the process of the server.
 fn with_a_server_running(cx: &mut TestAppContext) -> (Composed, VisualTestContext, u32) {
     let (window, inner, pid, _) = with_a_server_running_over(cx);
     (window, inner, pid)
 }
 
-/// [`with_a_server_running`], and the commit of the base the change is counted from.
 fn with_a_server_running_over(
     cx: &mut TestAppContext,
 ) -> (Composed, VisualTestContext, u32, String) {
@@ -377,23 +334,17 @@ fn with_a_server_running_over(
     (window, inner, pid, base)
 }
 
-// Of its own: the app's quit ends the Navigator and the servers it started, as a user's
-// quit does, and the Window waits for it.
 #[gpui_kit::test]
 fn the_quit_of_the_app_stops_every_server_before_it_goes_on(cx: &mut TestAppContext) {
     let (_window, _inner, pid) = with_a_server_running(cx);
 
     cx.update(|app| app.shutdown());
-    // The quit waited for it: no wait here.
     assert!(
         !is_alive(pid),
         "the server {pid} outlived the quit of the app"
     );
 }
 
-/// Asks the Navigator of the window whose models these are for the hover on `total` in the
-/// worktree of `workspace`, and waits for its answer: the server of the stand-in is started
-/// by that ask. Then waits until the model shows the stand-in ready, and gives its process.
 fn start_the_standin_in(
     models: &yaar_frame::Models,
     workspace: &yaar_link::WorkspaceId,
@@ -435,8 +386,6 @@ fn start_the_standin_in(
     pid.expect("a server runs")
 }
 
-/// Opens `folder` in the window whose models these are, once its Keeper has answered, and
-/// gives the workspace that comes on screen.
 fn open_the_folder_in(
     models: &yaar_frame::Models,
     folder: &Path,
@@ -460,8 +409,7 @@ fn open_the_folder_in(
     workspace.expect("a workspace is on screen")
 }
 
-/// Lets a server that a test stopped go on again when the test ends, so that none is left
-/// stopped by a test that failed before the Navigator killed it.
+/// Lets a stopped server go on when the test ends, even if it fails first.
 struct Resumed(u32);
 
 impl Drop for Resumed {
@@ -471,9 +419,6 @@ impl Drop for Resumed {
     }
 }
 
-// Of its own: a quit that finds a hover waiting at a server that does not answer and an export
-// the Keeper has not answered ends the Navigator in time, and leaves no server. Both hold a
-// way to the Navigator's asks, which the quit has to close.
 #[gpui_kit::test]
 fn a_quit_with_a_hover_waiting_at_a_slow_server_and_an_export_the_keeper_has_not_answered_ends_in_time_and_leaves_no_server(
     cx: &mut TestAppContext,
@@ -494,7 +439,6 @@ fn a_quit_with_a_hover_waiting_at_a_slow_server_and_an_export_the_keeper_has_not
         shown: Vec::new(),
     };
 
-    // The server reads nothing: the hover waits at it.
     let _resumed_server = Resumed(pid);
     // SAFETY: signal STOP to the stand-in this test started.
     assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) }, 0);
@@ -504,8 +448,6 @@ fn a_quit_with_a_hover_waiting_at_a_slow_server_and_an_export_the_keeper_has_not
         .update(&mut inner, |navigation, cx| {
             navigation.hover(place(Tree::Worktree, "total"), cx)
         });
-    // The Keeper reads nothing either: the export of the old side that the first ask about
-    // it wants is on its way and stays so.
     let keeper = window.world.keeper_pid().expect("the Keeper runs");
     let _resumed_keeper = Resumed(keeper);
     // SAFETY: signal STOP to the Keeper this test's world started.
@@ -519,7 +461,6 @@ fn a_quit_with_a_hover_waiting_at_a_slow_server_and_an_export_the_keeper_has_not
         .update(&mut inner, |navigation, cx| {
             navigation.hover(place(Tree::Version(base.clone()), "old_name"), cx)
         });
-    // Neither ask is answered and neither is dropped, as a pane's ask is not while it waits.
     let _waiting = [
         cx.foreground_executor().spawn(async move {
             let _ = hover.await;
@@ -537,7 +478,6 @@ fn a_quit_with_a_hover_waiting_at_a_slow_server_and_an_export_the_keeper_has_not
     let began = Instant::now();
     cx.update(|app| app.shutdown());
     let took = began.elapsed();
-    // The quit waited for the Navigator: no wait here.
     assert!(
         !is_alive(pid),
         "the server {pid} outlived the quit of the app"
@@ -548,7 +488,6 @@ fn a_quit_with_a_hover_waiting_at_a_slow_server_and_an_export_the_keeper_has_not
     );
 }
 
-// Of its own: the quit of the app ends the Navigator of every window, not the first's alone.
 #[gpui_kit::test]
 fn the_quit_of_the_app_stops_the_servers_of_every_window(cx: &mut TestAppContext) {
     let mut world = World::new();
@@ -579,7 +518,6 @@ fn the_quit_of_the_app_stops_the_servers_of_every_window(cx: &mut TestAppContext
         workspace.is_some()
     });
     let workspace = workspace.expect("a workspace is on screen");
-    // The Keeper tells every window of its workspaces, so the second Navigator has it too.
     wait_until(&mut second_cx, "the workspace in the second window", |cx| {
         second
             .workspaces
@@ -594,9 +532,8 @@ fn the_quit_of_the_app_stops_the_servers_of_every_window(cx: &mut TestAppContext
     );
     assert!(is_alive(first_pid) && is_alive(second_pid));
 
-    // The second server is stopped, so that it reads no `shutdown` and cannot end of itself:
-    // its Navigator kills it after its deadline, and only a quit that waits for the
-    // Navigator of every window is still waiting then.
+    // Stopped, the second server cannot end of itself: its Navigator kills it after the deadline,
+    // and only a quit that waits for every window's Navigator is still waiting then.
     let _resumed = Resumed(second_pid);
     // SAFETY: signal STOP to the stand-in this test started.
     assert_eq!(
@@ -605,7 +542,6 @@ fn the_quit_of_the_app_stops_the_servers_of_every_window(cx: &mut TestAppContext
     );
 
     cx.update(|app| app.shutdown());
-    // The quit waited for both: no wait here.
     assert!(
         !is_alive(first_pid),
         "the server {first_pid} of the first window outlived the quit of the app"
@@ -616,9 +552,6 @@ fn the_quit_of_the_app_stops_the_servers_of_every_window(cx: &mut TestAppContext
     );
 }
 
-// Of its own: ending a Navigator waits for its servers. One that is stopped, so that it
-// reads no `shutdown` and cannot end of itself, is killed after the Navigator's deadline,
-// and the call returns only once it is reaped.
 #[gpui_kit::test]
 fn ending_a_navigator_returns_only_once_a_server_that_does_not_end_is_gone(
     cx: &mut TestAppContext,
@@ -628,14 +561,10 @@ fn ending_a_navigator_returns_only_once_a_server_that_does_not_end_is_gone(
     // SAFETY: signal STOP to the stand-in this test started.
     assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) }, 0);
 
-    // The server is not gone by itself, so a call that did not wait for it leaves it, and
-    // `end_the_navigator` looks for it as soon as the call returns.
     window.end_the_navigator(&mut inner);
     assert!(!is_alive(pid));
 }
 
-/// Opens a window as `open_with` does, with a Navigator whose registry has the stand-in's
-/// row, against the Keeper of `world`.
 fn open_with(world: &World, cx: &mut TestAppContext) -> (yaar_frame::Models, VisualTestContext) {
     let navigator = navigator_for(
         world,
@@ -649,8 +578,6 @@ fn open_with(world: &World, cx: &mut TestAppContext) -> (yaar_frame::Models, Vis
     (models.clone(), VisualTestContext::from_window(window, cx))
 }
 
-// Of its own: `open_with`, which the program's `open` is, hands the Navigator to the window,
-// and the quit of the app ends it.
 #[gpui_kit::test]
 fn a_window_opened_with_a_configuration_has_a_navigator_that_tells_its_languages(
     cx: &mut TestAppContext,
@@ -670,18 +597,15 @@ fn a_window_opened_with_a_configuration_has_a_navigator_that_tells_its_languages
                     .any(|language| language.name == "standin")
         })
     });
-    // A server of the Navigator runs, so that its end can be read from the process.
     let workspace = open_the_folder_in(&models, repository.path(), &mut inner);
     let pid = start_the_standin_in(&models, &workspace, &mut inner, cx);
     assert!(is_alive(pid));
 
     cx.update(|app| app.shutdown());
-    // The quit waited for the Navigator: no wait here.
     assert!(
         !is_alive(pid),
         "the server {pid} outlived the quit of the app"
     );
-    // The model says no Navigator is joined once it heard.
     wait_until(&mut inner, "the model to see the Navigator end", |cx| {
         models
             .navigation
@@ -689,7 +613,6 @@ fn a_window_opened_with_a_configuration_has_a_navigator_that_tells_its_languages
     });
 }
 
-// Of its own: each window has a Navigator of its own, and ending one leaves the other.
 #[gpui_kit::test]
 fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
     let mut world = World::new();
@@ -706,9 +629,7 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
                 .read_with(cx, |navigation, _| !navigation.languages().is_empty())
         });
     }
-    // Each Navigator runs a server of its own, so that the end of each is read from its process.
     let workspace = open_the_folder_in(&first, repository.path(), &mut first_cx);
-    // The Keeper tells every window of its workspaces, so the second Navigator has it too.
     wait_until(&mut second_cx, "the workspace in the second window", |cx| {
         second
             .workspaces
@@ -729,17 +650,13 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
             .navigation
             .read_with(&first_cx, |navigation, _| navigation.is_connected())
     );
-    // The first Navigator ends of itself and stops its server: nothing here waits for it, so
-    // the test waits, with a deadline, for the process to be gone.
     wait_until(
         &mut first_cx,
         "the first window's server to be gone",
         |_| !is_alive(first_pid),
     );
-    // The second Navigator was not the first's: it still listens and answers. The model's
-    // flags only change when the end of a Navigator reaches it, which may be a turn later
-    // than this look, so the test asks the second Navigator for a file and waits for what
-    // it tells: an ended Navigator answers nothing but a refusal.
+    // The model's flags change only when a Navigator's end reaches it, maybe a turn later, so
+    // the test asks the second Navigator for a file: an ended one would answer only a refusal.
     let file = world.home().join("barrier.sil");
     std::fs::write(&file, "def barrier\n").expect("write the file");
     let asking = second.navigation.update(&mut second_cx, |navigation, cx| {
@@ -775,7 +692,6 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
             .navigation
             .read_with(&second_cx, |navigation, _| navigation.is_connected())
     );
-    // Letting go of the first again is a call that finds nothing to let go of.
     first
         .navigation
         .update(&mut first_cx, |navigation, cx| navigation.disconnect(cx));
@@ -786,9 +702,7 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
         is_alive(second_pid),
         "the first window's end took the second window's server with it"
     );
-    // The quit of the app ends the second, which the first's end left running.
     cx.update(|app| app.shutdown());
-    // The quit waited for it: no wait here.
     assert!(
         !is_alive(second_pid),
         "the server {second_pid} of the second window outlived the quit of the app"

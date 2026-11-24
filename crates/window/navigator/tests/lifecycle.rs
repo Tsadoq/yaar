@@ -1,14 +1,5 @@
-//! Which servers run, and when, shown with the stand-in language server: the question before
-//! a server inside a repository runs (NAV-08), a server the user registered (NAV-14), a
-//! candidate that fails its trial run or its start (LSP-02), what a row says of the
-//! servers, and the stop of idle servers by a clock of the test's own.
-//!
-//! Every wait is for a state the Navigator tells, or for a line of the stand-in's log, with
-//! a deadline; no test sleeps. A clause that says nothing happened is read after a
-//! barrier: the Navigator handles one event at a time, in order, and tells one list of its
-//! servers for each ask that changes nothing ([`barrier`]), so that a list told for a later
-//! ask comes after everything an earlier one made it do, and what a recording script or a
-//! log holds then is what the earlier ask caused.
+//! Absence is asserted after a `barrier`: the Navigator handles one event at a time and tells
+//! one list of servers for an ask that changes nothing, which follows all an earlier ask caused.
 
 mod support;
 
@@ -24,17 +15,14 @@ use yaar_navigator::{
     WorkspaceRoot,
 };
 
-/// `text` as a TOML string.
 fn q(text: impl AsRef<str>) -> String {
     serde_json::to_string(text.as_ref()).expect("a string")
 }
 
-/// `path` as a TOML string.
 fn qp(path: &Path) -> String {
     q(path.display().to_string())
 }
 
-/// What a workspace of a repository is, for the Navigator.
 fn root_of(workspace: &WorkspaceId, repository: &RepositoryId, folder: &Path) -> WorkspaceRoot {
     WorkspaceRoot {
         id: workspace.clone(),
@@ -43,7 +31,6 @@ fn root_of(workspace: &WorkspaceId, repository: &RepositoryId, folder: &Path) ->
     }
 }
 
-/// The answer of a user on the servers inside a repository.
 fn consent(repository: &RepositoryId, allowed: bool) -> RepositoryConsent {
     RepositoryConsent {
         repository: repository.clone(),
@@ -51,10 +38,6 @@ fn consent(repository: &RepositoryId, allowed: bool) -> RepositoryConsent {
     }
 }
 
-/// Sends `OnScreen(Some(workspace))` again, which changes nothing and is told as the list of
-/// the Navigator's servers, and gives that list. The Navigator tells one list for each ask
-/// of this kind, and the caller read every list of the asks before it, so that this list
-/// comes after whatever those asks made the Navigator do.
 fn barrier(running: &mut Running, workspace: &WorkspaceId) -> Vec<ServerState> {
     running.ask(Ask::OnScreen(Some(workspace.clone())));
     match running.wait_told("the list of servers told for the ask", DEADLINE, |told| {
@@ -65,9 +48,6 @@ fn barrier(running: &mut Running, workspace: &WorkspaceId) -> Vec<ServerState> {
     }
 }
 
-/// Asserts that the state shows no candidate tried or started: no server named, no program,
-/// no process. The Navigator sets all three when it tries or starts a candidate, before the
-/// trial run has left any trace.
 fn assert_not_begun(state: &ServerState) {
     assert_eq!(
         (&state.server, &state.program, state.pid),
@@ -76,14 +56,12 @@ fn assert_not_begun(state: &ServerState) {
     );
 }
 
-/// The state of the stand-in's server of `workspace` in a list.
 fn standin_in(list: &[ServerState], workspace: &WorkspaceId) -> Option<ServerState> {
     list.iter()
         .find(|state| state.workspace == *workspace && state.language == "standin")
         .cloned()
 }
 
-/// Every line of a stand-in's log, as the JSON it is; none when the log is not there.
 fn log_of(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -92,7 +70,6 @@ fn log_of(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// The lines of a log whose `event` is `event`.
 fn events(path: &Path, event: &str) -> Vec<Value> {
     log_of(path)
         .into_iter()
@@ -100,8 +77,6 @@ fn events(path: &Path, event: &str) -> Vec<Value> {
         .collect()
 }
 
-/// The registry text of a row `standin` for `.sil` files whose one server is `server`, as
-/// written after its name.
 fn row_with(server: &str) -> String {
     format!(
         "[standin]\n\
@@ -114,8 +89,6 @@ fn row_with(server: &str) -> String {
     )
 }
 
-/// A row whose one server is the project's own `tools/standin-lsp`, with a trial run, and
-/// logs to `log`.
 fn project_row(log: &Path) -> String {
     row_with(&format!(
         "project = [\"tools/standin-lsp\"]\n\
@@ -126,9 +99,6 @@ fn project_row(log: &Path) -> String {
     ))
 }
 
-/// A repository holding `main.sil` and the stand-in as its own `tools/standin-lsp`, a
-/// script that records each run, committed: every worktree of it holds it. Gives the
-/// repository and the program's path.
 fn repository_with_its_own_server(scratch: &Scratch) -> (Repo, PathBuf) {
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     let program = scratch.put_recording(&repo.root.join("tools"), "standin-lsp");
@@ -137,15 +107,9 @@ fn repository_with_its_own_server(scratch: &Scratch) -> (Repo, PathBuf) {
     (repo, program)
 }
 
-/// The arguments the row of [`project_row`] starts the server with, as a recording script
-/// writes them.
 fn started_with(log: &Path) -> String {
     format!("--log {}", log.display())
 }
-
-// ---------------------------------------------------------------------------------------
-// NAV-08: the question before a server inside a repository runs.
-// ---------------------------------------------------------------------------------------
 
 #[test]
 fn a_server_inside_a_repository_does_not_run_before_the_user_said_yes() {
@@ -169,11 +133,6 @@ fn a_server_inside_a_repository_does_not_run_before_the_user_said_yes() {
     );
     assert_not_begun(&asking);
 
-    // Everything the ask for the workspace made the Navigator do is done: the list this
-    // ask makes comes after it. The server was neither tried nor run. A trial run is on a
-    // thread of its own and may leave its line after this list, so the clause is read from
-    // what the Navigator says of the key in the list: a trial shows the server's name, a
-    // start its program and its process.
     let list = barrier(&mut running, &ws);
     let still = standin_in(&list, &ws).unwrap();
     assert!(matches!(still.state, State::Asking { .. }), "{list:#?}");
@@ -181,7 +140,6 @@ fn a_server_inside_a_repository_does_not_run_before_the_user_said_yes() {
     assert_eq!(runs(&program), Vec::<String>::new());
     assert!(!log.exists(), "the server ran and wrote its log");
 
-    // Control: the recorder is the one thing that shows a run, and a yes lets it run.
     running.ask(Ask::Consents(vec![consent(&repository, true)]));
     let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -216,7 +174,6 @@ fn the_answer_is_remembered_for_the_repository_in_its_other_worktrees() {
         state.state == State::Ready
     });
 
-    // A second worktree of the repository holds the committed program too.
     let second = scratch.root.join("repos").join("second");
     repo.git(&[
         "worktree",
@@ -251,7 +208,6 @@ fn the_answer_is_remembered_for_the_repository_in_its_other_worktrees() {
             );
         }
     }
-    // Both ran, each after its trial run: the committed script records into one file.
     assert_eq!(
         runs(&program),
         [
@@ -279,7 +235,6 @@ fn a_no_passes_the_server_over_for_good() {
     running.ask(Ask::OnScreen(Some(ws.clone())));
     running.ask(Ask::Consents(vec![consent(&repository, false)]));
 
-    // The question goes, and no other candidate is left.
     let missing = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == (State::Missing { offer: None })
     });
@@ -293,9 +248,6 @@ fn a_no_passes_the_server_over_for_good() {
     assert_eq!(runs(&program), Vec::<String>::new());
     assert!(!log.exists());
 
-    // The no is kept for the repository: another worktree of it, shown later, passes the
-    // server over without a question. Its copy of the program is the same script, which
-    // records into the one file.
     let second = scratch.root.join("repos").join("second");
     repo.git(&[
         "worktree",
@@ -402,7 +354,6 @@ fn a_yes_for_another_repository_does_not_let_the_server_run() {
     let log = scratch.root.join("run-d.log");
     let (ws, mine, other) = (workspace_id('1'), repository_id('1'), repository_id('2'));
     let mut running = Running::start(scratch.config(&project_row(&log)));
-    // Told before the workspace is shown, and told after.
     running.ask(Ask::Consents(vec![consent(&other, true)]));
     running.show(&repo, &ws, &mine);
     running.wait_state(&ws, "standin", None, DEADLINE, |state| {
@@ -425,7 +376,6 @@ fn a_yes_for_another_repository_does_not_let_the_server_run() {
     );
     assert_eq!(runs(&program), Vec::<String>::new());
 
-    // Control: its own repository's yes lets it run.
     running.ask(Ask::Consents(vec![
         consent(&other, true),
         consent(&mine, true),
@@ -436,8 +386,6 @@ fn a_yes_for_another_repository_does_not_let_the_server_run() {
     running.end();
 }
 
-/// A row whose one server has the project's own copy first and the machine's after it, both
-/// the stand-in, so that the second can run while the first waits for its answer.
 fn project_and_machine_row(log: &Path) -> String {
     row_with(&format!(
         "project = [\"tools/standin-lsp\"]\n\
@@ -459,7 +407,6 @@ fn a_later_candidate_runs_while_the_question_waits_and_a_yes_replaces_it() {
     let mut running = Running::start(scratch.config(&project_and_machine_row(&log)));
     running.show(&repo, &ws, &repository);
 
-    // The question takes the line, and the machine's copy runs meanwhile.
     let meanwhile = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         matches!(state.state, State::Asking { .. }) && state.pid.is_some()
     });
@@ -474,7 +421,6 @@ fn a_later_candidate_runs_while_the_question_waits_and_a_yes_replaces_it() {
     let old = meanwhile.pid.unwrap();
     assert_eq!(runs(&program), Vec::<String>::new());
 
-    // The yes searches the key again: the copy that was passed over is the first now.
     running.ask(Ask::Consents(vec![consent(&repository, true)]));
     let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready && state.program.as_deref() == Some(program.as_path())
@@ -501,16 +447,12 @@ fn a_no_ends_the_question_and_the_key_shows_the_server_it_runs() {
     let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
     });
-    // The server that ran goes on, and the one inside the repository never ran.
     assert_eq!(ready.pid, meanwhile.pid);
     assert_eq!(ready.program, Some(on_the_machine));
     assert_eq!(runs(&program), Vec::<String>::new());
     running.end();
 }
 
-/// [`project_and_machine_row`] with no trial run: each candidate is started at once, so that
-/// the key a yes searches again is starting, not trying, when the old server's exit is
-/// handled.
 fn project_and_machine_row_without_a_trial(log: &Path) -> String {
     row_with(&format!(
         "project = [\"tools/standin-lsp\"]\n\
@@ -537,9 +479,8 @@ fn the_exit_of_the_server_a_yes_replaced_is_not_taken_for_the_exit_of_the_one_th
     assert_eq!(meanwhile.program, Some(on_the_machine));
     let old = meanwhile.pid.unwrap();
 
-    // The yes stops the machine's copy and starts the project's at once. The machine's copy
-    // ends while the key is starting the other: that exit is of an earlier search, and
-    // taken for the exit of the one starting, the key would pass the project's copy over.
+    // The yes stops the machine's server and searches again. Were that server's exit taken for
+    // the exit of the one now starting, the key would pass the project's copy over.
     running.ask(Ask::Consents(vec![consent(&repository, true)]));
     let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -548,19 +489,12 @@ fn the_exit_of_the_server_a_yes_replaced_is_not_taken_for_the_exit_of_the_one_th
     assert_ne!(ready.pid, Some(old));
     assert!(!is_alive(old), "the server that came after still runs");
 
-    // Nothing the replaced server left behind moves the key later.
     let list = barrier(&mut running, &ws);
     let still = standin_in(&list, &ws).unwrap();
     assert_eq!((still.state, still.pid), (State::Ready, ready.pid));
     running.end();
 }
 
-// ---------------------------------------------------------------------------------------
-// NAV-14: a server the user registered.
-// ---------------------------------------------------------------------------------------
-
-/// The user's file: a row `standin` for `.sil` files, a new language, whose one server
-/// `mine` is `command`, ready by the stand-in's notification.
 fn write_user_row(scratch: &Scratch, command: &[String]) {
     let command: Vec<String> = command.iter().map(q).collect();
     std::fs::write(
@@ -580,8 +514,6 @@ fn write_user_row(scratch: &Scratch, command: &[String]) {
     .expect("write the user's file");
 }
 
-/// Waits until the stand-in's log holds the `configuration` line of its request: a repeated
-/// look at one fact that stays true once it is.
 fn wait_for_configuration(log: &Path) {
     let until = Instant::now() + DEADLINE;
     while events(log, "configuration").is_empty() {
@@ -621,12 +553,9 @@ fn a_registered_server_shows_as_starting_and_then_as_ready() {
     });
     assert!(starting.registered);
     assert_eq!(starting.server.as_deref(), Some("mine"));
-    // The server is not ready: it waits for a file the test has not made. The stand-in asks
-    // for its configuration after `initialized`, and the driver's reading thread answers that
-    // request only after it handled the answer to `initialize`, which includes telling the
-    // Navigator a Ready the row's rule would give, or one given at the answer alone. So once
-    // the log holds the configuration, that Ready is already in the Navigator's channel, and
-    // the list told for the barrier comes after it.
+    // The server waits for a file not made yet. It asks for its configuration after `initialized`,
+    // which the reading thread answers only after handling the `initialize` answer: any Ready
+    // that answer gave would be in the channel before the barrier's list.
     wait_for_configuration(&log);
     assert!(events(&log, "ready").is_empty());
     let list = barrier(&mut running, &ws);
@@ -658,7 +587,6 @@ fn a_registered_server_whose_command_fails_shows_as_missing_with_no_offer() {
     });
     assert!(missing.registered);
     assert_eq!(missing.pid, None);
-    // It was run, and passed over.
     assert!(!runs(&failing).is_empty());
     running.end();
 }
@@ -686,12 +614,6 @@ fn a_registered_server_whose_command_names_no_file_shows_as_missing_with_no_offe
     running.end();
 }
 
-// ---------------------------------------------------------------------------------------
-// LSP-02: a candidate that fails is passed over.
-// ---------------------------------------------------------------------------------------
-
-/// A row of one server found on the machine by these names, in this order, with a trial
-/// run, logging to `log`.
 fn machine_row(names: &[&str], log: &Path) -> String {
     let names: Vec<String> = names.iter().map(q).collect();
     row_with(&format!(
@@ -721,8 +643,6 @@ fn a_candidate_that_fails_its_trial_run_is_passed_over_and_the_next_is_used() {
         state.state == State::Ready
     });
     assert_eq!(ready.program, Some(good));
-    // Tried once, and never run as a server: the next candidate is Ready, which the
-    // Navigator moved on to only after the trial of this one ended.
     assert_eq!(runs(&broken), ["--version"]);
     assert_eq!(events(&log, "start").len(), 1);
     running.end();
@@ -733,7 +653,6 @@ fn a_candidate_that_passes_its_trial_and_fails_to_initialize_is_passed_over_at_r
     let scratch = Scratch::new();
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     let bin = scratch.root.join("bin");
-    // Passes `--version`, then answers `initialize` with an error and ends.
     let early = bin.join("standin-early");
     std::fs::write(
         &early,
@@ -756,7 +675,6 @@ fn a_candidate_that_passes_its_trial_and_fails_to_initialize_is_passed_over_at_r
         state.state == State::Ready
     });
     assert_eq!(ready.program, Some(good));
-    // The first was started, and failed; the second started after it.
     let starts = events(&log, "start");
     assert_eq!(starts.len(), 2, "{starts:#?}");
     assert!(
@@ -774,13 +692,11 @@ fn a_candidate_that_passes_its_trial_and_fails_to_initialize_is_passed_over_at_r
     running.end();
 }
 
-/// A server that was ready and ended has its asks answered by `answers::server_gone`.
 #[test]
 fn a_server_that_dies_after_it_was_ready_is_passed_over_for_the_next_candidate() {
     let scratch = Scratch::new();
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     let bin = scratch.root.join("bin");
-    // Passes `--version`, becomes ready, and ends.
     let dies = bin.join("standin-dies");
     std::fs::write(
         &dies,
@@ -803,10 +719,8 @@ fn a_server_that_dies_after_it_was_ready_is_passed_over_for_the_next_candidate()
         state.state == State::Ready && state.program.as_deref() == Some(good.as_path())
     });
     assert!(is_alive(ready.pid.unwrap()));
-    // The first became ready, and ended; the second started after it. The Navigator shows
-    // the second ready when it was answered `initialize`, and the stand-in logs its own
-    // `ready` on the `initialized` that follows: that line is waited for, a repeated look at
-    // one fact that stays true once it is.
+    // The Navigator shows the second ready on the answer to `initialize`; the stand-in logs `ready`
+    // on the `initialized` that follows.
     let until = Instant::now() + DEADLINE;
     while events(&log, "ready").len() < 2 {
         assert!(
@@ -825,7 +739,6 @@ fn a_candidate_whose_trial_run_does_not_end_in_time_is_killed_and_passed_over() 
     let scratch = Scratch::new();
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     let bin = scratch.root.join("bin");
-    // Notes its process, then becomes `sleep`, which outlasts any deadline.
     let noted = put_hung(&bin, "standin-hung");
     let good = scratch.put_standin(&bin, "standin-lsp");
     let log = scratch.root.join("lsp02-hung.log");
@@ -834,7 +747,6 @@ fn a_candidate_whose_trial_run_does_not_end_in_time_is_killed_and_passed_over() 
         Running::start(scratch.config(&machine_row(&["standin-hung", "standin-lsp"], &log)));
     running.show(&repo, &ws, &repository);
 
-    // The trial gets `yaar_navigator::TRIAL_DEADLINE` of real time.
     let ready = running.wait_state(
         &ws,
         "standin",
@@ -856,14 +768,11 @@ fn a_trial_run_on_its_way_is_killed_and_reaped_when_the_running_navigator_is_dro
     let scratch = Scratch::new();
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     let bin = scratch.root.join("bin");
-    // Notes its process, then becomes `sleep`, which outlasts the test.
     let noted = put_hung(&bin, "standin-hung");
     let log = scratch.root.join("dropped.log");
     let row = machine_row(&["standin-hung"], &log);
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
 
-    // A test that fails while the trial run is on its way: the panic unwinds through the
-    // `Running`, whose drop ends the Navigator.
     let pid = std::cell::Cell::new(None);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let running = Running::start(scratch.config(&row));
@@ -873,16 +782,12 @@ fn a_trial_run_on_its_way_is_killed_and_reaped_when_the_running_navigator_is_dro
     }));
     assert!(outcome.is_err());
 
-    // Gone, and reaped: a process that was only killed would still be known to the system,
-    // as a zombie, until the Navigator's thread waited for it.
     let pid = pid.get().expect("the trial run was on its way");
     // SAFETY: signal 0 only asks whether the process exists; it sends nothing.
     let signalled = unsafe { libc::kill(pid as libc::pid_t, 0) };
     assert_ne!(signalled, 0, "the trial run {pid} was not reaped");
 }
 
-/// Writes `<bin>/<name>`, a candidate whose trial run never ends: it notes its process id in
-/// a file, then becomes `sleep`, which outlasts any deadline. Gives that file.
 fn put_hung(bin: &Path, name: &str) -> PathBuf {
     std::fs::create_dir_all(bin).expect("make the folder");
     let hung = bin.join(name);
@@ -897,8 +802,6 @@ fn put_hung(bin: &Path, name: &str) -> PathBuf {
     noted
 }
 
-/// The process id a script of [`put_hung`] noted, waiting for it to be there: a repeated
-/// look at one fact that stays true once it is.
 fn noted_process(noted: &Path) -> u32 {
     let until = Instant::now() + DEADLINE;
     loop {
@@ -916,17 +819,15 @@ fn noted_process(noted: &Path) -> u32 {
     }
 }
 
-/// The row and the file of a scratch whose one candidate is a trial run that never ends.
 fn row_with_a_hung_trial(scratch: &Scratch) -> (String, PathBuf) {
     let noted = put_hung(&scratch.root.join("bin"), "standin-hung");
     let row = machine_row(&["standin-hung"], &scratch.root.join("hung.log"));
     (row, noted)
 }
 
-/// Writes `<bin>/<name>`, a candidate whose trial run never ends and ignores `SIGTERM`: it
-/// ignores the signal first, then notes its process id in a file, then becomes `sleep`, which
-/// keeps the signal ignored (an ignored signal stays so across `exec`). Once the file is
-/// there, the signal is ignored, so only `SIGKILL` can end the process. Gives that file.
+/// Writes a candidate whose trial run never ends and ignores `SIGTERM`: it ignores the signal,
+/// notes its pid, then becomes `sleep` (an ignored signal stays so across `exec`). Gives the pid
+/// file.
 #[cfg(target_os = "linux")]
 fn put_hung_ignoring_term(bin: &Path, name: &str) -> PathBuf {
     std::fs::create_dir_all(bin).expect("make the folder");
@@ -945,7 +846,6 @@ fn put_hung_ignoring_term(bin: &Path, name: &str) -> PathBuf {
     noted
 }
 
-/// [`row_with_a_hung_trial`] for a trial run that ignores `SIGTERM`.
 #[cfg(target_os = "linux")]
 fn row_with_a_hung_trial_ignoring_term(scratch: &Scratch) -> (String, PathBuf) {
     let noted = put_hung_ignoring_term(&scratch.root.join("bin"), "standin-hung");
@@ -967,9 +867,6 @@ fn a_trial_run_on_its_way_is_killed_when_the_navigator_ends() {
     assert!(!is_alive(pid), "the trial run outlived the Navigator");
 }
 
-/// A trial run that does not end by itself and ignores `SIGTERM`, as the kernel's part
-/// alone: the Window that started it is killed, so nothing of the Navigator's own cleanup
-/// runs, and the process still ends, so the signal the kernel sent it is `SIGKILL`.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_trial_run_ends_when_the_window_that_started_it_is_killed() {
@@ -978,9 +875,6 @@ fn a_trial_run_ends_when_the_window_that_started_it_is_killed() {
 
     let this_test = "a_trial_run_ends_when_the_window_that_started_it_is_killed";
     if std::env::var_os("YAAR_WINDOW_CHILD").is_some() {
-        // The Window: it starts the trial run, says which process it is and where its
-        // scratch is, and waits to be killed; the end of its input, which a failed test
-        // leaves, ends it.
         let scratch = Scratch::new();
         let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
         let (row, noted) = row_with_a_hung_trial_ignoring_term(&scratch);
@@ -988,6 +882,7 @@ fn a_trial_run_ends_when_the_window_that_started_it_is_killed() {
         let running = Running::start(scratch.config(&row));
         running.show(&repo, &ws, &repository);
         println!("TRIAL {} {}", noted_process(&noted), scratch.root.display());
+        // Waits to be killed; the end of its input, which a failed test leaves, ends it.
         let _ = std::io::stdin().read_line(&mut String::new());
         return;
     }
@@ -1003,7 +898,6 @@ fn a_trial_run_ends_when_the_window_that_started_it_is_killed() {
     let said = BufReader::new(output)
         .lines()
         .map_while(Result::ok)
-        // The test harness has started a line of its own, so the sentence is not first.
         .find_map(|line| line.split_once("TRIAL ").map(|(_, said)| said.to_owned()))
         .expect("the Window said which trial run it started");
     let (pid, scratch) = said.split_once(' ').expect("a process and a folder");
@@ -1033,8 +927,6 @@ fn a_trial_run_on_its_way_is_killed_when_its_workspace_leaves_the_list() {
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&row));
     running.show(&repo, &ws, &repository);
-    // Every list told so far is read, up to the one that holds the key: the lists the empty
-    // workspaces told before it are not the one the wait below is for.
     running.wait_state(&ws, "standin", None, DEADLINE, |_| true);
     let pid = noted_process(&noted);
     assert!(is_alive(pid), "the trial run is on its way");
@@ -1045,7 +937,6 @@ fn a_trial_run_on_its_way_is_killed_when_its_workspace_leaves_the_list() {
         DEADLINE,
         |told| matches!(told, Told::Servers(list) if list.is_empty()),
     );
-    // The stop reaped it before the list was told.
     assert!(!is_alive(pid), "the trial run outlived its key");
     running.end();
 }
@@ -1105,11 +996,6 @@ fn a_row_whose_candidates_all_fail_is_missing_with_the_offer_too() {
     running.end();
 }
 
-// ---------------------------------------------------------------------------------------
-// What a row pins, and what the app downloaded.
-// ---------------------------------------------------------------------------------------
-
-/// A `[[standin.server.download]]` for `platform`, to be put at the end of a server's table.
 fn a_download(platform: Platform, version: &str, size: u64) -> String {
     format!(
         "[[standin.server.download]]\n\
@@ -1127,8 +1013,6 @@ fn a_download(platform: Platform, version: &str, size: u64) -> String {
     )
 }
 
-/// Writes what the downloader leaves for version `version` of the server `standin`: the
-/// program in its folder, and `installed.toml` naming it.
 fn install(scratch: &Scratch, version: &str) -> PathBuf {
     let folder = scratch.root.join("servers").join("standin");
     let program = scratch.put_standin(&folder.join(version), "standin-lsp");
@@ -1144,8 +1028,6 @@ fn install(scratch: &Scratch, version: &str) -> PathBuf {
     program
 }
 
-/// The state of the stand-in's server in a scratch where version 1 is installed and the row
-/// pins `pinned`.
 fn with_version_1_installed_and_the_row_pinning(pinned: &str) -> (ServerState, PathBuf) {
     let scratch = Scratch::new();
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
@@ -1188,10 +1070,6 @@ fn a_downloaded_server_of_the_version_the_row_pins_shows_no_update() {
     assert_eq!(ready.program, Some(program));
     assert_eq!(ready.update, None);
 }
-
-// ---------------------------------------------------------------------------------------
-// What a row says of the server's start.
-// ---------------------------------------------------------------------------------------
 
 #[test]
 fn the_variables_of_a_row_are_put_in_where_the_server_starts_and_its_log_is_the_navigators() {
@@ -1245,16 +1123,14 @@ fn the_variables_of_a_row_are_put_in_where_the_server_starts_and_its_log_is_the_
             .as_str()
     );
     assert_eq!(env["STANDIN_PLATFORM"], platform.name());
-    // `{{` and `}}` are braces.
     assert_eq!(env["STANDIN_TEXT"], "{root}");
-    // The server's own variable wins over the configuration's, which names every other.
+    // The server's own variable wins over the configuration's.
     assert_eq!(env["HOME"], format!("{root}/home").as_str());
     assert_eq!(
         env["XDG_CACHE_HOME"],
         scratch.root.join("cache").display().to_string().as_str()
     );
 
-    // Its standard error goes to the first log of this Navigator's own cache.
     let own: Vec<PathBuf> = std::fs::read_dir(scratch.root.join("navigator"))
         .expect("the cache folder")
         .flatten()
@@ -1290,13 +1166,8 @@ fn a_candidate_of_a_row_that_names_a_folder_it_has_no_value_for_is_passed_over()
         state.state
     };
     assert_eq!(run("{servers}"), State::Missing { offer: None });
-    // Control: a variable that has a value.
     assert_eq!(run("{root}"), State::Ready);
 }
-
-// ---------------------------------------------------------------------------------------
-// Which keys there are, and the order they are told in.
-// ---------------------------------------------------------------------------------------
 
 #[test]
 fn the_servers_are_told_in_the_order_of_the_workspaces_then_the_rows() {
@@ -1304,7 +1175,7 @@ fn the_servers_are_told_in_the_order_of_the_workspaces_then_the_rows() {
     let first = scratch.repository("first", &[("main.sil", "def alpha\n")]);
     let second = scratch.repository("second", &[("main.sil", "def beta\n")]);
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
-    // Two rows, in an order that is not the alphabet's, over the same files and marker.
+    // Two rows in an order that is not the alphabet's, over the same files and marker.
     let server =
         "machine = [\"standin-lsp\"]\ntrial = [\"--version\"]\nready = { kind = \"answer\" }\n";
     let rows = format!(
@@ -1363,8 +1234,6 @@ fn a_row_whose_marker_is_not_at_the_worktrees_root_starts_nothing() {
         root_of(&ws_marked, &repository, &marked.root),
     ]));
     running.ask(Ask::OnScreen(Some(ws_deep.clone())));
-    // One list for the workspaces, one for the workspace shown: both are read, so that the
-    // list the barrier makes is the next.
     for _ in 0..2 {
         let list = running.wait_told("a list of servers", DEADLINE, |told| {
             matches!(told, Told::Servers(_))
@@ -1374,7 +1243,6 @@ fn a_row_whose_marker_is_not_at_the_worktrees_root_starts_nothing() {
     let list = barrier(&mut running, &ws_deep);
     assert_eq!(list, vec![], "a server was looked for with no marker");
 
-    // Control: the same row with its marker at the root.
     running.ask(Ask::OnScreen(Some(ws_marked.clone())));
     running.wait_state(&ws_marked, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -1388,9 +1256,8 @@ fn showing_a_workspace_again_does_not_search_again_for_a_server_that_is_starting
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     let program = scratch.put_recording(&scratch.root.join("bin"), "standin-lsp");
     let (never, log) = (scratch.root.join("never"), scratch.root.join("again.log"));
-    // The rule of readiness waits for a file nobody makes, so that the key is starting
-    // each time the workspace is shown. The server asks for its configuration after
-    // `initialized`: once the log holds that line it is past `initialize`, and not ready.
+    // The readiness rule waits for a file nobody makes, so the key is starting each time the
+    // workspace is shown.
     let row = row_with(&format!(
         "machine = [\"standin-lsp\"]\n\
          args = [\"--ready\", \"notification\", \"--ready-when\", {}, \
@@ -1425,7 +1292,6 @@ fn showing_a_workspace_again_does_not_search_again_for_a_server_that_is_starting
         ]
     );
     assert_eq!(events(&log, "start").len(), 1);
-    // Control: the rule is met, and the same key, the same process, is ready.
     std::fs::write(&never, "").expect("make the file the server waits for");
     let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -1433,10 +1299,6 @@ fn showing_a_workspace_again_does_not_search_again_for_a_server_that_is_starting
     assert_eq!(ready.pid, first.pid);
     running.end();
 }
-
-// ---------------------------------------------------------------------------------------
-// The registry as the Navigator tells it.
-// ---------------------------------------------------------------------------------------
 
 #[test]
 fn the_languages_told_are_the_rows_read_a_row_of_the_users_in_the_place_of_the_built_in_one() {
@@ -1486,10 +1348,10 @@ fn the_languages_told_are_the_rows_read_a_row_of_the_users_in_the_place_of_the_b
     assert_eq!(
         seen,
         [
-            // The user's row names no title and no extension: the built-in row's stand.
+            // The user's row names no title or extension: the built-in row's stand.
+            // `broken` has an unknown key and is passed over.
             ("alpha", "Alpha", vec!["a", "al"]),
             ("beta", "beta", vec!["b"]),
-            // The row with a key the format does not have is passed over.
             ("gamma", "Gamma", vec!["g"]),
         ]
     );
@@ -1500,7 +1362,7 @@ fn the_languages_told_are_the_rows_read_a_row_of_the_users_in_the_place_of_the_b
 fn the_cache_folders_of_windows_that_no_longer_run_are_removed_at_the_start() {
     let scratch = Scratch::new();
     let cache = scratch.root.join("navigator");
-    // A process that has ended and was reaped: no process has its number now.
+    // A process that ended and was reaped: no process has its number now.
     let mut child = std::process::Command::new("sh")
         .args(["-c", "exit 0"])
         .spawn()
@@ -1516,9 +1378,8 @@ fn the_cache_folders_of_windows_that_no_longer_run_are_removed_at_the_start() {
         folder
     };
     let gone = [made(format!("{ended}-1")), made(format!("{ended}-12"))];
+    // A Window of ours that runs, names not of the form, and numbers that are no process id.
     let stays = [
-        // A Window of ours that runs, a folder that is not of the form, and one whose
-        // number is no process id's.
         made(format!("{alive}-99")),
         made("targets".to_owned()),
         made("notes".to_owned()),
@@ -1531,7 +1392,6 @@ fn the_cache_folders_of_windows_that_no_longer_run_are_removed_at_the_start() {
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&row_with("machine = [\"nothere\"]")));
-    // Told once the registry was read; the removal follows it, and this list after both.
     running.show(&repo, &ws, &repository);
     running.wait_state(&ws, "standin", None, DEADLINE, |_| true);
     for folder in &gone {
@@ -1543,11 +1403,6 @@ fn the_cache_folders_of_windows_that_no_longer_run_are_removed_at_the_start() {
     running.end();
 }
 
-// ---------------------------------------------------------------------------------------
-// The workspaces, and the clock.
-// ---------------------------------------------------------------------------------------
-
-/// A time that moves only when the test moves it.
 struct TestClock {
     base: Instant,
     offset: Mutex<Duration>,
@@ -1591,30 +1446,25 @@ fn a_workspace_off_screen_for_the_set_time_has_its_server_stopped_and_it_starts_
         root_of(&ws2, &repository, &other.root),
     ]));
     running.ask(Ask::OnScreen(Some(ws1.clone())));
-    // The workspace on screen has its server, with no ask about a file.
     let first = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
     });
     let first_pid = first.pid.unwrap();
 
-    // Off screen; the workspace with no marker has nothing to run.
     let list = barrier(&mut running, &ws2);
     assert_eq!(standin_in(&list, &ws1).unwrap().pid, Some(first_pid));
     assert_eq!(standin_in(&list, &ws2), None);
 
-    // One second short of the set time: still running.
     clock.advance(STOP_AFTER - Duration::from_secs(1));
     let list = barrier(&mut running, &ws2);
     assert_eq!(standin_in(&list, &ws1).unwrap().pid, Some(first_pid));
     assert!(is_alive(first_pid));
 
-    // The set time: stopped, and the process is gone before the list that says so.
     clock.advance(Duration::from_secs(1));
     let list = barrier(&mut running, &ws2);
     assert_eq!(list, vec![], "the idle server is still listed");
     assert!(!is_alive(first_pid), "the idle server still runs");
 
-    // Back on screen: it starts again.
     running.ask(Ask::OnScreen(Some(ws1.clone())));
     let again = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
         state.state == State::Ready && state.pid != Some(first_pid)
@@ -1666,8 +1516,6 @@ fn a_workspace_that_leaves_the_list_has_its_server_stopped_and_its_build_folders
     });
     let first_pid = first.pid.unwrap();
 
-    // A worktree that is gone: its server stops, its build folder stays for the worktree
-    // that comes back.
     running.ask(Ask::Workspaces(vec![WorkspaceRoot {
         id: ws.clone(),
         repository: repository.clone(),
@@ -1682,7 +1530,6 @@ fn a_workspace_that_leaves_the_list_has_its_server_stopped_and_its_build_folders
     assert!(!is_alive(first_pid));
     assert!(own_targets.exists());
 
-    // The worktree is back, and the workspace is on screen: a server again.
     running.ask(Ask::Workspaces(vec![root_of(&ws, &repository, &repo.root)]));
     let second = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -1690,7 +1537,6 @@ fn a_workspace_that_leaves_the_list_has_its_server_stopped_and_its_build_folders
     let second_pid = second.pid.unwrap();
     assert_ne!(second_pid, first_pid);
 
-    // The workspace is no longer listed.
     running.ask(Ask::Workspaces(vec![]));
     running.wait_told(
         "the list with no server",

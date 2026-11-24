@@ -1,7 +1,3 @@
-//! Component tests: where the changes of a workspace are counted from and the commits
-//! since, asked without the files, against what `changes` says in each of its cases, in
-//! real repositories the tests make.
-
 mod support;
 
 use std::path::Path;
@@ -14,8 +10,6 @@ use yaar_workspaces::{
     Changes, Comparison, NoComparison, Refusal, WorkspaceError, WorkspaceId, Workspaces,
 };
 
-/// Opens `repo`, and gives its changes after checking that `counted_from` gives the same
-/// commit and the same commits.
 fn same_as_changes(workspaces: &Workspaces, repo: &Path) -> Changes {
     let workspace = workspaces.open_folder(repo).expect("open").workspace;
     same_for(workspaces, &workspace)

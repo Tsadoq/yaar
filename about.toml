@@ -1,5 +1,5 @@
-# cargo-about 0.9: the third-party notices that every package carries.
-# The same licences as deny.toml allows; a dependency under any other fails the generation.
+# cargo-about 0.9. The same licences as deny.toml allows; a dependency under any other fails the
+# generation.
 accepted = [
     "MIT",
     "Apache-2.0",
@@ -14,6 +14,5 @@ accepted = [
     "Unicode-3.0",
     "MPL-2.0",
 ]
-# Only what is linked into the programs.
 ignore-build-dependencies = true
 ignore-dev-dependencies = true

@@ -1,28 +1,5 @@
-//! The Window program: the process that draws.
-//!
-//! It registers the panes in the Frame and binds the keys; it holds nothing of its own to
-//! show. The program `yaar-review` is this library behind a command line.
-//!
-//! Surface:
-//! - [`panes`], the one list of the panes of the Window. A pane is added by one line
-//!   there, and has its keys bound and its view built from that line;
-//! - [`init`], which prepares the app before a window opens;
-//! - [`open`], which opens the window with every pane, linked to the Keeper, and starts the
-//!   Navigator with what this user's environment gives it; the quit of the app is the one
-//!   end of every Navigator that runs;
-//! - [`open_with`] and [`open_panes`], the entries beneath `open` that the component tests of
-//!   the composed Window take: the same window with a Navigator's configuration of the
-//!   caller's, and with panes of the caller's too;
-//! - [`controls`], every action of the Window that has a key: the Frame's, [`Quit`] among
-//!   them, the settings screen's, each pane's, and the Window program's own (Close Window,
-//!   and on macOS Hide, Hide Others and Minimize). Every message of the Link that a user
-//!   starts is the end of one of them;
-//! - [`kept_keys`], those of them whose key works while a terminal has the focus: the
-//!   documented set of keys that never reach the program in a terminal;
-//! - [`menus`], the menus of the app on macOS, made from [`controls`]: GPUI shows each
-//!   item's key from the binding of its action.
+//! The Window program: registers the panes in the Frame and binds the keys.
 
-// The system's light or dark setting, told to the theme's model.
 mod appearance;
 
 use std::path::PathBuf;
@@ -36,53 +13,35 @@ use yaar_frame::{
 };
 use yaar_navigator::{Navigator, STOP_DEADLINE};
 
-/// Quits the Window, the plain way: the Keeper and what it holds stay. One of the Frame's
-/// two quits, beside `yaar_frame::QuitAndStopAgents`; the Window program says what it does.
+/// Quits the Window, the plain way: the Keeper and what it holds stay.
 pub use yaar_frame::Quit;
 
-/// The version of the app, as shown to the user and told to the Keeper.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The panes of the Window, in the order they are laid out. Both [`controls`] and
-/// [`open`] read this list and nothing else about panes.
 pub fn panes() -> Vec<PaneEntry> {
     vec![yaar_review_pane::entry(), yaar_terminal_pane::entry()]
 }
 
-/// The documented set of keys that never reach a program in a terminal: every control of
-/// [`controls`] whose key works while a terminal has the focus. On macOS these are the
-/// Cmd keys of the app, the kept keys of the Frame and the terminal's own copy, paste and
-/// scrolling of the history; on Linux the kept keys and the terminal's own alone, since
-/// there the app's keys are Ctrl keys, and every other Ctrl key belongs to the program.
+/// The controls whose key works while a terminal has the focus; other keys reach its program.
 pub fn kept_keys() -> Vec<Control> {
     controls()
         .into_iter()
         .filter(|control| match control.place {
             Place::Kept => true,
             Place::In(context) => context == PROGRAM_CONTEXT,
-            // Bound for the whole app only where it is a Cmd key.
+            // An Anywhere key is bound with no context only where it is a Cmd key (macOS); off
+            // macOS it belongs to the program in a terminal.
             Place::Anywhere => control.context().is_none(),
         })
         .collect()
 }
 
-/// The menus of the app, which [`init`] hands GPUI (`App::set_menus`): on macOS the menu bar
-/// shows them, with each item's key; GPUI's Linux platforms show none, and their keys work as
-/// the table binds them.
-///
-/// | Menu | Items, in order (a line between groups) |
-/// | --- | --- |
-/// | YAAR | Settings…; Hide YAAR, Hide Others; Quit, Quit and Stop Agents |
-/// | File | New Worktree with Agent…, Open Folder…; Close Window |
-/// | Window | Minimize |
-///
-/// Each item runs the action of the row of [`controls`] whose title it bears, so that a key
-/// and an item are one control. Hide YAAR, Hide Others and Minimize are rows on macOS only;
-/// off macOS the menus leave them out.
+/// Each item runs the action of the `controls` row it is titled for. GPUI's Linux platforms show no
+/// menus.
 pub fn menus() -> Vec<Menu> {
     let table = controls();
-    // Titles for each group of each menu; a title that has no row on this system, as Hide
-    // has none off macOS, is left out, and a group left empty with it.
+    // A title with no row on this system (Hide off macOS) is left out, and a group left empty with
+    // it.
     let layout: [(&str, &[&[&str]]); 3] = [
         (
             "YAAR",
@@ -131,12 +90,8 @@ pub fn menus() -> Vec<Menu> {
         .collect()
 }
 
-/// Every action of the Window that has a key: the Frame's, the two quits among them, the
-/// settings screen's, each pane's, and last the Window program's own: Close Window on every
-/// system and, on macOS, Hide YAAR, Hide Others and Minimize.
 pub fn controls() -> Vec<Control> {
     let mut controls = yaar_frame::controls();
-    // The settings screen is the Frame's, with keys of its own context, as a pane has.
     controls.extend(yaar_frame::settings_screen::controls());
     for pane in panes() {
         controls.extend((pane.controls)());
@@ -145,7 +100,6 @@ pub fn controls() -> Vec<Control> {
     controls
 }
 
-/// The rows of the Window program itself, which the Frame and the panes know nothing of.
 /// Each is a Cmd key where it works at all, so a terminal does not take it from the app.
 fn own_controls() -> Vec<Control> {
     let window = |title, action: fn() -> Box<dyn Action>, keystroke| Control {
@@ -161,8 +115,7 @@ fn own_controls() -> Vec<Control> {
         || Box::new(CloseWindow),
         "secondary-w",
     )];
-    // Hiding and minimising are the system's on macOS; elsewhere the window manager has
-    // its own keys for them.
+    // Hiding and minimising are the system's on macOS; elsewhere the window manager has keys.
     if cfg!(target_os = "macos") {
         rows.extend([
             window("Hide YAAR", || Box::new(HideApp), "secondary-h"),
@@ -173,9 +126,6 @@ fn own_controls() -> Vec<Control> {
     rows
 }
 
-/// Prepares the app: the toolkit, the theme of the system, the keys of [`controls`], the
-/// toolkit's own keys given back to a program in a terminal, the menus of [`menus`], what
-/// quitting means, and what the actions of the Window program do.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
     // After the toolkit, whose bindings it has to outrank.
@@ -193,12 +143,10 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
-/// The handlers of [`own_controls`]. A window's action reaches the window that has the
-/// focus: the app's handler asks the platform which that is, since a menu item runs the
-/// action with no element to start from.
+/// A menu item runs the action with no element to start from, so the focused window is asked of the
+/// platform.
 fn handle_window_actions(cx: &mut App) {
     cx.on_action(|_: &CloseWindow, cx| {
-        // The app quits the plain way once its last window is closed (see `init`).
         with_active_window(cx, |window| window.remove_window());
     });
     if cfg!(target_os = "macos") {
@@ -210,38 +158,23 @@ fn handle_window_actions(cx: &mut App) {
     }
 }
 
-/// Runs `then` on the window that has the focus; nothing when the app has none.
-///
-/// An action handler of the app runs while the window it came from is being updated, and
-/// that window cannot be updated again until the update ends, so the work is deferred to
-/// the end of the current effects.
+/// An action handler runs while the window it came from is being updated, so the work on the
+/// active window is deferred to the end of the current effects.
 fn with_active_window(cx: &mut App, then: impl FnOnce(&mut Window) + 'static) {
     if let Some(active) = cx.active_window() {
         cx.defer(move |cx| {
-            // A window that closed meanwhile is nothing to act on.
             active.update(cx, |_, window, _| then(window)).ok();
         });
     }
 }
 
-/// Opens the window with every pane and links it to the Keeper on `socket`, starting the
-/// Keeper when none answers.
-///
-/// The system brings an app it launches to the front. The Window does not push itself
-/// there: a window started in the background stays in the background.
+/// Does not bring the window to the front: a window started in the background stays there.
 pub fn open(socket: PathBuf, cx: &mut App) -> Result<Opened> {
     open_with(socket, yaar_navigator::NavigatorConfig::for_this_user(), cx)
 }
 
-/// [`open`], with the Navigator started on `navigator`: the folders, the registry and the
-/// environment of its servers.
-///
-/// The Navigator is started on a new port and joined to the window's model of code
-/// intelligence. The quit of the app is the one end of a Navigator: the
-/// port is let go ([`yaar_frame::Navigation::disconnect`]) and the Window waits up to
-/// [`yaar_navigator::STOP_DEADLINE`] and a second more for the Navigator to stop its servers,
-/// so that no server outlives the Window, whatever asks are on their way. A second window
-/// gets a Navigator of its own.
+/// [`open`], with the Navigator started on `navigator`. The app's quit waits up to
+/// `STOP_DEADLINE` and a second more for the Navigator to stop its servers.
 pub fn open_with(
     socket: PathBuf,
     navigator: yaar_navigator::NavigatorConfig,
@@ -255,8 +188,6 @@ pub fn open_with(
     )
 }
 
-/// [`open_with`] for panes the caller builds: the Frame opened on `panes` and the Navigator
-/// joined to it. The caller may wrap the builders of [`panes`] to keep the views it reads.
 pub fn open_panes(
     socket: PathBuf,
     panes: Vec<BuildPane>,
@@ -269,29 +200,21 @@ pub fn open_panes(
     Ok(opened)
 }
 
-/// How long the Window waits for a Navigator to stop its servers: the time a server is
-/// given to end, and a second more.
 const STOP_WITHIN: Duration = Duration::from_secs(STOP_DEADLINE.as_secs() + 1);
 
-/// A Navigator the Window started, and the model it is joined to.
 struct Joined {
     navigator: Navigator,
     navigation: Entity<Navigation>,
 }
 
-/// The Navigators of the app's windows, one each, kept for as long as they run.
 #[derive(Default)]
 struct Navigators {
     running: Vec<Joined>,
-    /// Whether the app's quit stops them: said once, by the first window.
     stopped_at_quit: bool,
 }
 
 impl Global for Navigators {}
 
-/// Starts a Navigator on `config`, joins its port to `models.navigation` and keeps its
-/// handle in a global of the app, to be stopped at the quit of the app. What the
-/// model tells the Navigator by itself, and what it keeps of what it is told, is the Frame's.
 fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, cx: &mut App) {
     let (port, end) = yaar_navigator::port();
     let navigator = Navigator::start(config, end);
@@ -304,19 +227,16 @@ fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, cx: 
         navigation: models.navigation.clone(),
     });
     if !std::mem::replace(&mut navigators.stopped_at_quit, true) {
-        // The handler's own part runs while the windows stand: it drops every port, so
-        // that each Navigator begins to stop its servers. The waiting is the future's, run
-        // after the windows are gone, so that a pane's ask still on its way, which holds
-        // the port too, is dropped with its pane first. It blocks the thread: the quit
-        // goes on only once no server runs, or at the deadline.
+        // Drops every port while the windows stand, so each Navigator begins to stop. The future
+        // waits after the windows are gone, so a pane's pending ask, which holds the port, goes
+        // first.
         cx.on_app_quit(|cx| {
             let joined = std::mem::take(&mut cx.default_global::<Navigators>().running);
             for joined in &joined {
                 drop_port(&joined.navigation, cx);
             }
             async move {
-                // One deadline for all: the Navigators stop side by side, and the quit
-                // never waits longer than a single one may take.
+                // One deadline for all: the Navigators stop side by side.
                 let deadline = Instant::now() + STOP_WITHIN;
                 for joined in joined {
                     joined
@@ -329,10 +249,6 @@ fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, cx: 
     }
 }
 
-/// Lets go of the Frame's end of a Navigator's port: the model closes the channel of asks
-/// for every sender made from it, those a pane's ask on its way and an export the Keeper has
-/// not yet answered hold among them, so that the Navigator, with no sender left, stops its
-/// servers and ends.
 fn drop_port(navigation: &Entity<Navigation>, cx: &mut App) {
     navigation.update(cx, |navigation, cx| navigation.disconnect(cx));
 }
@@ -344,7 +260,6 @@ mod tests {
 
     use super::{Quit, controls, init, kept_keys, menus, panes};
 
-    /// What tells one row of the table from another.
     fn row(control: &Control) -> (&'static str, &'static str, Place) {
         (control.keystroke, (control.action)().name(), control.place)
     }
@@ -362,8 +277,6 @@ mod tests {
         let table = controls();
         assert_eq!(table.iter().map(row).collect::<Vec<_>>(), expected);
 
-        // The plain quit, written out here so that a change of its key in the table is a
-        // change in two places.
         let quit = table
             .iter()
             .find(|control| (control.action)().name() == Quit.name())
@@ -372,10 +285,6 @@ mod tests {
         assert_eq!(quit.sends, None, "quitting the Window stops nothing");
         assert_eq!(quit.asks, Asks::Nothing);
     }
-
-    // The next two tests are one rule on two kinds of system: only a Cmd key is bound with
-    // no context. Any other key bound so would be taken from the program in a terminal,
-    // and from every field a user types into.
 
     #[cfg(target_os = "macos")]
     #[test]
@@ -391,15 +300,12 @@ mod tests {
                 );
             }
         }
-        // The rule is about the keys of the Frame and of the Window program, and they
-        // are there to be held to it.
         assert!(table.iter().any(|control| control.context().is_none()));
     }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn off_macos_no_control_is_without_a_context() {
-        // The keyboard has no Cmd key, and `secondary` is Ctrl.
         for control in controls() {
             assert!(
                 control.context().is_some(),
@@ -412,12 +318,8 @@ mod tests {
 
     #[test]
     fn no_key_belongs_to_two_controls_in_one_place() {
-        // The parts of the table come from crates that do not know each other. Of two
-        // rows with one key that both apply somewhere, one wins there and nothing says
-        // so. Both apply where their places are the same, and wherever one of them
-        // works everywhere, as a key of the Frame does, a kept one included: that one
-        // applies inside every pane too. A key bound in a terminal applies in the
-        // terminal pane, which no other pane's key shares.
+        // Of two rows with one key that both apply somewhere, one wins and nothing says so. A key
+        // that works anywhere, a kept one included, applies inside every pane too.
         let everywhere = |place| matches!(place, Place::Anywhere | Place::Kept);
         let table = controls();
         for (at, control) in table.iter().enumerate() {
@@ -492,8 +394,6 @@ mod tests {
         }
     }
 
-    /// A menu as a user reads it: the title of each item, a `None` for a line between
-    /// groups.
     fn read(menu: &Menu) -> Vec<Option<String>> {
         menu.items
             .iter()
@@ -509,7 +409,6 @@ mod tests {
         Some(title.to_string())
     }
 
-    /// The actions of the table, which no system but macOS binds.
     const MACOS_ONLY: [&str; 3] = ["Hide YAAR", "Hide Others", "Minimize"];
 
     #[test]
@@ -572,7 +471,6 @@ mod tests {
             menus[2].items.is_empty(),
             "the Window menu holds Minimize alone"
         );
-        // The rows are gone as well: no key, and so no item.
         for control in controls() {
             assert!(
                 !MACOS_ONLY.contains(&control.title),
@@ -605,8 +503,7 @@ mod tests {
                 seen += 1;
             }
         }
-        // Every title of the doc's table is an item: a title that names no row would be
-        // left out, and the test would pass over it.
+        // A title naming no row would be left out, and the test would pass over it.
         assert_eq!(seen, if cfg!(target_os = "macos") { 9 } else { 6 });
     }
 
@@ -614,8 +511,6 @@ mod tests {
     fn each_row_of_a_title_of_the_menus_is_the_action_that_title_names() {
         use yaar_frame::{CloseWindow, NewWorktree, OpenFolder, OpenSettings, QuitAndStopAgents};
 
-        // The test above ties an item to its row; this one ties the row to what the title
-        // says, so that a key and an item that run the wrong action are seen.
         let mut expected: Vec<(&str, Box<dyn Action>)> = vec![
             ("Settings…", Box::new(OpenSettings)),
             ("Quit", Box::new(Quit)),
@@ -715,7 +610,6 @@ mod tests {
                 "{title} on this system"
             );
         }
-        // After the panes' rows, as the table's doc says; none of them sends or asks.
         let own: Vec<&Control> = table
             .iter()
             .rev()
@@ -757,7 +651,6 @@ mod tests {
             Some(second.window_id())
         );
 
-        // The action of the row of the table, which is what its key and its menu item run.
         let close = controls()
             .into_iter()
             .find(|control| control.title == "Close Window")

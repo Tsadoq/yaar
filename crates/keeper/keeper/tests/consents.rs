@@ -1,12 +1,5 @@
-//! Component tests: the question an Adapter asks before it writes into its CLI's own
-//! settings, through the surface a Window uses, with the Keeper as the library on a thread
-//! of the test and, for the shells, real programs on real pseudo-terminals beneath.
-//!
-//! The Keeper reads the user's home from `Options::home`, never from its environment, so
-//! each test hands it a home of its own, and no test reaches the real settings of any CLI.
-//! The Keeper starts programs with the environment of its process: each test sets that
-//! environment as its first statement, with the shell `/bin/sh`, and these tests are run
-//! by `cargo nextest`, which gives each test a process of its own.
+//! Each test sets the process environment first, so each needs a process of its own (cargo
+//! nextest).
 
 use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
@@ -23,7 +16,6 @@ use yaar_link::{
     RequestId, TerminalId, TerminalSize, WorkspaceId, handshake, read_message, write_message,
 };
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -31,18 +23,13 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// The name of the Adapter that asks for leave, and of the one that asks for none.
 const PI: &str = "pi";
 const CLAUDE: &str = "claude";
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the
-    /// shell of a terminal: no configuration of the user or of the system, a fixed
-    /// author, the shell `/bin/sh`, a home inside the folder. It has to be the first
-    /// statement of a test.
+    /// Sets the process environment; must be a test's first statement.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -65,10 +52,8 @@ impl Scratch {
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
@@ -96,40 +81,32 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    /// The user's home, which is also what the Keeper's shells call `HOME`.
     fn home(&self) -> PathBuf {
         self.0.join("home")
     }
 
-    /// The Keeper's own data folder.
     fn data(&self) -> PathBuf {
         self.0.join("data")
     }
 
-    /// The folder where the Keeper's pieces lie, which names the reporting program.
     fn companions(&self) -> PathBuf {
         self.0.join("companions")
     }
 
-    /// pi's own folder under the home: where pi keeps its settings, and the one fact that
-    /// says it is installed. Made by pi at its first run, here by the test.
     fn pi_is_installed(&self) -> PathBuf {
         let folder = self.home().join(".pi").join("agent");
         std::fs::create_dir_all(&folder).expect("make pi's folder");
         folder
     }
 
-    /// pi's settings file, whether or not it exists.
     fn pi_settings(&self) -> PathBuf {
         self.home().join(".pi").join("agent").join("settings.json")
     }
 
-    /// The Keeper's own folder for the Adapter named `agent`.
     fn adapter_folder(&self, agent: &str) -> PathBuf {
         self.data().join("agents").join(agent)
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -143,7 +120,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -165,7 +141,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main`.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -176,11 +151,8 @@ impl Scratch {
         folder
     }
 
-    /// A program named `pi` in a folder of the test's own that prints what a pi would
-    /// load: the variable the shell gave it and pi's settings, with the blanks taken out.
-    /// A login shell's system profile sets the search path anew or puts the system's
-    /// folders first, so the folder is put first again by the `.profile` of the home. No
-    /// real pi runs, whatever the machine's search path holds.
+    /// A fake `pi` that prints what a pi would load. A login shell's profile resets the search
+    /// path, so the home's `.profile` puts the folder first again.
     fn a_pi_that_says_what_it_would_load(&self) {
         let folder = self.0.join("fake");
         std::fs::create_dir_all(&folder).expect("make the folder of the fake pi");
@@ -223,8 +195,6 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// Every path under `folder`, relative to it, with a mark for a folder: what a test of
-/// "nothing is written" compares before and after.
 fn tree(folder: &Path) -> BTreeSet<String> {
     fn walk(base: &Path, folder: &Path, found: &mut BTreeSet<String>) {
         for entry in std::fs::read_dir(folder).expect("read a folder") {
@@ -247,7 +217,6 @@ fn tree(folder: &Path) -> BTreeSet<String> {
     found
 }
 
-/// One end of the Link, as a Window holds it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -261,13 +230,11 @@ impl Window {
         id
     }
 
-    /// The next frame the Keeper sent, whatever it is. Fails the test at the deadline.
     fn next(&mut self) -> Message {
         read_message(&mut self.stream).expect("a frame from the Keeper")
     }
 
-    /// Sends a request and expects its reply as the very next frame: nothing is told
-    /// between the request and its reply.
+    /// Expects the reply as the very next frame: nothing is told between.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = self.send(request);
         match self.next() {
@@ -276,7 +243,6 @@ impl Window {
         }
     }
 
-    /// The next frame, which has to be the fact that tells the questions: those it tells.
     fn consents_told(&mut self) -> Vec<Consent> {
         match self.next() {
             Message::Fact(Fact::ConsentsChanged(consents)) => consents,
@@ -284,7 +250,6 @@ impl Window {
         }
     }
 
-    /// What `ListConsents` answers.
     fn consents(&mut self) -> Vec<Consent> {
         match self.ask(Request::ListConsents) {
             Ok(Reply::Consents(consents)) => consents,
@@ -292,8 +257,6 @@ impl Window {
         }
     }
 
-    /// Answers the question of the Adapter `agent` as a user does and gives the reply's
-    /// list, read before the fact that tells every Window the same.
     fn answer(&mut self, agent: &str, answer: ConsentAnswer) -> Result<Vec<Consent>, Refusal> {
         match self.ask(Request::AnswerConsent {
             agent: agent.to_owned(),
@@ -305,7 +268,6 @@ impl Window {
         }
     }
 
-    /// Opens the folder as a workspace and reads the fact that tells the list.
     fn open(&mut self, folder: &Path) -> WorkspaceId {
         let opened = self.ask(Request::OpenFolder {
             path: folder.to_owned(),
@@ -317,9 +279,7 @@ impl Window {
         workspace
     }
 
-    /// Opens a terminal running `program` and reads its reply, passing over the output of
-    /// a terminal opened before, which may come between the request and the reply. The
-    /// output of the new terminal comes after the reply.
+    /// Skips output of a terminal opened before, which may arrive before the reply.
     fn open_terminal(&mut self, workspace: &WorkspaceId, program: Program) -> TerminalId {
         let id = self.send(Request::OpenTerminal {
             workspace: workspace.clone(),
@@ -351,8 +311,6 @@ impl Window {
         .expect("send the bytes");
     }
 
-    /// Reads what the program of `terminal` writes, until `wanted` accepts all of it so
-    /// far, and returns it. Frames of other kinds, or of another terminal, fail the test.
     fn output_until(&mut self, terminal: &TerminalId, wanted: impl Fn(&str) -> bool) -> String {
         let mut heard = Vec::new();
         while !wanted(&String::from_utf8_lossy(&heard)) {
@@ -361,7 +319,6 @@ impl Window {
                     terminal: from,
                     bytes,
                 } if from == *terminal => heard.extend(bytes),
-                // Another shell of the test still writes its prompt.
                 Message::Output { .. } => {}
                 other => panic!(
                     "after {:?}, not output of {terminal}: {other:?}",
@@ -372,8 +329,6 @@ impl Window {
         String::from_utf8_lossy(&heard).into_owned()
     }
 
-    /// Reads until the fact that the program of `terminal` ended, and returns what it
-    /// wrote before.
     fn until_ended(&mut self, terminal: &TerminalId) -> String {
         let mut heard = Vec::new();
         loop {
@@ -397,8 +352,6 @@ impl Window {
     }
 }
 
-/// How `consent` of the Adapter named `agent` of the Keeper's own list stands for a pi
-/// under `home`: the words and the folder of the Adapter, asked as the Keeper asks.
 fn what_the_adapter_says(scratch: &Scratch, agent: &str) -> Option<yaar_agent::Consent> {
     yaar_keeper::adapters(&scratch.home())
         .iter()
@@ -407,7 +360,6 @@ fn what_the_adapter_says(scratch: &Scratch, agent: &str) -> Option<yaar_agent::C
         .consent(&scratch.adapter_folder(agent))
 }
 
-/// The consent of `agent` in a list, which has to hold it once.
 fn of<'a>(consents: &'a [Consent], agent: &str) -> &'a Consent {
     let mut found = consents.iter().filter(|consent| consent.agent == agent);
     let one = found.next().expect("the agent's question is listed");
@@ -422,8 +374,6 @@ fn a_window_is_told_the_question_of_an_adapter_before_the_reply_to_its_first_req
     scratch.pi_is_installed();
     let keeper = scratch.keeper();
 
-    // The first Window asks something else entirely: the question comes first, alone,
-    // and then the reply, as the very next frame.
     let mut first = scratch.window();
     let id = first.send(Request::ListWorkspaces);
     let told = first.consents_told();
@@ -435,8 +385,6 @@ fn a_window_is_told_the_question_of_an_adapter_before_the_reply_to_its_first_req
     let question = of(&told, PI);
     assert_eq!(question.answer, ConsentAnswer::NotAsked);
     assert_eq!(question.problem, None);
-    // The words are the Adapter's, as it gives them for its own folder of the app: the
-    // Keeper adds and changes nothing.
     let adapters_own = what_the_adapter_says(&scratch, PI).expect("pi asks");
     assert_eq!(question.question, adapters_own.question);
     assert!(!question.question.is_empty());
@@ -445,7 +393,6 @@ fn a_window_is_told_the_question_of_an_adapter_before_the_reply_to_its_first_req
         other => panic!("not the reply to the first request: {other:?}"),
     }
 
-    // A second Window answers: its reply carries the answer, and then both are told it.
     let mut second = scratch.window();
     let id = second.send(Request::ListWorkspaces);
     assert_eq!(second.consents_told(), told);
@@ -458,8 +405,6 @@ fn a_window_is_told_the_question_of_an_adapter_before_the_reply_to_its_first_req
     assert_eq!(second.consents_told(), answered, "the one who answered");
     assert_eq!(first.consents_told(), answered, "the other Window");
 
-    // A Window that connects after the answer is told nothing: the reply to its first
-    // request is the very next frame, which is the barrier for what was not told.
     let mut third = scratch.window();
     assert!(matches!(
         third.ask(Request::ListWorkspaces),
@@ -503,7 +448,6 @@ fn a_piece_of_a_cli_is_not_told_the_question_before_the_reply_to_its_report() {
     scratch.pi_is_installed();
     let keeper = scratch.keeper();
 
-    // A Window waits for the answer, so that the question does wait.
     let mut watcher = scratch.window();
     let id = watcher.send(Request::ListWorkspaces);
     assert_eq!(
@@ -512,8 +456,6 @@ fn a_piece_of_a_cli_is_not_told_the_question_before_the_reply_to_its_report() {
     );
     assert!(matches!(watcher.next(), Message::Reply { to, .. } if to == id));
 
-    // The reporting program's connection: its reply is the very next frame. The payload
-    // is one the Keeper cannot read, which it answers all the same.
     let mut piece = scratch.window();
     let report = AgentReport {
         agent: PI.to_owned(),
@@ -534,7 +476,6 @@ fn with_pi_not_installed_no_question_is_listed_or_told_and_a_yes_is_refused_and_
     let keeper = scratch.keeper();
 
     let mut first = scratch.window();
-    // The first request is answered with nothing told before it.
     assert!(matches!(
         first.ask(Request::ListWorkspaces),
         Ok(Reply::Workspaces(_))
@@ -551,8 +492,6 @@ fn with_pi_not_installed_no_question_is_listed_or_told_and_a_yes_is_refused_and_
         matches!(&refused, Err(Refusal::Failed { reason }) if reason.contains(PI)),
         "{refused:?}"
     );
-    // Nothing was told about it: the first Window's next reply is the next frame it gets
-    // (barrier: the refusal was answered before this is sent), and the second's too.
     assert_eq!(first.consents(), Vec::new());
     assert_eq!(second.consents(), Vec::new());
     assert_eq!(
@@ -594,8 +533,6 @@ fn an_answer_for_an_adapter_that_asks_no_leave_or_that_does_not_exist_is_refused
     }
     assert_eq!(tree(&scratch.home()), at_the_start);
     assert!(!scratch.pi_settings().exists());
-    // pi's own question stands unanswered, and the watcher heard nothing of the refusals:
-    // the reply is the very next frame it gets.
     assert_eq!(of(&watcher.consents(), PI).answer, ConsentAnswer::NotAsked);
 
     watcher.stop(keeper);
@@ -626,7 +563,6 @@ fn a_settings_file_pi_could_not_read_is_left_as_it_was_and_the_problem_is_told_t
         "the file is left byte for byte"
     );
 
-    // Not answered, and could not be changed: a Window that connects is told again.
     let mut later = scratch.window();
     let id = later.send(Request::ListWorkspaces);
     assert_eq!(later.consents_told(), answered);
@@ -671,7 +607,6 @@ fn a_no_after_a_yes_takes_the_entry_out_and_asking_again_leaves_the_question_for
         "the no took it out"
     );
 
-    // Asking again: the question comes back for the next Window.
     assert_eq!(
         of(
             &window.answer(PI, ConsentAnswer::NotAsked).expect("taken"),
@@ -708,7 +643,6 @@ fn every_shell_of_the_app_and_the_launcher_of_pi_name_the_reporting_program() {
     assert!(matches!(window.next(), Message::Reply { to, .. } if to == id));
     let workspace = window.open(&repo);
 
-    // Two shells: each names it, not only the first.
     for _ in 0..2 {
         let shell = window.open_terminal(&workspace, Program::Shell);
         window.type_into(
@@ -722,8 +656,6 @@ fn every_shell_of_the_app_and_the_launcher_of_pi_name_the_reporting_program() {
         );
     }
 
-    // The launcher of pi: the script `pi` of the test runs, found first on the search
-    // path, and it names the same program.
     let launched = window.open_terminal(
         &workspace,
         Program::Agent {
@@ -749,8 +681,6 @@ fn after_the_users_yes_pi_typed_in_a_shell_and_pi_from_its_launcher_load_the_ext
         .join("extension")
         .join(yaar_adapter_pi::EXTENSION_FILE);
     let entry = extension.to_str().expect("a path that is text").to_owned();
-    // pi's settings as the user had them: a list that holds another extension and a key
-    // of its own, which the answers never touch.
     let users = "{\"theme\": \"dark\", \"extensions\": [\"/users/own.ts\"]}\n";
     std::fs::write(scratch.pi_settings(), users).expect("write the settings");
 
@@ -760,7 +690,6 @@ fn after_the_users_yes_pi_typed_in_a_shell_and_pi_from_its_launcher_load_the_ext
     assert!(matches!(window.next(), Message::Reply { to, .. } if to == id));
     let workspace = window.open(&repo);
 
-    // Written at the start, but only listed after the leave.
     assert_eq!(
         std::fs::read_to_string(&extension).expect("the extension the Adapter wrote"),
         yaar_adapter_pi::EXTENSION_SOURCE
@@ -780,14 +709,12 @@ fn after_the_users_yes_pi_typed_in_a_shell_and_pi_from_its_launcher_load_the_ext
         users
     );
 
-    // Not asked, and after a no: nothing of the app's is listed.
     window
         .answer(PI, ConsentAnswer::No)
         .expect("the answer is taken");
     window.consents_told();
     assert_eq!(listed(&scratch), ["/users/own.ts"]);
 
-    // After the yes: the entry, at the end, and the user's own kept.
     window
         .answer(PI, ConsentAnswer::Yes)
         .expect("the answer is taken");
@@ -796,7 +723,6 @@ fn after_the_users_yes_pi_typed_in_a_shell_and_pi_from_its_launcher_load_the_ext
     let text = std::fs::read_to_string(scratch.pi_settings()).expect("pi's settings");
     assert!(text.contains("\"theme\": \"dark\""), "{text}");
 
-    // pi typed in a shell, and pi from its launcher: the same variable, the same file.
     let shell = window.open_terminal(&workspace, Program::Shell);
     window.type_into(&shell, b"pi; printf 'DONE%s\\n' -MARK\r");
     let typed = window.output_until(&shell, |heard| heard.contains("DONE-MARK"));
@@ -808,8 +734,7 @@ fn after_the_users_yes_pi_typed_in_a_shell_and_pi_from_its_launcher_load_the_ext
     );
     let launcher = window.until_ended(&launched);
 
-    // What pi printed, each line read from the marker it starts with: the prompt of a shell
-    // may stand in front of the first line the command prints.
+    // A shell prompt may stand in front of the first line the command prints.
     let lines = |heard: &str| -> Vec<String> {
         heard
             .lines()

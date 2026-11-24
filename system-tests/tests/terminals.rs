@@ -1,5 +1,5 @@
-//! System tests of the terminals of the Keeper through the scripted client, and of the
-//! stand-ins the world holds for them.
+//! System tests of the Keeper's terminals through the scripted client, and of the world's stand-ins
+//! for them.
 
 use std::time::Duration;
 
@@ -11,8 +11,6 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// Waits until every process in `pids` is gone, which a test that started them has to do
-/// before it ends.
 fn wait_until_gone(pids: &[u32]) {
     assert!(
         wait_until(DEADLINE, || pids.iter().all(|pid| !is_alive(*pid))),
@@ -34,7 +32,6 @@ fn the_shell_of_a_terminal_in_a_world_is_the_one_of_the_world() {
         .open_terminal(&workspace, SIZE)
         .expect("open a terminal");
 
-    // What the typed line holds is `$SHELL` and `$HOME`: the answer is what they are.
     client.type_into(&terminal, b"echo shell-is-$SHELL home-is-$HOME\r");
     let heard = client.wait_for_output(&terminal, DEADLINE, |bytes| {
         String::from_utf8_lossy(bytes).contains("shell-is-/bin/sh home-is-/")
@@ -66,8 +63,8 @@ fn the_key_recorder_writes_down_every_byte_a_program_receives_as_it_was_typed() 
         .expect("open a terminal");
     client.wait_for_output(&terminal, DEADLINE, |bytes| !bytes.is_empty());
 
-    // The recorder is started as a user starts a program. Its file is made once the
-    // terminal is raw, so every byte typed after that is recorded as typed.
+    // The file is made once the terminal is raw, so every byte typed after that is recorded as
+    // typed.
     let keys = world.home().join("keys");
     let recorder = world.key_recorder();
     client.type_into(
@@ -79,8 +76,8 @@ fn the_key_recorder_writes_down_every_byte_a_program_receives_as_it_was_typed() 
         "the recorder did not start"
     );
 
-    // Every value a byte can have, among them what a cooked terminal would turn into a
-    // signal, a line end or an end of input.
+    // Every byte value, among them those a cooked terminal turns into a signal, a line end or an
+    // end of input.
     let every_byte: Vec<u8> = (0..=255).collect();
     for part in every_byte.chunks(37) {
         client.type_into(&terminal, part);
@@ -122,7 +119,6 @@ fn waiting_for_output_that_does_not_come_fails_with_what_did_come() {
         .expect("the wait failed with a message");
     assert!(said.contains("was not what was wanted within"), "{said}");
 
-    // The terminal's program is the world's to end, and this test waits until it is.
     drop(client);
     drop(world);
     wait_until_gone(&started);

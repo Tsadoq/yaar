@@ -1,6 +1,5 @@
-//! The hook program answers a permission request with no decision of its own: the built
-//! `yaar-claude-hook` is run with recorded inputs, and the test plays the Keeper's end of
-//! the socket only to read what the program sent and to see what it printed.
+//! The built `yaar-claude-hook` runs on recorded inputs; the test plays the Keeper's end of the
+//! socket.
 
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -20,31 +19,23 @@ use yaar_link::{
 };
 use yaar_system_tests::recorded::{self, HookRecord};
 
-/// The recording of the dialogs: the permission requests are its lines 4 and 12.
+/// Permission requests are its lines 4 and 12.
 const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 
-/// The lines of [`DIALOGS`] that are permission requests: a Write and a Bash.
 const REQUESTS: [usize; 2] = [4, 12];
 
-/// How much longer than [`DEADLINE`] the program may take, to start and to leave, on a
-/// machine that is busy.
 const MARGIN: Duration = Duration::from_secs(3);
 
-/// What a test waits for at most when it does not expect to wait at all.
 const PATIENCE: Duration = Duration::from_secs(20);
 
-/// How many facts a Keeper tells before its answer when it means the program to be reading
-/// after the Keeper has gone.
 const MANY_FACTS: usize = 200;
 
-/// A folder of this test's own, removed with whatever else the test made outside it.
 struct Scratch {
     folder: PathBuf,
     also: Vec<PathBuf>,
 }
 
 impl Scratch {
-    /// A folder for the user alone, under a short path.
     fn new() -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -66,7 +57,6 @@ impl Drop for Scratch {
     }
 }
 
-/// Makes `folder` closed to everybody but the user, whatever the mask of this process.
 fn make_private(folder: &Path) {
     use std::os::unix::fs::PermissionsExt;
     fs::DirBuilder::new()
@@ -77,64 +67,41 @@ fn make_private(folder: &Path) {
     fs::set_permissions(folder, fs::Permissions::from_mode(0o700)).expect("set its mode");
 }
 
-/// What the Keeper's end saw of the program.
 #[derive(Default)]
 struct Heard {
-    /// The program's hello, when it sent one.
     hello: Option<Hello>,
-    /// Every request it sent, in order.
     requests: Vec<(RequestId, Request)>,
-    /// Whether it hung up while the test's Keeper still owed it its reply.
     hung_up_early: bool,
 }
 
-/// How the test's Keeper behaves once the program is connected.
 #[derive(Clone)]
 enum Keeper {
-    /// Answers the request with `Done`.
     Answers,
-    /// Answers the request with `Reply::Answer` of these bytes.
     AnswersWith(Vec<u8>),
-    /// Tells many facts, then answers with `Reply::Answer` of these bytes and leaves at
-    /// once, so that the program finds the Keeper gone with the answer still to read.
     AnswersAndLeaves(Vec<u8>),
-    /// Tells a reply to another request that holds an answer, then answers its own with
-    /// `Done`.
     AnswersAnotherRequestFirst,
-    /// Waits until the program's deadline is past, then answers with an `Answer`.
     AnswersTooLate,
-    /// Answers the request with a refusal.
     Refuses,
-    /// Tells a fact and a reply to another request, then checks the program has not gone,
-    /// and only then answers.
     TellsOtherThingsFirst,
-    /// Reads the request and never answers.
     Silent,
-    /// Reads the request and tells a fact every so often, never answering.
     Chatty,
-    /// Answers the hello with one of another protocol and waits for the program to go.
     OfAnotherProtocol,
-    /// Accepts the connection and hangs up.
     HangsUp,
 }
 
-/// A fact to tell, one that no test of the program reads.
 fn a_fact() -> Message {
     Message::Fact(Fact::ChangesChanged {
         workspace: WorkspaceId::new("w1"),
     })
 }
 
-/// The place a socket is wanted at, the Keeper bound there, and the folder it lies in.
 struct World {
     scratch: Scratch,
     wanted: PathBuf,
-    /// The Keeper's thread, when one is running.
     keeper: Option<JoinHandle<Heard>>,
 }
 
 impl World {
-    /// A world whose socket is wanted at a path short enough to bind.
     fn new() -> Self {
         let scratch = Scratch::new();
         let wanted = scratch.folder.join("keeper.sock");
@@ -145,8 +112,6 @@ impl World {
         }
     }
 
-    /// A world whose socket is wanted at a path too long to bind, so that the program has
-    /// to reach it at the short place the Link computes.
     fn with_a_long_path() -> Self {
         let scratch = Scratch::new();
         let base = scratch
@@ -168,8 +133,6 @@ impl World {
         }
     }
 
-    /// Binds the Keeper at the place the Link says, in a folder for the user alone as the
-    /// real Keeper makes it, and serves one connection as `behaviour` says.
     fn keeper(&mut self, behaviour: Keeper) {
         let address = socket_address(&self.wanted);
         if address != self.wanted {
@@ -181,12 +144,10 @@ impl World {
         self.keeper = Some(thread::spawn(move || serve(&listener, &behaviour)));
     }
 
-    /// Binds a socket and lets it go, which leaves the file where nothing listens.
     fn stale_socket(&self) {
         drop(UnixListener::bind(&self.wanted).expect("bind a socket"));
     }
 
-    /// What the Keeper's end saw, once the program has gone.
     fn heard(&mut self) -> Heard {
         self.keeper
             .take()
@@ -195,8 +156,6 @@ impl World {
             .expect("the Keeper's thread ends")
     }
 
-    /// Runs the built program on `input`, in a world of its own: nothing of this process's
-    /// environment, but the socket wanted and the terminal named.
     fn run(&self, terminal: Option<&str>, input: &[u8]) -> Ran {
         let mut command = Command::new(env!("CARGO_BIN_EXE_yaar-claude-hook"));
         command
@@ -210,8 +169,8 @@ impl World {
         if let Some(terminal) = terminal {
             command.env(TERMINAL_VARIABLE, terminal);
         }
-        // Cargo takes the program out of its place for a moment at every build, and tests
-        // that build run beside this one: a program that is not there is looked for again.
+        // Tests that build run beside this one, and Cargo takes the program out of its place
+        // for a moment at every build: a program that is not there is looked for again.
         let give_up = Instant::now() + Duration::from_secs(5);
         let (mut child, started) = loop {
             let started = Instant::now();
@@ -224,8 +183,6 @@ impl World {
             }
         };
         let mut stdin = child.stdin.take().expect("the program's standard input");
-        // The program reads its input whole before anything else; a break of the pipe
-        // means it left without, which the test sees from what it sent.
         let _ = stdin.write_all(input);
         drop(stdin);
         let output = child.wait_with_output().expect("wait for the program");
@@ -237,7 +194,6 @@ impl World {
     }
 }
 
-/// What the program did, as its caller sees it.
 struct Ran {
     status: ExitStatus,
     printed: Vec<u8>,
@@ -245,7 +201,6 @@ struct Ran {
 }
 
 impl Ran {
-    /// The program went as the CLI wants it to: it succeeded and said nothing.
     fn assert_succeeded_with_no_word(&self) {
         assert_eq!(self.status.code(), Some(0), "the program exits 0");
         assert_eq!(
@@ -256,7 +211,6 @@ impl Ran {
     }
 }
 
-/// Serves one connection as `behaviour` says, and tells what came in.
 fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
     let mut heard = Heard::default();
     let Some(mut stream) = accept_within(listener, PATIENCE) else {
@@ -298,8 +252,8 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
                 return heard;
             }
             Keeper::AnswersAndLeaves(bytes) => {
-                // The program reads a frame, looks at the clock and reads the next: with
-                // this many, it is still reading when the Keeper has long closed.
+                // The program reads a frame, looks at the clock and reads the next: with MANY_FACTS
+                // frames ahead of the answer, it is still reading when the Keeper has closed.
                 for _ in 0..MANY_FACTS {
                     write_message(&mut stream, &a_fact()).expect("tell a fact");
                 }
@@ -322,10 +276,7 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
                 return heard;
             }
             Keeper::AnswersTooLate => {
-                // The program leaves at its deadline, which ends this wait: a fact, not a
-                // sleep, and it bounds the wait by the deadline and not by a guess of it.
                 stays_until_the_program_leaves(&mut stream);
-                // The program has left by now: the write may find nobody.
                 let late = Reply::Answer {
                     bytes: b"too late".to_vec(),
                 };
@@ -347,11 +298,7 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
                     reply: Ok(Reply::Done),
                 };
                 write_message(&mut stream, &other).expect("answer another request");
-                // What the program does with what it was told shows in whether it is still
-                // there: it has to read on until its own reply.
                 heard.hung_up_early = !stays_connected(&mut stream);
-                // A program that has gone is not owed its reply, and a write to it fails:
-                // the test reports it through `hung_up_early`, not through a panic here.
                 if !heard.hung_up_early {
                     write_message(&mut stream, &reply(Ok(Reply::Done))).expect("answer");
                 }
@@ -371,22 +318,13 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
     heard
 }
 
-/// Holds the connection until the program closes its end, as the real Keeper does, so that
-/// what the program does after its answer does not depend on the Keeper having gone.
-///
-/// It sets no option: the program may have printed its answer and left already, and on macOS
-/// an option cannot be set on a socket whose other end has closed. The read timeout that
-/// serves here was set when the connection was accepted, while the program still waited.
 fn stays_until_the_program_leaves(stream: &mut UnixStream) {
     while read_message(stream).is_ok() {}
 }
 
-/// Whether the other end is still there after a short while, which is to say that a read
-/// of it times out and does not find it closed.
 fn stays_connected(stream: &mut UnixStream) -> bool {
-    // A program that has gone already is the very thing this asks about. Where the system
-    // refuses an option on a socket whose other end has closed (macOS: "Invalid argument"),
-    // that refusal is the answer: it has gone.
+    // Where the system refuses an option on a socket whose other end has closed (macOS: "Invalid
+    // argument"), that refusal means it has gone.
     if stream
         .set_read_timeout(Some(Duration::from_millis(300)))
         .is_err()
@@ -399,7 +337,6 @@ fn stays_connected(stream: &mut UnixStream) -> bool {
     )
 }
 
-/// The first connection to `listener`, or none within `patience`.
 fn accept_within(listener: &UnixListener, patience: Duration) -> Option<UnixStream> {
     listener.set_nonblocking(true).expect("poll the listener");
     let until = Instant::now() + patience;
@@ -418,7 +355,6 @@ fn accept_within(listener: &UnixListener, patience: Duration) -> Option<UnixStre
     None
 }
 
-/// The request the program sent, which has to be the one and only.
 fn the_one_report(heard: &Heard) -> &yaar_link::AgentReport {
     let [(id, Request::Report { report })] = heard.requests.as_slice() else {
         panic!("the program sends one report, got {:?}", heard.requests);
@@ -427,7 +363,6 @@ fn the_one_report(heard: &Heard) -> &yaar_link::AgentReport {
     report
 }
 
-/// The record of line `line` of the dialogs, which is a permission request.
 fn permission_request(line: usize) -> HookRecord {
     let record = recorded::hook_events(DIALOGS).swap_remove(line);
     assert_eq!(record.event, "PermissionRequest", "line {line}");
@@ -489,7 +424,6 @@ fn the_hook_program_reaches_a_socket_wanted_at_a_path_too_long_to_bind() {
 #[test]
 fn a_hook_run_outside_the_apps_terminals_reports_no_terminal() {
     let record = permission_request(REQUESTS[0]);
-    // The variable unset, and the variable empty, which a shell can leave behind.
     for terminal in [None, Some("")] {
         let mut world = World::new();
         world.keeper(Keeper::Answers);
@@ -605,7 +539,6 @@ fn a_keeper_of_another_protocol_is_sent_no_request_and_the_program_says_nothing(
     let heard = world.heard();
 
     assert!(heard.hello.is_some(), "the program did say hello");
-    // The Keeper's end reads until the program goes: a request would have been read.
     assert_eq!(heard.requests, []);
     ran.assert_succeeded_with_no_word();
     assert!(ran.took < DEADLINE, "it took {:?}", ran.took);
@@ -658,7 +591,6 @@ fn a_keeper_that_keeps_telling_facts_cannot_hold_the_program_past_the_deadline()
 #[test]
 fn what_the_keeper_answers_is_printed_byte_for_byte_and_the_program_succeeds() {
     let record = permission_request(REQUESTS[0]);
-    // What a delivery looks like, a lone line end, and bytes that are no text.
     let answers: [(&str, Vec<u8>); 3] = [
         (
             "a JSON object with quotes, a line break and an accent",

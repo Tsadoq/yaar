@@ -7,7 +7,6 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# The user a process runs as, to tell the user's own Keeper from anybody else's.
 libc.workspace = true
 
 [lints]

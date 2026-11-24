@@ -1,28 +1,3 @@
-//! Attaching the review shown, or the thread the reviewer is on alone, to the user's next
-//! message to its agent; detaching it; and the offer to start an agent when the review's
-//! agent does not run, or the review belongs to no agent. Built by the review pane's
-//! package "attaching and the states of threads" of slice 6.
-//!
-//! [`crate::AttachReview`] and [`crate::AttachThread`] send `Request::AttachReview`, the
-//! user's; the answer, `Reply::AttachedReview`, names the CLIs to offer, which the pane
-//! shows under `review-offer-start` with one control `review-offer-start-<agent>` for each,
-//! until one is taken, the review shown changes, the workspace changes, what is attached
-//! goes, or the review's session runs. Taking one, by its control or by
-//! [`crate::StartAgent`] (the CLI the Window has chosen, the first offered where the offer
-//! does not hold it; [`crate::NextOfferedAgent`] moves that choice; with none offered the
-//! notice says so),
-//! asks the terminal pane, through the shared list of terminals
-//! (`yaar_frame::TerminalList::want` with `yaar_frame::Wanted::AgentFor`), to open that
-//! CLI's launcher for the review: no pane calls another.
-//! [`crate::DetachReview`] sends `Request::DetachReview`. A refusal is said in the pane's
-//! notice.
-//!
-//! What is attached of the review shown is drawn on the same line, from the review as
-//! `Request::GetReviews` answered it (`yaar_link::Review::attached`), whatever attached it
-//! and whenever: `review-attached:review` for the review, `review-attached:thread` for one
-//! thread alone, nothing while nothing is. So a review attached before a restart shows as
-//! attached when a Window opens; attaching it again gives the offer again.
-
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -36,27 +11,18 @@ use crate::actions::words;
 use crate::draw::ROW_HEIGHT;
 use crate::{AttachReview, AttachThread, DetachReview, NextOfferedAgent, ReviewPane, StartAgent};
 
-/// The CLIs one attach offered to start, and what they were offered for.
 struct Offer {
-    /// The workspace on screen when the review was attached.
     workspace: WorkspaceId,
-    /// The review that was attached.
     review: ReviewId,
-    /// The CLIs the Keeper named, in the order it gave them.
     start: Vec<AgentCli>,
 }
 
-/// What attaching keeps: the offer the last attach was answered with, and the CLI the
-/// Window has chosen.
 pub(crate) struct Attaching {
     offer: Option<Offer>,
-    /// The CLI `yaar_frame::AgentList::chosen_cli` names, as the pane last heard it, copied
-    /// so that [`ReviewPane::offer_chosen`] reads it without the app's context.
     window_choice: Option<AgentCli>,
 }
 
 impl Attaching {
-    /// Nothing offered, and the Window's choice as it is now.
     pub(crate) fn new(window_choice: Option<AgentCli>) -> Self {
         Self {
             offer: None,
@@ -64,15 +30,12 @@ impl Attaching {
         }
     }
 
-    /// The offer goes: the review it was made for is not the one shown any more, or the
-    /// workspace is not on screen.
     pub(crate) fn forget(&mut self) {
         self.offer = None;
     }
 
-    /// The reviews of the workspace were read anew: an offer for a review that is not
-    /// attached in them goes, so that it does not come back if the review is attached again
-    /// by another Window.
+    /// An offer for a review no longer attached goes, so it does not return when another Window
+    /// attaches it.
     pub(crate) fn reviews_read(&mut self, reviews: &WorkspaceReviews) {
         let gone = self.offer.as_ref().is_some_and(|offer| {
             offer.workspace == reviews.workspace
@@ -88,11 +51,7 @@ impl Attaching {
 }
 
 impl ReviewPane {
-    /// The CLIs the pane offers to start with the review attached, as the last attach
-    /// answered; empty while none is offered. The offer is of one review of one workspace:
-    /// it is not offered with another review shown, in another workspace, or once nothing
-    /// is attached of the review any more, or while the review's session runs: an agent
-    /// started some other way is not started a second time.
+    /// Empty while the review's session runs: an agent started some other way is not started twice.
     pub fn offer_to_start(&self) -> Vec<AgentCli> {
         let Some(offer) = &self.attaching.offer else {
             return Vec::new();
@@ -113,9 +72,6 @@ impl ReviewPane {
         }
     }
 
-    /// The line of what is attached of the review shown and of the offer to start an
-    /// agent, drawn above the tree of Changes; none while nothing is attached and nothing
-    /// offered.
     pub(crate) fn render_offer_to_start(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let attached = self.review().and_then(|review| review.attached.as_ref());
         let offered = self.offer_to_start();
@@ -172,7 +128,6 @@ impl ReviewPane {
                         .text_color(theme.secondary_foreground)
                         .child(format!("Start {}", cli.title))
                         .when(mark, |control| {
-                            // An underline over the control of the CLI Start Agent takes.
                             let agent = agent.clone();
                             control.child(
                                 div()
@@ -199,8 +154,6 @@ impl ReviewPane {
         Some(line.into_any_element())
     }
 
-    /// Asks the Keeper to attach the review shown, or the one thread of it, and keeps what
-    /// it offers to start when it answers.
     fn attach(&mut self, thread: Option<ThreadId>, cx: &mut Context<Self>) {
         let (Some(workspace), Some(review)) = (
             self.reviews_of.clone(),
@@ -245,9 +198,6 @@ impl ReviewPane {
         .detach();
     }
 
-    /// Asks the terminal pane, through the shared list of terminals, to open the launcher
-    /// of the CLI `agent` in the workspace on screen for the review the offer was made
-    /// for. The offer is taken: it goes.
     fn start(&mut self, agent: &str, cx: &mut Context<Self>) {
         let Some(offer) = self.attaching.offer.take() else {
             return;
@@ -263,7 +213,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// [`AttachReview`].
     pub(crate) fn attach_review(
         &mut self,
         _: &AttachReview,
@@ -274,8 +223,6 @@ impl ReviewPane {
         self.attach(None, cx);
     }
 
-    /// [`AttachThread`]: the thread of the line the reviewer is on; with none, the notice
-    /// says so and nothing is sent.
     pub(crate) fn attach_thread(
         &mut self,
         _: &AttachThread,
@@ -283,8 +230,8 @@ impl ReviewPane {
         cx: &mut Context<Self>,
     ) {
         self.acted(cx);
-        // A thread whose comments are all sent has nothing to carry, but the Keeper says
-        // so: a thread the agent has not answered may still hold a follow-up.
+        // A thread whose comments are all sent is still asked for, and the Keeper decides: a thread
+        // the agent has not answered may still hold a follow-up.
         let Some((_, thread)) = self.thread_to_act_on(
             |thread| !thread.resolved,
             "The thread on this line is resolved: reopen it to attach it",
@@ -295,7 +242,6 @@ impl ReviewPane {
         self.attach(Some(thread), cx);
     }
 
-    /// [`DetachReview`].
     pub(crate) fn detach_review(
         &mut self,
         _: &DetachReview,
@@ -306,8 +252,6 @@ impl ReviewPane {
         let Some(review) = self.review().map(|review| review.id.clone()) else {
             return self.say("The reviews are not here yet", cx);
         };
-        // The review is not attached any more once the Keeper says so, and the offer made
-        // for it goes with it.
         self.attaching.offer = None;
         let asked = self.models.link.update(cx, |link, cx| {
             link.ask(Request::DetachReview { review }, cx)
@@ -315,12 +259,7 @@ impl ReviewPane {
         self.report(asked, cx);
     }
 
-    /// The CLI of the offer that [`StartAgent`] starts: the one the Window has chosen
-    /// (`yaar_frame::AgentList::chosen_cli`, the first CLI the Keeper has an Adapter for
-    /// until one moves it), or the first offered where the offer does not hold it, drawn
-    /// with `review-offer-chosen-<agent>` over its control; none while nothing is offered.
-    /// A new offer keeps the choice: it is the Window's, and the terminal pane's launchers
-    /// use it too.
+    /// The Window's choice, else the first CLI offered.
     pub fn offer_chosen(&self) -> Option<AgentCli> {
         let offered = self.offer_to_start();
         match &self.attaching.window_choice {
@@ -329,8 +268,6 @@ impl ReviewPane {
         }
     }
 
-    /// The agents model changed: the CLI the Window has chosen may be another, and the mark
-    /// over the control of the CLI offered moves with it.
     pub(crate) fn cli_chosen(&mut self, cx: &mut Context<Self>) {
         let now = self.models.agents.read(cx).chosen_cli().cloned();
         if now != self.attaching.window_choice {
@@ -339,11 +276,6 @@ impl ReviewPane {
         }
     }
 
-    /// [`NextOfferedAgent`]: the next CLI of the offer is the one the Window has chosen,
-    /// after the last the first. The choice is the Window's: it is moved through the shared
-    /// list of agents, over the CLIs the offer does not hold, to the next the offer holds.
-    /// With one CLI offered there is nothing to choose, and nothing happens; with none
-    /// offered the notice says so.
     pub(crate) fn next_offered_agent(
         &mut self,
         _: &NextOfferedAgent,
@@ -358,8 +290,8 @@ impl ReviewPane {
         if offered.len() < 2 {
             return;
         }
-        // One step for each CLI of the list is a whole turn round it: the loop ends there
-        // when the offer holds none but the one chosen.
+        // One step per CLI is a whole turn: the loop ends there when the offer holds only the
+        // chosen one.
         let steps = self.models.agents.read(cx).clis().len();
         for _ in 0..steps {
             let landed = self.models.agents.update(cx, |agents, cx| {
@@ -372,7 +304,6 @@ impl ReviewPane {
         }
     }
 
-    /// [`StartAgent`]: the CLI chosen of the offer; with none offered the notice says so.
     pub(crate) fn start_agent(&mut self, _: &StartAgent, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
         match self.offer_chosen() {

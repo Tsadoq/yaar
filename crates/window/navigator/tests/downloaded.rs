@@ -1,16 +1,5 @@
-//! The three built-in rows downloaded from their publishers and used (LSP-01): with no server
-//! on the machine, each row offers its download, downloads into the app's folder, passes its
-//! digest, and answers hover, definition and references on its fixed project.
-//!
-//! This is the one test of the slice that reaches the publishers' addresses: about 40 MB
-//! fetched and 90 MB unpacked a run, into the test's own scratch, removed with it. What a
-//! request carries is the downloader's own (`download::USER_AGENT` and nothing that names a
-//! user, a machine or a project). That a digest that differs is refused is LSP-05's.
-//!
-//! Each server runs with the home, cache, config, data and temporary folders and the cargo
-//! home of the scratch, as the tests of the real servers run them. The waits are for facts
-//! the Navigator tells, with `SERVER_DEADLINE` for a download and a real server's readiness
-//! and answers, which a throttled run on a small machine takes long to reach.
+//! The three built-in rows downloaded from their publishers and used, on fixed projects.
+//! Fetches about 40 MB (90 MB unpacked) a run into the scratch.
 
 mod support;
 
@@ -18,30 +7,22 @@ use support::*;
 use yaar_navigator::download::installed;
 use yaar_navigator::{Ask, BUILTIN, Location, Offer, Platform, Registry, State, Tree};
 
-/// What one fixed project is asked: a name at a line of a file, and where the name is
-/// defined and used (new side, `PLAN.md` § 3).
 struct Probe {
-    /// The file, relative to the worktree, and the line of the name in it, from 1.
+    /// Relative to the worktree; the line is 1-based.
     file: &'static str,
     line: u32,
     name: &'static str,
-    /// A part of what the hover says.
     hover: &'static str,
-    /// The file and line of the definition.
     defined: (&'static str, u32),
-    /// Files and lines that refer to the name, the definition's among them.
     used: &'static [(&'static str, u32)],
 }
 
-/// Whether `places` holds the line `line` of `relative` in the worktree of `repo`.
 fn holds(places: &[Location], repo: &Repo, relative: &str, line: u32) -> bool {
     places
         .iter()
         .any(|place| place.line == line && place.path == repo.root.join(relative))
 }
 
-/// Downloads the server of the row `language` for the fixture `fixture` and asks it each of
-/// `probes`.
 fn downloads_and_answers(fixture: Fixture, language: &str, server: &str, probes: &[Probe]) {
     let scratch = Scratch::new();
     let repo = scratch.fixture(fixture);
@@ -55,8 +36,6 @@ fn downloads_and_answers(fixture: Fixture, language: &str, server: &str, probes:
         .expect("the row downloads for this machine");
     assert_eq!(pinned_server.name, server);
 
-    // With no server on the machine: the config's search path is the scratch's `bin`, which
-    // holds the recorder `npm` and nothing else, and its folder of downloads is empty.
     let config = scratch.config(BUILTIN);
     let servers = config.servers.clone();
     assert_eq!(
@@ -81,7 +60,6 @@ fn downloads_and_answers(fixture: Fixture, language: &str, server: &str, probes:
         }
     );
 
-    // The download, into the app's folder, and the server started from it.
     running.ask(Ask::Download {
         language: language.to_owned(),
     });
@@ -101,13 +79,11 @@ fn downloads_and_answers(fixture: Fixture, language: &str, server: &str, probes:
     );
     assert_eq!(ready.server.as_deref(), Some(server));
     assert_eq!(ready.update, None);
-    // It passed its digest: the record names the digest the row pins.
     let record = installed(&servers, server).expect("the download is installed");
     assert_eq!(record.version, pinned.version);
     assert_eq!(record.sha256, pinned.sha256);
     assert_eq!(record.program, program);
 
-    // And it answers, hover, definition and references, from the server and not by text.
     for probe in probes {
         let at = || {
             place(

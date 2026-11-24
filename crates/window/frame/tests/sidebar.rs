@@ -1,7 +1,6 @@
-//! Component test: the sidebar of the Frame, on GPUI's test platform with no window on
-//! any screen. Keys, clicks and the wheel go in the way a user's do; what the sidebar
-//! shows is read back through the model it draws from. The test plays the Keeper on the
+//! Component test: the sidebar of the Frame on GPUI's test platform, with the Keeper played on the
 //! other end of a socket pair.
+//! What the sidebar shows is read back through the model it draws from.
 
 mod common;
 
@@ -23,7 +22,6 @@ const WIDE: Size<Pixels> = Size {
     height: px(800.),
 };
 
-/// A window at this width.
 fn wide(width: Pixels) -> Size<Pixels> {
     size(width, px(800.))
 }
@@ -40,7 +38,6 @@ fn pinned(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) -> Option<Sideb
     sidebar.read_with(cx, |sidebar, _| sidebar.pinned())
 }
 
-/// How wide the sidebar was drawn in the last frame.
 fn drawn_width(cx: &mut VisualTestContext) -> Pixels {
     drawn("sidebar", cx)
         .expect("the sidebar is drawn")
@@ -48,8 +45,6 @@ fn drawn_width(cx: &mut VisualTestContext) -> Pixels {
         .width
 }
 
-/// Holds what is drawn to what [`Sidebar::rows`] lists: every row of the list is drawn,
-/// inside the sidebar, and each one under the one the list has before it.
 fn assert_drawn_as_listed(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) {
     let whole = drawn("sidebar", cx).expect("the sidebar is drawn");
     let mut above: Option<(SidebarRow, Bounds<Pixels>)> = None;
@@ -114,15 +109,12 @@ fn marked(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) -> Option<Works
     first
 }
 
-/// Clicks the row of a workspace where it was drawn.
 fn click_workspace(workspace: &WorkspaceId, cx: &mut VisualTestContext) {
     let row = drawn(&format!("sidebar-workspace-{workspace}"), cx)
         .expect("the row of the workspace is drawn");
     cx.simulate_click(row.center(), Modifiers::none());
 }
 
-/// Two repositories: one with two worktrees, one with a worktree on a branch and one on
-/// no branch.
 fn two_repositories() -> Vec<Repository> {
     vec![
         repository(
@@ -145,8 +137,6 @@ fn two_repositories() -> Vec<Repository> {
     ]
 }
 
-/// A window whose Keeper has answered the first question for the list with `listed`, and
-/// whose sidebar shows it.
 fn showing(
     listed: &[Repository],
     window_size: Size<Pixels>,
@@ -154,7 +144,6 @@ fn showing(
 ) -> (Shown, VisualTestContext) {
     let (mut shown, mut cx) = open_frame(window_size, Vec::new(), cx);
     shown.keeper.list(listed, &mut cx);
-    // One row for each repository and one for each of its worktrees.
     let every_row = listed
         .iter()
         .map(|repository| 1 + repository.workspaces.len())
@@ -176,7 +165,6 @@ fn the_sidebar_lists_each_repository_with_its_worktrees_under_it_each_named_by_i
     let (mut shown, mut cx) = open_frame(WIDE, Vec::new(), cx);
     assert_eq!(rows(&shown.sidebar, &mut cx), []);
 
-    // What the Keeper answers when the window opens: one repository with one worktree.
     let first = repository('a', vec![workspace('1', "main")]);
     shown.keeper.list(std::slice::from_ref(&first), &mut cx);
     wait_until(&mut cx, "the first repository in the sidebar", |cx| {
@@ -188,7 +176,6 @@ fn the_sidebar_lists_each_repository_with_its_worktrees_under_it_each_named_by_i
         .expect(Request::GetChanges { workspace: id('1') }, &mut cx);
     assert_drawn_as_listed(&shown.sidebar, &mut cx);
 
-    // What it tells when a worktree was made there and a second repository was opened.
     let listed = two_repositories();
     shown.keeper.tell(Fact::Workspaces(listed.clone()));
     let every_row = [
@@ -197,17 +184,13 @@ fn the_sidebar_lists_each_repository_with_its_worktrees_under_it_each_named_by_i
         workspace_row('2', "feature/login", false),
         repository_row(&listed[1]),
         workspace_row('3', "trunk", false),
-        // No branch is checked out there: it is named by the commit it sits on.
         workspace_row('4', "detached at 0123456", false),
     ];
     wait_until(&mut cx, "both repositories in the sidebar", |cx| {
         shown.sidebar.read_with(cx, |sidebar, cx| sidebar.rows(cx)) == every_row
     });
-    // What is drawn is that list: each repository above its own worktrees.
     assert_drawn_as_listed(&shown.sidebar, &mut cx);
 
-    // A click on a worktree puts it on screen: the sidebar marks it, the shared list has
-    // it selected, and its changes are asked for.
     click_workspace(&id('3'), &mut cx);
     assert_eq!(marked(&shown.sidebar, &mut cx), Some(id('3')));
     assert_eq!(
@@ -220,7 +203,6 @@ fn the_sidebar_lists_each_repository_with_its_worktrees_under_it_each_named_by_i
     shown
         .keeper
         .expect(Request::GetChanges { workspace: id('3') }, &mut cx);
-    // Nothing else of the rows moved.
     let names = |rows: &[SidebarRow]| -> Vec<String> {
         rows.iter()
             .map(|row| match row {
@@ -244,11 +226,9 @@ fn the_rail_holds_the_same_rows_and_a_click_on_a_mark_puts_its_workspace_on_scre
     cx.simulate_resize(wide(RAIL_BELOW - px(1.)));
     assert_eq!(form(&shown.sidebar, &mut cx), SidebarForm::Rail);
     assert_eq!(rows(&shown.sidebar, &mut cx), as_full_list);
-    // Drawn narrower, and still each repository above its own worktrees.
     assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
     assert_drawn_as_listed(&shown.sidebar, &mut cx);
 
-    // The mark of a workspace lies inside the rail, and takes the click.
     let mark = drawn(&format!("sidebar-workspace-{}", id('2')), &mut cx)
         .expect("the mark of the workspace is drawn");
     assert!(
@@ -262,7 +242,6 @@ fn the_rail_holds_the_same_rows_and_a_click_on_a_mark_puts_its_workspace_on_scre
 
 #[gpui_kit::test]
 fn the_wheel_brings_a_worktree_far_down_the_list_within_reach_of_a_click(cx: &mut TestAppContext) {
-    // More worktrees than a low window has room for.
     let many: Vec<Workspace> = (0..60)
         .map(|n| Workspace {
             id: WorkspaceId::new(format!("{n:032x}")),
@@ -301,25 +280,22 @@ fn the_wheel_brings_a_worktree_far_down_the_list_within_reach_of_a_click(cx: &mu
 fn narrower_than_the_set_width_with_nothing_pinned_the_sidebar_is_a_rail_and_wider_the_full_list(
     cx: &mut TestAppContext,
 ) {
-    // The width counts from the first frame: a window opened one pixel narrower than the
-    // set width shows the rail without a resize.
+    // The width counts from the first frame: a window opened one pixel narrower than `RAIL_BELOW`
+    // shows the rail without a resize.
     let (shown, mut cx) = showing(&two_repositories(), wide(RAIL_BELOW - px(1.)), cx);
     let sidebar = &shown.sidebar;
     assert_eq!(pinned(sidebar, &mut cx), None);
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Rail);
     assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
 
-    // The set width itself is not narrower than the set width.
     cx.simulate_resize(wide(RAIL_BELOW));
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
 
-    // One pixel narrower is, also when a resize brings the window there.
     cx.simulate_resize(wide(RAIL_BELOW - px(1.)));
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Rail);
     assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
 
-    // The size the app's window opens at.
     cx.simulate_resize(WIDE);
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
@@ -332,7 +308,6 @@ fn narrower_than_the_set_width_with_nothing_pinned_the_sidebar_is_a_rail_and_wid
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
 
-    // The width alone did all of it: nothing was pinned on the way.
     assert_eq!(pinned(sidebar, &mut cx), None);
 }
 
@@ -346,7 +321,6 @@ fn a_window_opened_narrow_shows_the_rail_at_once(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_window_opened_wide_shows_the_full_list_at_once(cx: &mut TestAppContext) {
-    // The size the app's window opens at, with no resize since.
     let (shown, mut cx) = showing(&two_repositories(), WIDE, cx);
     assert_eq!(pinned(&shown.sidebar, &mut cx), None);
     assert_eq!(form(&shown.sidebar, &mut cx), SidebarForm::Full);
@@ -362,14 +336,11 @@ fn pinned_as_a_rail_or_as_the_full_list_the_sidebar_keeps_that_form_at_any_width
     let narrow = wide(RAIL_BELOW - px(1.));
     let narrower = wide(px(500.));
     let wider = wide(px(2000.));
-    // Opened wide with nothing pinned: the full list, by the width.
     assert_eq!(pinned(sidebar, &mut cx), None);
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
 
     for (pins, width) in [
-        // In a wide window the sidebar is the full list, so the key pins the rail; and
-        // the other way round.
         (SidebarForm::Rail, RAIL_WIDTH),
         (SidebarForm::Full, FULL_WIDTH),
     ] {
@@ -378,7 +349,6 @@ fn pinned_as_a_rail_or_as_the_full_list_the_sidebar_keeps_that_form_at_any_width
         assert_eq!(form(sidebar, &mut cx), pins);
         assert_eq!(drawn_width(&mut cx), width);
 
-        // On both sides of the set width, and back.
         for window in [narrow, narrower, wide(RAIL_BELOW), wider, WIDE] {
             cx.simulate_resize(window);
             assert_eq!(
@@ -392,7 +362,6 @@ fn pinned_as_a_rail_or_as_the_full_list_the_sidebar_keeps_that_form_at_any_width
         }
     }
 
-    // Unpinned in a narrow window, the width has its say again: at once, and from then on.
     cx.simulate_resize(narrow);
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Full, "still pinned");
     cx.simulate_keystrokes(key_of::<UnpinSidebar>());
@@ -417,8 +386,6 @@ fn a_click_on_the_pin_control_pins_the_form_the_sidebar_does_not_have(cx: &mut T
     assert_eq!(pinned(sidebar, &mut cx), Some(SidebarForm::Rail));
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Rail);
 
-    // The control is there in the rail too, and pins the full list in a window that is
-    // too narrow for it by its width.
     cx.simulate_resize(wide(px(700.)));
     click_pin(&mut cx);
     assert_eq!(pinned(sidebar, &mut cx), Some(SidebarForm::Full));
@@ -426,9 +393,9 @@ fn a_click_on_the_pin_control_pins_the_form_the_sidebar_does_not_have(cx: &mut T
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
 }
 
-// The two tests below hold the one case where the form on screen is not the pinned one:
-// a rail by the width alone. A toggle that went by what is pinned would pin the rail
-// there, and nothing the user sees would change.
+// The two tests below cover the case where the form on screen is not the pinned one: a rail
+// by the width alone. A toggle that went by what is pinned would pin the rail there, and
+// nothing visible would change.
 
 #[gpui_kit::test]
 fn the_key_pins_the_full_list_in_a_window_whose_width_alone_made_the_sidebar_a_rail(
@@ -446,7 +413,6 @@ fn the_key_pins_the_full_list_in_a_window_whose_width_alone_made_the_sidebar_a_r
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
 
-    // And back: every press changes what is seen.
     cx.simulate_keystrokes(key_of::<ToggleSidebar>());
     assert_eq!(pinned(sidebar, &mut cx), Some(SidebarForm::Rail));
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Rail);
@@ -487,8 +453,6 @@ fn a_sidebar_in_no_frame_is_the_full_list_until_a_form_is_pinned(cx: &mut TestAp
     assert_eq!(state(cx), (None, SidebarForm::Full));
 }
 
-/// A repository with a worktree on a branch and one whose folder is gone: it is listed with
-/// no head.
 fn with_a_worktree_that_is_gone() -> Vec<Repository> {
     vec![repository(
         'a',
@@ -528,7 +492,6 @@ fn a_worktree_that_is_gone_is_named_by_its_folder_marked_as_gone_and_still_selec
                 },
             ]
         );
-        // The mark is drawn for the one that is gone, inside its row, and for no other.
         let row = drawn(&format!("sidebar-workspace-{}", id('2')), &mut cx)
             .expect("the row of the worktree that is gone is drawn");
         let mark = drawn(&format!("sidebar-gone-{}", id('2')), &mut cx)
@@ -546,7 +509,6 @@ fn a_worktree_that_is_gone_is_named_by_its_folder_marked_as_gone_and_still_selec
         );
         assert_drawn_as_listed(&shown.sidebar, &mut cx);
 
-        // It is clicked and selected as any row.
         shown
             .keeper
             .expect(Request::GetChanges { workspace: id('1') }, &mut cx);

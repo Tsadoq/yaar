@@ -1,6 +1,3 @@
-//! What installing pi's Adapter writes into the app's own folder, the one entry it gives
-//! every shell, and what it leaves alone: pi's settings, which only the user's yes writes.
-
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::ErrorKind;
@@ -13,7 +10,6 @@ use yaar_adapter_pi::{
 };
 use yaar_agent::{Adapter, ShellEntry};
 
-/// A folder of the test's own, removed when the test ends.
 struct Scratch {
     root: PathBuf,
 }
@@ -34,15 +30,13 @@ impl Scratch {
         Scratch { root }
     }
 
-    /// The user's home of this test, made empty.
     fn home(&self) -> PathBuf {
         let home = self.root.join("home");
         std::fs::create_dir_all(&home).expect("make the home");
         home
     }
 
-    /// The Adapter's own folder of the app, as the Keeper would hand it, with a space and
-    /// an apostrophe in its name: the path is not made for a shell to read.
+    /// A space and an apostrophe in the name: the path is not made for a shell to read.
     fn folder(&self) -> PathBuf {
         self.root.join("the app's data").join("agents").join("pi")
     }
@@ -54,8 +48,6 @@ impl Drop for Scratch {
     }
 }
 
-/// Every file and folder under `root`, as a path relative to it, with a trailing `/` on a
-/// folder.
 fn tree_under(root: &Path) -> BTreeSet<String> {
     fn walk(folder: &Path, root: &Path, found: &mut BTreeSet<String>) {
         for entry in std::fs::read_dir(folder).expect("read the folder") {
@@ -74,7 +66,6 @@ fn tree_under(root: &Path) -> BTreeSet<String> {
     found
 }
 
-/// Fails, without printing the two texts, unless the file is the extension's source as it is.
 fn assert_is_the_source(file: &Path) {
     let written = std::fs::read(file).expect("the extension is there");
     assert!(
@@ -86,7 +77,6 @@ fn assert_is_the_source(file: &Path) {
     );
 }
 
-/// What installing into `folder` gives, for the Adapter that knows `home`.
 fn install(home: &Path, folder: &Path, companions: &Path) -> Vec<ShellEntry> {
     Pi::in_home(home)
         .install(folder, companions)
@@ -185,7 +175,6 @@ fn installing_writes_the_new_text_over_a_file_of_an_earlier_version() {
 
 #[test]
 fn installing_leaves_the_users_home_as_it_was_with_no_pi_and_with_one() {
-    // Without a folder of pi's, and with one that holds a settings file of the user's.
     for settings in [None, Some("{\"theme\": \"dark\"}\n")] {
         let scratch = Scratch::new();
         let home = scratch.home();
@@ -196,7 +185,6 @@ fn installing_leaves_the_users_home_as_it_was_with_no_pi_and_with_one() {
         }
         let before = tree_under(&home);
 
-        // The Adapter knows this home, so that a write into it would be seen here.
         install(&home, &scratch.folder(), Path::new("/opt/yaar/programs"));
 
         assert_eq!(tree_under(&home), before, "{settings:?}");

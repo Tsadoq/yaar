@@ -1,14 +1,10 @@
-//! The newest output of a terminal, kept for a Window that attaches later.
-
 use std::collections::VecDeque;
 
 use crate::RING_BYTES;
 use crate::marks::Scanner;
 
-/// What one terminal's reading thread keeps under one lock: the newest [`RING_BYTES`] it
-/// read, whether older bytes were dropped to keep within that, and the scan for marks.
-/// One lock holds all three so that what is told, what the ring holds and what `attach`
-/// finds always agree.
+/// One lock holds the kept bytes, the dropped flag and the mark scan, so what is told, kept and
+/// attached always agree.
 pub(crate) struct Ring {
     bytes: VecDeque<u8>,
     dropped: bool,
@@ -24,8 +20,8 @@ impl Ring {
         }
     }
 
-    /// Keeps `read` as the newest bytes, dropping the oldest past [`RING_BYTES`], and
-    /// gives the marks it completes.
+    /// Keeps `read` as the newest bytes, dropping the oldest past [`RING_BYTES`]; returns the marks
+    /// it completes.
     pub(crate) fn push(&mut self, read: &[u8]) -> Vec<usize> {
         self.bytes.extend(read);
         if self.bytes.len() > RING_BYTES {

@@ -1,16 +1,5 @@
-//! The old side of a diff, shown with the stand-in language server: no process for it before
-//! the reviewer's first use of a removed line (OLD-05), the export of an earlier old side gone
-//! when another change is selected (OLD-06), the language servers of the workspace on screen
-//! running and stopped, the old side's included, when it has been off screen for the set time
-//! (NAV-11), and what the export is made of and when it is asked for.
-//!
-//! The test plays the Keeper's end of the export ([`Running::export_when_wanted`]) as the tests
-//! of the panes do: it writes the version with git and hands the answer back. Every wait is for
-//! something the Navigator tells, with a deadline. A clause that says something did not
-//! happen is read after a barrier: a hover of a workspace the Navigator was never told of is
-//! answered at once, and the loop handles one event at a time, in order, so that its answer
-//! comes after everything the asks before it made the Navigator do ([`settled`]). The clock of
-//! NAV-11 is the test's own and moves only when the test moves it.
+//! Absence is asserted after a barrier ([`settled`]): the barrier's answer follows everything
+//! asked before it.
 
 mod support;
 
@@ -26,7 +15,6 @@ use yaar_navigator::{
     ServerState, State, Told, Tree, WorkspaceRoot,
 };
 
-/// Every line of a stand-in's log, as the JSON it is; none when the log is not there.
 fn log_of(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -35,7 +23,6 @@ fn log_of(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// The folders the stand-in was started in, in order of the starts, from its log.
 fn started_in(log: &Path) -> Vec<PathBuf> {
     log_of(log)
         .iter()
@@ -44,8 +31,6 @@ fn started_in(log: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The stand-in's row `standin`, ready at once, logging to `log`, and `extra` after its
-/// server's keys.
 fn row(log: &Path, extra: &str) -> String {
     standin_row(
         "standin",
@@ -55,9 +40,6 @@ fn row(log: &Path, extra: &str) -> String {
     )
 }
 
-/// A repository whose base commit holds `main.sil` (`def alpha`, then a line that uses
-/// `legacy`) and `legacy.sil`, and whose worktree has taken both away: the change on screen
-/// removes the line that used `legacy`. The scratch's `bin` holds the stand-in.
 fn removed_line_repository(scratch: &Scratch) -> Repo {
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
     let repo = scratch.repository(
@@ -72,7 +54,6 @@ fn removed_line_repository(scratch: &Scratch) -> Repo {
     repo
 }
 
-/// The removed line, at the base: the use of `legacy`.
 fn removed(repo: &Repo, workspace: &WorkspaceId) -> Place {
     place(
         repo,
@@ -85,9 +66,6 @@ fn removed(repo: &Repo, workspace: &WorkspaceId) -> Place {
     )
 }
 
-/// Asks a hover at `place` without waiting for its answer, so that the test can play the
-/// Keeper before the answer is read: the Navigator tells the export it wants when it handles
-/// the ask.
 fn ask_hover(running: &Running, id: u64, place: Place) {
     running.ask(Ask::Hover {
         id: AskId(id),
@@ -95,9 +73,6 @@ fn ask_hover(running: &Running, id: u64, place: Place) {
     });
 }
 
-/// The answer to the hover asked as `id`: what was told already, or else waited for. A test
-/// reads the stream in order, and the answer may come before or after a state it waits for,
-/// so both look at what was read first.
 fn answer_of(running: &mut Running, id: u64) -> Answered<Option<String>> {
     let is_it = |told: &Told| matches!(told, Told::Hover { id: got, .. } if *got == AskId(id));
     let told = match running.told.iter().find(|told| is_it(told)) {
@@ -110,9 +85,6 @@ fn answer_of(running: &mut Running, id: u64) -> Answered<Option<String>> {
     }
 }
 
-/// The state of the old side's server of `version` of `workspace`, from the lists told since
-/// the `since`th thing told, once it is ready and its process is not `not`: what was read
-/// already, or else waited for.
 fn old_side_ready(
     running: &mut Running,
     since: usize,
@@ -131,10 +103,6 @@ fn old_side_ready(
     }
 }
 
-/// The first use of a removed line: a hover at `place` on the old side, answered by text
-/// match while the export is written, the export played, and the old side's server of
-/// `workspace` waited for until it is ready. Gives what the Navigator asked the Keeper for,
-/// and the old side's state.
 fn use_the_old_side(
     running: &mut Running,
     repo: &Repo,
@@ -158,9 +126,6 @@ fn use_the_old_side(
     (asked, ready)
 }
 
-/// A hover of a workspace the Navigator was never told of, which it answers at once, marked.
-/// Its answer comes after everything the asks before it made the Navigator do. Gives the
-/// last list of servers told by then.
 fn settled(running: &mut Running) -> Vec<ServerState> {
     let nobody = Place {
         workspace: workspace_id('9'),
@@ -176,7 +141,6 @@ fn settled(running: &mut Running) -> Vec<ServerState> {
     last_servers(running)
 }
 
-/// The newest list of servers the Navigator told.
 fn last_servers(running: &Running) -> Vec<ServerState> {
     running
         .told
@@ -189,7 +153,6 @@ fn last_servers(running: &Running) -> Vec<ServerState> {
         .expect("a list of servers was told")
 }
 
-/// How many exports the Navigator wanted so far.
 fn exports_wanted(running: &Running) -> usize {
     running
         .told
@@ -198,7 +161,6 @@ fn exports_wanted(running: &Running) -> usize {
         .count()
 }
 
-/// Every server state of an old side told so far, in any list.
 fn old_sides_told(running: &Running) -> Vec<ServerState> {
     running
         .told
@@ -213,7 +175,6 @@ fn old_sides_told(running: &Running) -> Vec<ServerState> {
         .collect()
 }
 
-/// What a workspace of a repository is, for the Navigator.
 fn root_of(workspace: &WorkspaceId, repo: &Repo) -> WorkspaceRoot {
     WorkspaceRoot {
         id: workspace.clone(),
@@ -222,19 +183,10 @@ fn root_of(workspace: &WorkspaceId, repo: &Repo) -> WorkspaceRoot {
     }
 }
 
-// ---------------------------------------------------------------------------------------
-// OLD-05: no process for the old side before the first use of a removed line.
-// ---------------------------------------------------------------------------------------
-
-/// The stand-in's row `standin`, ready at once, that logs to a file of its own side's target
-/// folder, `{target}/standin.log`: each side's server has a log, so that a test reads which
-/// of them was asked.
 fn row_with_a_log_for_each_side() -> String {
     standin_row("standin", &["--log", "{target}/standin.log"], "answer", "")
 }
 
-/// The log of the stand-in's server of `side`, `new` or `old`, of `workspace`, in the target
-/// folder the Navigator names for it; the folder is made, as a build tool makes its own.
 fn side_log(scratch: &Scratch, workspace: &WorkspaceId, side: &str) -> PathBuf {
     let target = scratch
         .root
@@ -246,7 +198,6 @@ fn side_log(scratch: &Scratch, workspace: &WorkspaceId, side: &str) -> PathBuf {
     target.join("standin.log")
 }
 
-/// How many requests of `method` a stand-in's log holds.
 fn requests(log: &Path, method: &str) -> usize {
     log_of(log)
         .iter()
@@ -269,8 +220,6 @@ fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_
         state.state == State::Ready
     });
 
-    // The change is on screen, and the reviewer reads a line of the new side: answered by
-    // the new side's server, which is the barrier for the ask before it.
     running.ask(Ask::OldSide {
         workspace: ws.clone(),
         version: Some(repo.base.clone()),
@@ -303,16 +252,12 @@ fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_
     );
     assert_eq!(requests(&new_log, "textDocument/hover"), 1);
 
-    // The first use of a removed line: answered by text match at once, and the export asked
-    // for; once it is written, the old side's server starts in it.
     let (asked, old) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
     assert_eq!(asked.workspace, ws);
     assert_eq!(started_in(&old_log), std::slice::from_ref(&asked.into));
     assert_eq!(started_in(&new_log), std::slice::from_ref(&repo.root));
     assert!(old.pid.is_some_and(is_alive));
 
-    // It serves the base: the line that is gone from the worktree. The request is in the
-    // old side's log, and the new side's holds only the hover of the line it serves.
     let hover = running.hover(removed(&repo, &ws), DEADLINE);
     assert_eq!(
         hover,
@@ -326,11 +271,6 @@ fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_
     running.end();
 }
 
-// ---------------------------------------------------------------------------------------
-// OLD-06: the export of the earlier old side is gone.
-// ---------------------------------------------------------------------------------------
-
-/// A second commit on `repo`: a file `second.sil`. Gives its id.
 fn commit_a_second(repo: &Repo) -> String {
     std::fs::write(repo.root.join("second.sil"), "def second\n").expect("write the file");
     repo.git(&["add", "second.sil"]);
@@ -338,7 +278,6 @@ fn commit_a_second(repo: &Repo) -> String {
     repo.git(&["rev-parse", "HEAD"])
 }
 
-/// The folders of `cache` named after this process, the own caches of its Navigators.
 fn own_caches(cache: &Path) -> Vec<String> {
     let prefix = format!("{}-", std::process::id());
     std::fs::read_dir(cache)
@@ -362,7 +301,6 @@ fn after_another_change_is_selected_the_export_of_the_earlier_old_side_is_gone()
         state.state == State::Ready
     });
 
-    // The old side of the base is used.
     running.ask(Ask::OldSide {
         workspace: ws.clone(),
         version: Some(repo.base.clone()),
@@ -372,9 +310,6 @@ fn after_another_change_is_selected_the_export_of_the_earlier_old_side_is_gone()
     assert!(earlier.into.is_dir(), "the export of the base is not there");
     assert!(earlier.into.ends_with("old/1"), "{:?}", earlier.into);
 
-    // Another change is selected. The Navigator handled the ask, and the one after it, before
-    // the barrier's answer came: the old server was stopped and reaped, and then the export
-    // removed, before the ask was handled that is a step further on.
     running.ask(Ask::OldSide {
         workspace: ws.clone(),
         version: Some(second.clone()),
@@ -400,7 +335,6 @@ fn after_another_change_is_selected_the_export_of_the_earlier_old_side_is_gone()
     );
     assert_eq!(started_in(&log).len(), 2, "a server started for no reason");
 
-    // The next old side is another export, counted on from the first.
     let place_in_second = place(
         &repo,
         &ws,
@@ -449,7 +383,6 @@ fn the_export_and_the_server_of_a_workspace_that_leaves_the_list_are_gone_and_th
     );
     assert!(!is_alive(old_pid));
 
-    // The Navigator's end removes its own cache folder, and only its own.
     let other = cache.join("targets");
     std::fs::create_dir_all(&other).expect("make a folder that is no Navigator's");
     running.end();
@@ -467,7 +400,6 @@ fn the_end_of_the_navigator_removes_the_export_in_use_after_its_server_is_gone()
     running.show(&repo, &ws, &repository);
     let (asked, _) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
     assert!(asked.into.is_dir());
-    // `end` proves every server's process gone; the export is removed by then.
     running.end();
     assert!(
         !asked.into.exists(),
@@ -503,29 +435,20 @@ fn a_workspace_whose_worktree_is_gone_loses_its_export() {
     running.end();
 }
 
-/// What ends the old side's server and drops its export in [`export_outlives_its_server`].
 enum Drops {
-    /// Another change is selected.
     AnotherChange,
-    /// The workspace leaves the list.
     WorkspaceLeaves,
-    /// The workspace's worktree is gone.
     WorktreeGone,
-    /// The Navigator ends.
     NavigatorEnds,
 }
 
-/// `text` in single quotes, for a `/bin/sh` script.
 fn sh_quoted(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
-/// Uses the old side with a server that is a script of the test: it runs the stand-in as its
-/// child, and when the child has ended it writes a line `<its working folder> present` or
-/// `... gone` into a file, by whether that folder is still there, and ends as its child did.
-/// Then `drops` ends the old side. The export may be removed only after the server's process
-/// has ended, which only the server's own end can show: a surface of the Navigator does not
-/// tell the order of two things done before it answers.
+/// The export may be removed only after the server's process ended, an order no surface of
+/// the Navigator shows: the server is a script that records, when its child ends, whether
+/// its working folder is still there.
 fn export_outlives_its_server(drops: Drops) {
     let scratch = Scratch::new();
     let repo = removed_line_repository(&scratch);
@@ -630,11 +553,6 @@ fn the_old_servers_folder_is_there_when_its_process_ends_with_the_navigator() {
     export_outlives_its_server(Drops::NavigatorEnds);
 }
 
-// ---------------------------------------------------------------------------------------
-// NAV-11: the servers of the workspace on screen run; off screen for the set time they stop.
-// ---------------------------------------------------------------------------------------
-
-/// A time that moves only when the test moves it.
 struct TestClock {
     base: Instant,
     offset: Mutex<Duration>,
@@ -659,8 +577,6 @@ impl Clock for TestClock {
     }
 }
 
-/// The state of the stand-in's server of `workspace` in a list, of the old side of `old` or
-/// of the files on disk.
 fn server_in(
     list: &[ServerState],
     workspace: &WorkspaceId,
@@ -674,8 +590,6 @@ fn server_in(
 #[test]
 fn the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_for_the_set_time_the_old_side_included()
  {
-    // "10 minutes with nothing set": the constant, and the configuration the Window hands the
-    // Navigator, which only computes its folders from the environment.
     assert_eq!(STOP_AFTER, Duration::from_secs(600));
     assert_eq!(NavigatorConfig::for_this_user().stop_after, STOP_AFTER);
     let scratch = Scratch::new();
@@ -698,8 +612,6 @@ fn the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_fo
     ]));
     running.ask(Ask::OnScreen(Some(ws1.clone())));
 
-    // The workspace on screen has its server with no ask about a file; the one with no `.sil`
-    // file has none until it is asked.
     let new_side = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
     });
@@ -708,7 +620,6 @@ fn the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_fo
     assert_eq!(server_in(&list, &ws2, None), None);
     assert_eq!(started_in(&log), std::slice::from_ref(&shown.root));
 
-    // The old side's first use.
     running.ask(Ask::OldSide {
         workspace: ws1.clone(),
         version: Some(shown.base.clone()),
@@ -716,9 +627,7 @@ fn the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_fo
     let (asked, old) = use_the_old_side(&mut running, &shown, &ws1, removed(&shown, &ws1));
     let old_pid = old.pid.expect("the old side runs");
 
-    // The other workspace comes on screen: the first goes off it. One second short of the
-    // set time, everything of it still runs. Each ask is the barrier of the clock: the
-    // Navigator reads the clock before it handles an ask, and tells its servers after.
+    // The Navigator reads the clock before handling an ask and tells its servers after.
     running.ask(Ask::OnScreen(Some(ws2.clone())));
     let list = settled(&mut running);
     assert_eq!(
@@ -741,8 +650,6 @@ fn the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_fo
     );
     assert!(is_alive(new_pid) && is_alive(old_pid));
 
-    // The set time: both are stopped and reaped, and the list that comes after says so. The
-    // export stays until another change is shown or the workspace closes.
     clock.advance(Duration::from_secs(1));
     running.ask(Ask::OnScreen(Some(ws2.clone())));
     let list = settled(&mut running);
@@ -757,8 +664,6 @@ fn the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_fo
     assert!(!is_alive(old_pid), "the old side's server still runs");
     assert!(asked.into.is_dir(), "the export did not stay");
 
-    // Back on screen the new side starts again, with no ask; the old side at its next use,
-    // in the export that stayed.
     running.ask(Ask::OnScreen(Some(ws1.clone())));
     let again = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
         state.state == State::Ready && state.pid != Some(new_pid)
@@ -800,10 +705,6 @@ fn the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_fo
     running.end();
 }
 
-// ---------------------------------------------------------------------------------------
-// When the export is asked for.
-// ---------------------------------------------------------------------------------------
-
 #[test]
 fn an_export_that_is_being_written_is_asked_for_once() {
     let scratch = Scratch::new();
@@ -813,20 +714,17 @@ fn an_export_that_is_being_written_is_asked_for_once() {
     let mut running = Running::start(scratch.config(&row(&log, "")));
     running.show(&repo, &ws, &repository);
 
-    // Two asks about the old side while the Keeper has not answered, then its answer. The
-    // asks are handled before the answer, so a second wish for the export would have been
-    // told before the server starts.
+    // Both asks are handled before the Keeper's answer: a second wish for the export would be told
+    // before the server starts.
     ask_hover(&running, 1, removed(&repo, &ws));
     ask_hover(&running, 2, removed(&repo, &ws));
     running.export_when_wanted(&repo, DEADLINE);
 
-    // Each was answered by text match, marked, with no server of the old side yet.
     assert!(answer_of(&mut running, 1).guessed);
     assert!(answer_of(&mut running, 2).guessed);
     old_side_ready(&mut running, 0, &ws, &repo.base, None);
     assert_eq!(exports_wanted(&running), 1);
 
-    // A later ask does not ask again either.
     let hover = running.hover(removed(&repo, &ws), DEADLINE);
     assert!(!hover.guessed, "{hover:#?}");
     assert_eq!(exports_wanted(&running), 1);
@@ -841,7 +739,6 @@ fn an_export_that_failed_leaves_nothing_and_the_next_ask_asks_again() {
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&row(&log, "")));
     running.show(&repo, &ws, &repository);
-    // A version the played Keeper cannot write: it is no full commit id.
     let mut unwritable = removed(&repo, &ws);
     unwritable.tree = Tree::Version("not-a-commit".to_owned());
 
@@ -856,7 +753,6 @@ fn an_export_that_failed_leaves_nothing_and_the_next_ask_asks_again() {
         "a server started on an export that failed"
     );
 
-    // The next ask asks again, into a folder of its own that does not exist yet.
     ask_hover(&running, 2, unwritable);
     let second = running.export_when_wanted(&repo, DEADLINE);
     assert!(answer_of(&mut running, 2).guessed);
@@ -878,8 +774,6 @@ fn an_export_still_being_written_when_the_old_side_is_dropped_is_removed_when_it
         state.state == State::Ready
     });
 
-    // The ask, then the change is dropped, then the Keeper's answer: the Navigator handles
-    // them in that order, so the answer finds the export no longer wanted.
     ask_hover(&running, 1, removed(&repo, &ws));
     running.ask(Ask::OldSide {
         workspace: ws.clone(),
@@ -909,8 +803,6 @@ fn a_second_answer_for_an_export_in_use_leaves_it_and_its_server_answering() {
     let (pid, file) = (old.pid, asked.into.join("legacy.sil"));
     assert!(file.is_file(), "the export was not written");
 
-    // The Keeper answers the same ask again, as a Frame that told it twice would. The
-    // Navigator handles it before the hover, whose answer is the barrier.
     running.ask(Ask::Exported {
         asked: asked.clone(),
         failed: None,
@@ -939,22 +831,17 @@ fn an_answer_for_a_folder_that_is_not_under_the_navigators_own_old_folder_remove
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&row(&log, "")));
     running.show(&repo, &ws, &repository);
-    // An export in use, so that the Navigator's `old` folder is there.
     let (asked, _) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
-    // A folder of the machine's, which no export of this Navigator made.
     let elsewhere = scratch.root.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("make the folder");
     std::fs::write(elsewhere.join("keep.txt"), "mine\n").expect("write the file");
 
-    // Named plainly, and named by a path that starts in the export's folder and climbs out
-    // of it: the export is `<cache>/<own>/old/<n>`, and the folder is four levels above.
+    // The export is `<cache>/<own>/old/<n>`: this path climbs out of it.
     let climbing = asked.into.join("../../../../elsewhere");
     assert!(
         climbing.join("keep.txt").is_file(),
         "the path leaves the export"
     );
-    // Below the export in use: a folder of its own, and a folder of the worktree's reached
-    // through a link inside the export, as the export links its dependency folders.
     let inside = asked.into.join("inside");
     std::fs::create_dir_all(&inside).expect("make the folder");
     std::fs::write(inside.join("keep.txt"), "in the export\n").expect("write the file");
@@ -1011,7 +898,6 @@ fn two_navigators_of_one_process_keep_their_exports_apart() {
     assert_ne!(a.into.parent(), b.into.parent());
     assert!(a.into.ends_with("old/1") && b.into.ends_with("old/1"));
 
-    // One's end removes nothing of the other's.
     first.end();
     assert!(!a.into.exists());
     assert!(b.into.is_dir(), "the other Navigator's export was removed");
@@ -1019,16 +905,10 @@ fn two_navigators_of_one_process_keep_their_exports_apart() {
     assert!(!b.into.exists());
 }
 
-// ---------------------------------------------------------------------------------------
-// What an export is made of.
-// ---------------------------------------------------------------------------------------
-
-/// The row of the stand-in whose old side links the folders named `deps`.
 fn row_linking_deps(log: &Path) -> String {
     row(log, "\n[standin.old_side]\nlink = [\"deps\"]\n")
 }
 
-/// The target of the link at `path`, when it is one.
 fn link_target(path: &Path) -> Option<PathBuf> {
     std::fs::symlink_metadata(path)
         .ok()
@@ -1040,7 +920,6 @@ fn link_target(path: &Path) -> Option<PathBuf> {
 fn an_export_links_the_folders_its_row_names_to_the_worktrees_and_removing_it_leaves_them() {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
-    // The base holds `pkg` and `vend/deps` (a folder of that name that git tracks).
     let repo = scratch.repository(
         "project",
         &[
@@ -1049,8 +928,6 @@ fn an_export_links_the_folders_its_row_names_to_the_worktrees_and_removing_it_le
             ("vend/deps/kept.sil", "def kept\n"),
         ],
     );
-    // The worktree holds folders named `deps` that git does not track: at its root, in `pkg`,
-    // in `new`, which the base has no folder for, and inside the one at its root.
     for (file, text) in [
         ("deps/x.sil", "def x\n"),
         ("pkg/deps/y.sil", "def y\n"),
@@ -1094,7 +971,6 @@ fn an_export_links_the_folders_its_row_names_to_the_worktrees_and_removing_it_le
         "the export holds a git folder"
     );
 
-    // The old side is dropped: the export goes, and the folders the links pointed at stay.
     running.ask(Ask::OldSide {
         workspace: ws.clone(),
         version: None,
@@ -1121,7 +997,6 @@ fn an_export_links_the_folders_its_row_names_to_the_worktrees_and_removing_it_le
 fn a_folder_the_version_lacks_is_neither_linked_into_nor_made_for_a_link_however_deep_it_lies() {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
-    // The base holds `a/b`, two folders deep.
     let repo = scratch.repository(
         "project",
         &[
@@ -1129,8 +1004,6 @@ fn a_folder_the_version_lacks_is_neither_linked_into_nor_made_for_a_link_however
             ("a/b/lib.sil", "def lib\n"),
         ],
     );
-    // The worktree holds a `deps` inside `a/b`, and an untracked tree, as a build leaves one,
-    // with a `deps` far down it.
     for file in [
         "a/b/deps/x.sil",
         "target/debug/build/crate/deps/y.sil",
@@ -1167,7 +1040,6 @@ fn a_folder_the_version_lacks_is_neither_linked_into_nor_made_for_a_link_however
 fn a_link_is_never_made_through_a_folder_of_the_export_that_is_itself_a_link() {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
-    // The base holds `pkg` as a link to a folder of the scratch, outside the repository.
     let outside = scratch.root.join("outside");
     std::fs::create_dir(&outside).expect("make the folder the link points at");
     let repo = scratch.repository("project", &[("main.sil", "def alpha\nuse legacy\n")]);
@@ -1175,7 +1047,6 @@ fn a_link_is_never_made_through_a_folder_of_the_export_that_is_itself_a_link() {
     repo.git(&["add", "pkg"]);
     repo.git(&["commit", "--quiet", "-m", "a link"]);
     let base = repo.git(&["rev-parse", "HEAD"]);
-    // The worktree has `pkg` as a real folder with a `deps` in it.
     std::fs::remove_file(repo.root.join("pkg")).expect("remove the link");
     std::fs::create_dir_all(repo.root.join("pkg/deps")).expect("make the folders");
     std::fs::write(repo.root.join("pkg/deps/y.sil"), "def y\n").expect("write the file");

@@ -1,16 +1,6 @@
-//! The state of each thread on its row, and what only the reviewer does to threads:
-//! resolving one, reopening one, and resolving every addressed one at once. Built by the
-//! review pane's package "attaching and the states of threads" of slice 6.
-//!
-//! Each action sends its request, the user's: `Request::ResolveThread`,
-//! `Request::ReopenThread`, `Request::ResolveAddressed`, for the thread on the line the
-//! reviewer is on, or the review shown. The states come from the Keeper with the reviews,
-//! read again at `Fact::ReviewsChanged`.
-//!
-//! The thread on the reviewer's line is the thread whose row follows the row of that line
-//! (`ReviewPane::threads_on_the_line`), wherever the Keeper carried it to: a thread that
-//! moved is on the line it was carried to. With several, the first that the action applies
-//! to is the one acted on; with none the notice says why, and nothing is sent.
+//! The state of each thread on its row, and resolving and reopening threads. Of several
+//! threads on the reviewer's line, the first the action applies to is acted on; with none,
+//! the notice says why and nothing is sent.
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
@@ -18,7 +8,6 @@ use yaar_link::{Request, ReviewId, Thread, ThreadId, ThreadState};
 
 use crate::{PaneRow, ReopenThread, ResolveAddressed, ResolveThread, ReviewPane, View};
 
-/// How a state is written: in the selector of its mark, and in words for the reviewer.
 fn written(state: ThreadState) -> (&'static str, &'static str) {
     match state {
         ThreadState::Draft => ("draft", "Draft"),
@@ -30,8 +19,6 @@ fn written(state: ThreadState) -> (&'static str, &'static str) {
 }
 
 impl ReviewPane {
-    /// The mark of a thread's state on its row, under the selector
-    /// `review-thread-state-<thread id>:<state>` (see [`ReviewPane::thread_states`]).
     pub(crate) fn thread_state_mark(&self, thread: &ThreadId, cx: &App) -> Option<AnyElement> {
         let held = self
             .review()?
@@ -57,9 +44,8 @@ impl ReviewPane {
         )
     }
 
-    /// The threads whose rows follow the row of the line the reviewer is on, in the order
-    /// of the rows. None while the reviewer is on no line, and for a thread that sits
-    /// under the heading of the threads on no line.
+    /// None while the reviewer is on no line, and for a thread under the heading of the threads on
+    /// no line.
     pub(crate) fn threads_on_the_line(&self) -> Vec<&Thread> {
         let (Some(row), Some(review)) = (self.position_row(), self.review()) else {
             return Vec::new();
@@ -75,16 +61,12 @@ impl ReviewPane {
             .collect()
     }
 
-    /// The review shown and the first thread on the reviewer's line that `applies`, for an
-    /// action on a thread. When there is none, says in the notice why, `otherwise` being
-    /// what to say when threads are on the line and none applies, and gives nothing.
     pub(crate) fn thread_to_act_on(
         &mut self,
         applies: impl Fn(&Thread) -> bool,
         otherwise: &str,
         cx: &mut Context<Self>,
     ) -> Option<(ReviewId, ThreadId)> {
-        // The reviewer's line in Flow is one of the live diff, which draws no threads.
         if self.view == View::Flow {
             self.say("Changes shows the threads", cx);
             return None;
@@ -113,7 +95,6 @@ impl ReviewPane {
         }
     }
 
-    /// [`ResolveThread`]: the thread on the line the reviewer is on that is not resolved.
     pub(crate) fn resolve_thread(
         &mut self,
         _: &ResolveThread,
@@ -134,7 +115,6 @@ impl ReviewPane {
         self.report(asked, cx);
     }
 
-    /// [`ReopenThread`]: the thread on the line the reviewer is on that is resolved.
     pub(crate) fn reopen_thread(
         &mut self,
         _: &ReopenThread,
@@ -155,8 +135,6 @@ impl ReviewPane {
         self.report(asked, cx);
     }
 
-    /// [`ResolveAddressed`]: every addressed thread of the review shown, wherever the
-    /// reviewer is.
     pub(crate) fn resolve_addressed(
         &mut self,
         _: &ResolveAddressed,

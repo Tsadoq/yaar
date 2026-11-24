@@ -1,36 +1,12 @@
 #!/bin/bash
-# The platform conventions checklists, walked in the packaged app and signed: CONV-01 for
-# macOS (17 items) and CONV-02 for Linux (11 items).
+# Walks the platform conventions checklist in the packaged app and signs it.
 #
-#   packaging/checklists/conventions.sh macos [--dry-run]
-#   packaging/checklists/conventions.sh linux [--dry-run]
+# packaging/checklists/conventions.sh macos [--dry-run]
+# packaging/checklists/conventions.sh linux [--dry-run]
 #
-# What it does: prints the items one at a time, with what to do and what to expect, and asks
-# "yes / no / note / skip" on the terminal (the answers can come from a file instead:
-# `conventions.sh macos < answers.txt`, the format is in lib.sh). A "no" is a defect or a
-# decision and asks for one line saying which; neither is left unsaid. Items 11 and 16 of
-# macOS print the steps of the light theme walk that no test can make. At the end, when every
-# item holds, it asks whether you sign; otherwise the sign-off names the items refused.
-#
-# It opens nothing and posts no input. Open the app yourself, walk the items in it, answer
-# here. The programs it runs are `yaar-review --version` (it prints and ends) and `sw_vers`
-# (macOS), and it reads /etc/os-release (Linux), to record the version and the system.
-#
-# What it needs of the owner: the packaged app installed (on macOS at /Applications/YAAR.app,
-# or YAAR_APP; on Linux `yaar-review` from the package, or YAAR_REVIEW names the Window
-# program), and a desktop to walk it on: macOS 26 or 27; for Linux GNOME under Wayland on the
-# newest promised Ubuntu, then the differences under X11.
-#
-# --dry-run: runs no program of the system and none of the app (the version and the system
-# are written as "not asked: dry run") and writes conventions-<list>-dry-run.md instead of
-# the sign-off file, so that a rehearsal never takes the place of a real sign-off.
-#
-# Where it writes: ~/yaar-checklists/<YYYY-MM-DD>/conventions-macos.md or
-# conventions-linux.md: date, version, system, one row per item with its answer and note, and
-# the sign-off. Written whole at the end, or not at all.
-#
-# Exit codes: 0 the walk is written (whatever its answers); 1 it could not be walked or
-# written (the answers ended, the app is missing: a sentence says which); 2 usage error.
+# Opens nothing and posts no input: you walk the items in the app yourself.
+# Needs the app installed (YAAR_APP on macOS, YAAR_REVIEW on Linux). --dry-run runs no program.
+# Exit: 0 written, 1 could not be walked or written, 2 usage.
 set -euo pipefail
 
 CK_NAME=conventions.sh

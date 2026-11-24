@@ -1,15 +1,10 @@
-//! What the tests of this crate share: a folder of their own and git, run so that it reads
-//! nothing of the user's configuration.
-
-// Each test program uses the helpers it needs, and none uses all of them.
+// Each test program uses only some helpers.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// The variables with which a process tells git which repository to use, whatever folder
-/// it runs in, and those with which a shell hands git settings no file holds.
 const GIT_VARIABLES_REMOVED: [&str; 9] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -22,18 +17,14 @@ const GIT_VARIABLES_REMOVED: [&str; 9] = [
     "GIT_CONFIG",
 ];
 
-/// A folder of the test's own, removed when the test ends.
-///
-/// The text search reads git's global excludes file of the user running the tests, as git
-/// does, and a test cannot change the home of its own process safely, so this folder does
-/// not touch the environment of the process: git alone is run with a home of its own, and
-/// the names the tests search for are none a global excludes file leaves out by habit.
+/// A folder of the test's own, removed when the test ends. Only git runs with a home in it:
+/// the search reads the user's real global excludes file, so the names the tests search for
+/// are none such a file commonly leaves out.
 pub struct Scratch {
     root: PathBuf,
 }
 
 impl Scratch {
-    /// Makes the folder.
     pub fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -45,21 +36,18 @@ impl Scratch {
         Scratch { root }
     }
 
-    /// The folder holding the repository a test makes: `<scratch>/repo`.
     pub fn repository(&self) -> PathBuf {
         let repository = self.root.join("repo");
         std::fs::create_dir_all(&repository).expect("make the repository folder");
         repository
     }
 
-    /// The folder itself, with every link in its path resolved.
     pub fn path(&self) -> &Path {
         &self.root
     }
 
-    /// Runs git in `folder`, with no configuration of the user's or the system's, a fixed
-    /// author and date, and a home inside the scratch folder. Fails the test when git
-    /// fails.
+    /// Runs git in `folder` with no user or system configuration, a fixed author and date, and
+    /// a home inside the scratch folder; fails the test when git fails.
     pub fn git(&self, folder: &Path, args: &[&str]) -> String {
         let mut command = Command::new("git");
         command
@@ -92,8 +80,6 @@ impl Scratch {
             .to_owned()
     }
 
-    /// Makes a repository in `folder` on the branch `main`, with an identity of its own in
-    /// its configuration.
     pub fn init(&self, folder: &Path) {
         self.git(folder, &["init", "--quiet", "--initial-branch=main"]);
         self.git(folder, &["config", "user.name", "A Test"]);
@@ -103,8 +89,8 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        // A folder of thousands of files, removed on a machine held at background priority,
-        // can come back "not empty" from the first pass on macOS; the second finds the rest.
+        // Removing thousands of files on a machine at background priority can return "not empty"
+        // from the first pass on macOS; the second finds the rest.
         let mut last = Ok(());
         for _ in 0..3 {
             last = std::fs::remove_dir_all(&self.root);
@@ -121,7 +107,6 @@ impl Drop for Scratch {
     }
 }
 
-/// Writes `content` to `path` below `folder`, making the folders above it.
 pub fn write(folder: &Path, path: &str, content: &[u8]) {
     let file = folder.join(path);
     if let Some(parent) = file.parent() {

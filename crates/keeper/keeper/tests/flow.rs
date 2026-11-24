@@ -1,12 +1,5 @@
-//! Component tests: what the Keeper keeps for Flow, through what a Window and the hook
-//! program of Claude Code use, with real repositories, a real database and real shells
-//! beneath: the state a turn's change counts from, and the settings.
-//!
-//! The hook program is the built one, run with recorded inputs moved into the test's own
-//! worktree, as Claude Code would run it; the Keeper is the library on a thread of the
-//! test. The Keeper runs git and the shells of its terminals with the environment of its
-//! process, so each test sets that environment as its first statement, and these tests are
-//! run by `cargo nextest`, which gives each test a process of its own.
+//! Each test sets the process environment first, so each needs a process of its own (cargo
+//! nextest).
 
 use std::io::{Read as _, Write as _};
 use std::os::unix::net::UnixStream;
@@ -27,9 +20,6 @@ use yaar_store::Store;
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
-/// How long a test waits for the Keeper before it fails: longer than the plan's ten
-/// seconds, as every test file of this crate has it, since a Keeper starts git and shells
-/// of its own and a throttled machine runs them slowly.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -39,9 +29,7 @@ const SIZE: TerminalSize = TerminalSize {
 
 const TOOLS: &str = "claude/turn-tools.jsonl";
 
-/// The lines of the recording that begin a session and a turn, that read a file, that edit
-/// one, that write a new one, and that end a turn; and the prompt of the turn Claude Code
-/// starts itself, sixteen milliseconds after that stop in the recording.
+/// Lines of the recording. PROMPT_AGAIN is the turn Claude Code starts itself, 16 ms after STOP.
 const SESSION_AND_PROMPT: [usize; 2] = [1, 2];
 const READ: [usize; 2] = [3, 4];
 const EDIT_AND_WRITE: [usize; 4] = [9, 10, 12, 13];
@@ -49,14 +37,10 @@ const STOP: usize = 32;
 const PROMPT_AGAIN: usize = 33;
 const STOP_AGAIN: usize = 34;
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the
-    /// shell of a terminal: no configuration of the user or of the system, a fixed
-    /// author, the shell `/bin/sh`, an empty home. It has to be the first statement of a
-    /// test.
+    /// Sets the process environment; must be a test's first statement.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -79,17 +63,13 @@ impl Scratch {
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's lists of files go, and a program of a
-            // terminal's too: a folder that goes with the test.
             std::env::set_var("TMPDIR", root.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -115,11 +95,8 @@ impl Scratch {
         self.0.join("data")
     }
 
-    /// The folder of the test's own copy of the built hook program, made at the first
-    /// call. Every test process asks `program` to build, and cargo puts a program it built
-    /// in place again each time: where tests run side by side, the program is gone for a
-    /// moment, and one started from there fails. A copy is made at the first try that finds
-    /// the program, and is the test's own.
+    /// The test's own copy of the built hook program: cargo replaces it on each build, so under
+    /// parallel tests it is briefly missing.
     fn companions(&self) -> PathBuf {
         let folder = self.0.join("companions");
         let copy = folder.join(yaar_adapter_claude::HOOK_PROGRAM);
@@ -140,8 +117,6 @@ impl Scratch {
         }
     }
 
-    /// Starts the Keeper's library on a thread of this test, with the folder of the hook
-    /// program as where the pieces of the agents lie, on the data folder of the test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -155,9 +130,8 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen, and waiting until it
-    /// serves this Window: a fact told before that is told to a Window that is not there
-    /// yet, and the first reply is the proof that it is.
+    /// Waits for a first reply, the proof that the Keeper serves this Window: a fact told before
+    /// then goes to no Window.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -169,9 +143,6 @@ impl Scratch {
                     .set_read_timeout(Some(DEADLINE))
                     .expect("set the deadline of a read");
                 let mut window = Window::new(stream);
-                // The Keeper tells a fact to the Windows it serves: its first reply comes
-                // after the Window is one of them. `ListClis` tells no fact and keeps no
-                // state.
                 window
                     .ask(Request::ListClis)
                     .expect("the Keeper serves the Window");
@@ -186,8 +157,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main` holding `notes.txt` and
-    /// `src/calc.py`, and an identity of its own, since git guesses none on every system.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(folder.join("src")).expect("make the folder");
@@ -202,8 +171,6 @@ impl Scratch {
         folder
     }
 
-    /// The states the Keeper recorded for `workspace`, oldest first, by their full ids,
-    /// read from the state store as git does.
     fn states_of(&self, workspace: &WorkspaceId) -> Vec<String> {
         let store = self.data().join("states").join(format!("{workspace}.git"));
         if !store.exists() {
@@ -232,8 +199,6 @@ impl Scratch {
         numbered.into_iter().map(|(_, id)| id).collect()
     }
 
-    /// Runs the hook program with `payload` on its standard input, as Claude Code does,
-    /// in the terminal `terminal` of the app. It must succeed and print nothing.
     fn hook(&self, terminal: &TerminalId, payload: &[u8]) {
         let mut child = Command::new(self.companions().join(yaar_adapter_claude::HOOK_PROGRAM))
             .env(SOCKET_VARIABLE, self.socket())
@@ -276,8 +241,6 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// One end of the Link, as a Window holds it. Everything it is sent is kept, so that a
-/// test reads it in order, and what it has looked at is not looked at again.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -304,13 +267,10 @@ impl Window {
         id
     }
 
-    /// Reads one frame and keeps it, a reply with the number of facts that came before it.
-    /// Fails the test at the deadline, with the facts that came.
     fn read(&mut self, waiting_for: &str) {
         match read_message(&mut self.stream) {
             Ok(Message::Fact(fact)) => self.facts.push(fact),
             Ok(Message::Reply { to, reply }) => self.replies.push((to, reply, self.facts.len())),
-            // The shell of a terminal prints; nobody here reads it.
             Ok(Message::Output { .. }) => {}
             Ok(other) => panic!("waiting for {waiting_for}, a frame nobody sends: {other:?}"),
             Err(e) => panic!(
@@ -320,8 +280,6 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply, which comes with how many facts this
-    /// Window had been told when it came.
     fn ask_noting_facts(&mut self, request: Request) -> (Result<Reply, Refusal>, usize) {
         let id = self.send(request);
         loop {
@@ -333,12 +291,10 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         self.ask_noting_facts(request).0
     }
 
-    /// The first fact from here on that `wanted` takes, passing over the ones before it.
     fn until<T>(&mut self, what: &str, mut wanted: impl FnMut(&Fact) -> Option<T>) -> T {
         loop {
             while self.looked_at < self.facts.len() {
@@ -351,7 +307,6 @@ impl Window {
         }
     }
 
-    /// The next `AgentsChanged` of `workspace` that `wanted` takes.
     fn agents_until(
         &mut self,
         workspace: &WorkspaceId,
@@ -366,8 +321,6 @@ impl Window {
         })
     }
 
-    /// The turn of the next `AgentsChanged` of `workspace` that shows a running turn
-    /// `wanted` takes.
     fn turn_until(
         &mut self,
         workspace: &WorkspaceId,
@@ -387,7 +340,6 @@ impl Window {
             .expect("the turn that was waited for")
     }
 
-    /// The next `TurnEnded` of `turn`, with the state recorded.
     fn ended(&mut self, turn: &TurnId) -> Option<String> {
         self.until("the end of a turn", |fact| match fact {
             Fact::TurnEnded {
@@ -397,7 +349,6 @@ impl Window {
         })
     }
 
-    /// The turn as the Keeper keeps it.
     fn turn(&mut self, turn: &TurnId) -> Turn {
         match self.ask(Request::GetTurn { turn: turn.clone() }) {
             Ok(Reply::Turn(turn)) => turn,
@@ -415,7 +366,6 @@ impl Window {
         workspace
     }
 
-    /// Opens a terminal with a shell in it: what a CLI typed in that shell reports from.
     fn open_terminal(&mut self, workspace: &WorkspaceId) -> TerminalId {
         let opened = self.ask(Request::OpenTerminal {
             workspace: workspace.clone(),
@@ -435,7 +385,6 @@ impl Window {
         }
     }
 
-    /// The next `SettingChanged` from here on.
     fn setting_changed(&mut self) -> Setting {
         self.until("a setting changed", |fact| match fact {
             Fact::SettingChanged(setting) => Some(setting.clone()),
@@ -449,10 +398,8 @@ impl Window {
     }
 }
 
-/// A Keeper with two repositories open, a Window attached and a shell of the app open in
-/// the second: what a CLI typed in that shell reports from. The first is there so that a
-/// fact that names the first workspace for every session is told apart from one that names
-/// the session's own.
+/// A Keeper with two repositories open and a shell of the app in the second. The first lets a
+/// test tell a fact naming the first workspace for every session from one naming the session's own.
 struct Setup {
     scratch: Scratch,
     keeper: JoinHandle<std::io::Result<Exit>>,
@@ -465,7 +412,6 @@ struct Setup {
 }
 
 impl Setup {
-    /// Has to be the first statement of a test.
     fn new() -> Setup {
         let scratch = Scratch::new();
         let first = scratch.repository("first");
@@ -473,7 +419,6 @@ impl Setup {
         Setup::on(scratch, &first, repo)
     }
 
-    /// The same on repositories the test made.
     fn on(scratch: Scratch, first: &Path, repo: PathBuf) -> Setup {
         let keeper = scratch.keeper();
         let mut window = scratch.window();
@@ -492,10 +437,8 @@ impl Setup {
         }
     }
 
-    /// Shows the workspace and waits until its first state is recorded: a turn that starts
-    /// before it has no state to count from. The state is taken by a thread of the Keeper
-    /// after the watcher runs, and nothing of the Link tells of it, so it is looked for in
-    /// the state store until the deadline.
+    /// A turn that starts before the first state has none to count from. Nothing on the Link tells
+    /// when it is taken, so it is looked for in the state store until the deadline.
     fn show_and_wait_for_the_first_state(&mut self) -> String {
         let shown = self.window.ask(Request::ShowWorkspace {
             workspace: Some(self.workspace.clone()),
@@ -511,8 +454,6 @@ impl Setup {
         }
     }
 
-    /// Runs the hooks of the lines `lines` of the recording, moved into the repository, in
-    /// the shell's terminal, in order.
     fn hooks(&self, lines: &[usize]) {
         for line in lines {
             let record: HookRecord = self.records[*line].in_project(&self.repo);
@@ -520,23 +461,18 @@ impl Setup {
         }
     }
 
-    /// Runs the hook of the line `line` of the recording as the CLI number `cli` of the
-    /// terminal `terminal` would: its own session, other than the recording's.
     fn hook_of_cli(&self, terminal: &TerminalId, cli: u32, line: usize) {
         let mut record: HookRecord = self.records[line].in_project(&self.repo);
         record.input["session_id"] = format!("{cli:08}-0000-4000-8000-{cli:012}").into();
         self.scratch.hook(terminal, &record.input_bytes());
     }
 
-    /// Stops the Keeper.
     fn finish(self) -> Scratch {
         self.window.stop(self.keeper);
         self.scratch
     }
 }
 
-/// What the live diff of `turn` lists: the changes from the turn's start to the files on
-/// disk, as a Window asks for them.
 fn live_diff(window: &mut Window, workspace: &WorkspaceId, turn: &Turn) -> Vec<ChangedFile> {
     let from = turn.start.clone().expect("the turn has a start");
     match window.ask(Request::CompareVersions {
@@ -549,7 +485,6 @@ fn live_diff(window: &mut Window, workspace: &WorkspaceId, turn: &Turn) -> Vec<C
     }
 }
 
-/// The turn id of the first step heard, and the number of the step.
 fn first_step(window: &mut Window) -> (TurnId, u32) {
     window.until("a step", |fact| match fact {
         Fact::Step { turn, number, .. } => Some((turn.clone(), *number)),
@@ -557,13 +492,11 @@ fn first_step(window: &mut Window) -> (TurnId, u32) {
     })
 }
 
-/// Tells that a recording is held at the gate.
 struct Held(Receiver<()>);
 
 impl Held {
-    /// Waits until a recording is held at the gate: git has named the paths it stages, and a
-    /// file made now is in no state that recording takes. It waits on the channel the filter
-    /// writes into, until the deadline.
+    /// Waits until a recording is held: git has named the paths it stages, so a file made now is in
+    /// no state that recording takes.
     fn wait(&self) {
         self.0
             .recv_timeout(DEADLINE)
@@ -571,13 +504,9 @@ impl Held {
     }
 }
 
-/// Makes the recording of a state slow until the test says: a file named `slow.txt` goes
-/// through a clean filter that writes once into a pipe in the scratch folder, which the
-/// returned [`Held`] hears, and then waits for the file `gate` there, and for as long as
-/// the folder is there, so that a filter of a test that failed does not outlive it.
-/// A state is recorded through the repository's own filters, as `git add` makes it, so the
-/// recording of a turn's end that changed `slow.txt` is held until the test opens the gate:
-/// what must not wait for it is shown to run during it, whatever the machine.
+/// Makes recording a state slow until the test opens the gate: `slow.txt` goes through a clean
+/// filter that writes once into a pipe (heard by `Held`), then waits for the file `gate`, or until
+/// the folder is gone, so a failed test's filter does not outlive it.
 fn hold_recordings_at_a_gate(scratch: &Scratch, repo: &Path) -> Held {
     let root = scratch.0.display();
     let pipe = scratch.0.join("held.pipe");
@@ -586,10 +515,8 @@ fn hold_recordings_at_a_gate(scratch: &Scratch, repo: &Path) -> Held {
         .status()
         .expect("start mkfifo");
     assert!(made.success(), "mkfifo failed");
-    // The filter runs for every file git stages and for each look of git at the folder, and
-    // several runs can overlap: the one that makes the folder `held` is the only one that
-    // writes into the pipe, since nobody reads it after that and a second writer would wait
-    // for a reader for ever.
+    // The filter runs for every staged file and the runs overlap: only the one that makes the
+    // folder `held` writes into the pipe, since a second writer would wait for a reader for ever.
     let filter = format!(
         "mkdir {root}/held 2>/dev/null && echo > {pipe}; \
          while [ -d {root} ] && [ ! -e {root}/gate ]; do sleep 0.05; done; cat",
@@ -600,8 +527,8 @@ fn hold_recordings_at_a_gate(scratch: &Scratch, repo: &Path) -> Held {
     git(repo, &["add", ".gitattributes"]);
     git(repo, &["commit", "--quiet", "-m", "attributes"]);
 
-    // Opening a pipe waits for the other end: a thread of its own does it, and a filter
-    // that writes finds it reading, whenever it runs.
+    // Opening a pipe waits for the other end: a thread does it, so a filter that writes finds a
+    // reader.
     let (told, heard) = mpsc::channel();
     std::thread::spawn(move || {
         let Ok(mut reading) = std::fs::File::open(&pipe) else {
@@ -619,13 +546,9 @@ fn open_the_gate(scratch: &Scratch) {
     std::fs::write(scratch.0.join("gate"), "").expect("open the gate");
 }
 
-// A turn's start
-
 #[test]
 fn a_turn_counts_from_the_newest_state_when_it_starts_and_its_live_diff_holds_what_it_wrote() {
     let mut setup = Setup::new();
-    // A change made by hand before the first state is in that state: the turn did not
-    // make it, and its live diff must not hold it.
     std::fs::write(setup.repo.join("notes.txt"), "notes, by hand\n").expect("write a file");
     let first = setup.show_and_wait_for_the_first_state();
 
@@ -634,12 +557,10 @@ fn a_turn_counts_from_the_newest_state_when_it_starts_and_its_live_diff_holds_wh
     let (turn, number) = first_step(&mut setup.window);
     assert_eq!(number, 1);
 
-    // The turn's first step is heard: its start is kept, and is that state.
     let running = setup.window.turn(&turn);
     assert_eq!(running.start.as_deref(), Some(first.as_str()));
     assert_eq!(running.ended, None);
 
-    // The agent edits a file and writes a new one; it reads one it does not change.
     std::fs::write(
         setup.repo.join("src/calc.py"),
         "def f(x):\n    return x + 1\n",
@@ -656,8 +577,6 @@ fn a_turn_counts_from_the_newest_state_when_it_starts_and_its_live_diff_holds_wh
         _ => None,
     });
 
-    // Counted from that start, the files on disk differ in the files the turn wrote and in
-    // no other: not in the file changed by hand before it, not in the one it only read.
     let files = live_diff(&mut setup.window, &setup.workspace, &running);
     let listed: Vec<(&Path, &FileStatus)> = files
         .iter()
@@ -731,7 +650,6 @@ fn a_turn_that_starts_after_the_turn_before_was_recorded_counts_from_that_turns_
         .expect("a state is recorded at the turn's end");
     assert_ne!(state, first);
 
-    // The newest of two states, not the first.
     setup.hooks(&[PROMPT_AGAIN]);
     let two = setup
         .window
@@ -753,9 +671,8 @@ fn a_turn_that_starts_in_the_very_step_that_ends_the_turn_before_counts_from_tha
         .turn_until(&setup.workspace, "the first turn works", |_| true);
     std::fs::write(setup.repo.join("new.txt"), "hello").expect("write a file");
 
-    // A prompt typed while the turn is open: the Switchboard ends the turn, interrupted,
-    // and starts the next in one go, with no stop between. The recording of the first turn's
-    // state is in flight from that very moment, so the second turn has to wait for it.
+    // A prompt typed while the turn is open: the Switchboard ends the turn and starts the next in
+    // one go, while the first turn's state is still being recorded.
     setup.hooks(&[PROMPT_AGAIN]);
     let two = setup
         .window
@@ -785,16 +702,12 @@ fn a_turn_that_starts_while_the_turn_before_is_recorded_waits_for_its_state_and_
     let one = setup
         .window
         .turn_until(&setup.workspace, "the first turn works", |_| true);
-    // The file the gate holds up, made at the turn's end, and the stop and the next prompt
-    // with nothing between them, as the recording has them.
     std::fs::write(setup.repo.join("slow.txt"), "slow\n").expect("write a file");
     setup.hooks(&[STOP, PROMPT_AGAIN]);
     let two = setup
         .window
         .turn_until(&setup.workspace, "the next turn works", |turn| *turn != one);
 
-    // The recording of the first turn's state is held at the gate, so the second turn
-    // started during it: it has no start yet, and its predecessor's end is not told.
     assert!(
         setup
             .window
@@ -805,11 +718,6 @@ fn a_turn_that_starts_while_the_turn_before_is_recorded_waits_for_its_state_and_
     );
     assert_eq!(setup.window.turn(&two).start, None);
 
-    // The recording ends, and the turn that waited has its start, which is that state. That
-    // the Keeper keeps it before it tells the end is shown only by chance here, and by the
-    // test of many waiting turns below with a likelihood that grows with their number: a
-    // read of a turn is answered without waiting for the Keeper's turn, so no read of the
-    // Link tells the two orders apart for certain.
     open_the_gate(&setup.scratch);
     let state = setup
         .window
@@ -824,7 +732,6 @@ fn a_turn_that_starts_while_the_turn_before_is_recorded_waits_for_its_state_and_
 
 #[test]
 fn every_turn_that_waited_for_a_recording_has_its_start_when_the_end_of_the_turn_before_is_heard() {
-    /// CLIs, each in a terminal of its own, whose turns start while one recording is held.
     const WAITING: u32 = 6;
     let scratch = Scratch::new();
     let first = scratch.repository("first");
@@ -846,8 +753,6 @@ fn every_turn_that_waited_for_a_recording_has_its_start_when_the_end_of_the_turn
     std::fs::write(setup.repo.join("slow.txt"), "slow\n").expect("write a file");
     setup.hooks(&[STOP]);
 
-    // The recording of the first turn's state is held: every other CLI starts a turn
-    // during it, and each of those turns waits for that state.
     let mut waiting: Vec<TurnId> = Vec::new();
     for (cli, terminal) in (2..).zip(&terminals) {
         setup.hook_of_cli(terminal, cli, 2);
@@ -866,11 +771,8 @@ fn every_turn_that_waited_for_a_recording_has_its_start_when_the_end_of_the_turn
         .ended(&one)
         .expect("a state is recorded at the turn's end");
 
-    // A read of a turn is answered without waiting for the Keeper's turn, so no read tells
-    // for certain whether the starts were kept before the end was told. Each start kept
-    // after it is a write the Keeper still has to make when this read arrives, and the
-    // turn kept last is read first: the more turns waited, the less likely a Keeper that
-    // tells first is to pass. This never fails for a Keeper that keeps first.
+    // A read is answered without waiting for writes the Keeper still has to make; reading the turn
+    // kept last first makes a Keeper that tells the end before keeping the starts likelier to fail.
     for turn in waiting.iter().rev() {
         assert_eq!(
             setup.window.turn(turn).start.as_deref(),
@@ -890,8 +792,6 @@ fn a_turn_that_ends_while_it_waits_leaves_the_turn_after_it_the_state_of_its_own
     let mut setup = Setup::on(scratch, &first, repo);
     setup.show_and_wait_for_the_first_state();
 
-    // Three turns back to back while the first one's state is held: the second starts and
-    // ends, and the third starts, each with the recording of the turn before still to come.
     setup.hooks(&SESSION_AND_PROMPT);
     let one = setup
         .window
@@ -920,7 +820,6 @@ fn a_turn_that_ends_while_it_waits_leaves_the_turn_after_it_the_state_of_its_own
     let after_one = setup.window.ended(&one).expect("the first state");
     let after_two = setup.window.ended(&two).expect("the second state");
     assert_ne!(after_one, after_two);
-    // Each counts from the state of the turn before it, the second not from its own.
     assert_eq!(
         setup.window.turn(&two).start.as_deref(),
         Some(after_one.as_str())
@@ -932,9 +831,6 @@ fn a_turn_that_ends_while_it_waits_leaves_the_turn_after_it_the_state_of_its_own
     let _ = setup.finish();
 }
 
-// The settings
-
-/// A Keeper with two repositories open and two Windows attached.
 struct Settings {
     scratch: Scratch,
     keeper: JoinHandle<std::io::Result<Exit>>,
@@ -945,7 +841,6 @@ struct Settings {
 }
 
 impl Settings {
-    /// Has to be the first statement of a test.
     fn new() -> Settings {
         let scratch = Scratch::new();
         let (a, b) = (scratch.repository("a"), scratch.repository("b"));
@@ -983,14 +878,11 @@ fn a_new_keeper_lists_no_setting() {
 fn a_setting_is_kept_told_to_every_window_after_the_reply_and_listed_in_the_order_of_the_workspaces()
  {
     let mut settings = Settings::new();
-    // The second workspace's first, so that the order of the list is not the order of the
-    // calls.
     let later = Settings::flow(&settings.other, FlowForm::LiveDiff);
     let (reply, facts_before) = settings.window.ask_noting_facts(Request::SetSetting {
         setting: later.clone(),
     });
     assert!(matches!(reply, Ok(Reply::Done)), "{reply:?}");
-    // Both Windows are told, the one that set it after its reply.
     assert_eq!(settings.window.setting_changed(), later);
     assert_eq!(settings.second.setting_changed(), later);
     let told_at = settings
@@ -1012,7 +904,6 @@ fn a_setting_is_kept_told_to_every_window_after_the_reply_and_listed_in_the_orde
     assert_eq!(settings.window.setting_changed(), earlier);
     assert_eq!(settings.window.settings(), [earlier.clone(), later.clone()]);
 
-    // A form set again takes the place of the one before: one setting, the new value.
     let back = Settings::flow(&settings.first, FlowForm::Timeline);
     let done = settings.window.ask(Request::SetSetting {
         setting: back.clone(),
@@ -1036,8 +927,6 @@ fn a_setting_of_a_workspace_the_keeper_does_not_hold_is_refused_and_tells_nobody
         "{refused:?}"
     );
 
-    // The barrier: a setting that is kept is told after the refused one would have been, to
-    // the same Windows, so that nothing told about the first can still be on its way.
     let kept = Settings::flow(&settings.other, FlowForm::LiveDiff);
     let done = settings.window.ask(Request::SetSetting {
         setting: kept.clone(),
@@ -1083,8 +972,6 @@ fn settings_the_store_holds_that_no_window_set_are_read_in_the_links_words_the_a
     assert!(matches!(done, Ok(Reply::Done)), "{done:?}");
     settings.window.stop(settings.keeper);
 
-    // Written to the Store directly, as a Keeper of an earlier slice left them: the Link has a
-    // word for each, and the settings of the whole app come before those of a workspace.
     let store = Store::open(&settings.scratch.data().join(yaar_store::FILE_NAME)).expect("open");
     store
         .set_setting(&yaar_store::Setting::Theme(yaar_store::Theme::Dark))

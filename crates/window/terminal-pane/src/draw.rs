@@ -1,30 +1,12 @@
-//! The painter of one terminal: the screen of the emulator drawn as a grid of cells.
-//!
-//! It draws what [`crate::Emulator::screen`] holds and nothing else: the cell backgrounds,
-//! the text, the selection the view keeps, and the cursor. The grid is laid from the top
-//! left corner of the element it is given, with no margin: the cell at column `c` and
-//! line `l` starts `c` cell widths right of the left edge and `l` cell heights below the
-//! top edge.
-
 use alacritty_terminal::vte::ansi::NamedColor;
 use gpui_kit::*;
 use yaar_frame::theme::{TerminalColors, indexed, rgb24};
 
 use crate::emulator::{CellPlace, Color, Screen, Style};
 
-/// A colour of the toolkit's, as this module and the emulator name it: the colour test of
-/// the app reads a type name followed by a brace as a colour written in code.
+/// Named so: the app's colour test reads a type name followed by a brace as a colour in code.
 pub(crate) type Colour = Hsla;
 
-/// The colour a program's `colour` is drawn in, under the theme whose terminal colours are
-/// `terminal`.
-///
-/// The names: the text and the background and the cursor are the theme's, and so is each of
-/// the sixteen the names red to white and their bright forms stand for. The dim forms of
-/// the eight are those eight, since the faint style dims whatever the colour is; the bright
-/// and dim forms of the text are the text. The numbers 0 to 15 are the theme's too; 16 to
-/// 255 are xterm's cube and greys, and a colour a program gives by its value is that value,
-/// whatever the theme ([`yaar_frame::theme::indexed`] and [`yaar_frame::theme::rgb24`]).
 pub fn colour_of(colour: Color, terminal: &TerminalColors) -> Colour {
     match colour {
         Color::Named(name) => match name {
@@ -33,8 +15,6 @@ pub fn colour_of(colour: Color, terminal: &TerminalColors) -> Colour {
             NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::DimForeground => {
                 terminal.foreground
             }
-            // The sixteen are numbered 0 to 15, and the dim eight come after the text's
-            // own names, in the same order as the first eight.
             name => {
                 let number = name as usize;
                 let first_dim = NamedColor::DimBlack as usize;
@@ -51,32 +31,22 @@ pub fn colour_of(colour: Color, terminal: &TerminalColors) -> Colour {
     }
 }
 
-/// What the painter needs besides the screen.
 pub(crate) struct Grid<'a> {
-    /// Where the top left corner of the first cell is.
     pub origin: Point<Pixels>,
-    /// The size of one cell.
     pub cell: Size<Pixels>,
-    /// The font of the terminal, before bold and italic.
     pub font: Font,
-    /// Its size.
     pub font_size: Pixels,
-    /// The colours of the theme's terminal.
     pub colours: &'a TerminalColors,
-    /// Whether the terminal has the focus: the cursor is a block then, an outline else.
     pub focused: bool,
-    /// The cells the user selected, both included, in the order read.
     pub selection: Option<(CellPlace, CellPlace)>,
 }
 
-/// A stretch of text drawn in one go, starting at a column.
 struct Segment {
     column: usize,
     text: String,
     runs: Vec<TextRun>,
 }
 
-/// Draws the screen.
 pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut App) {
     let colours = grid.colours;
     let at = |line: usize, column: usize| {
@@ -142,9 +112,8 @@ pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut 
                 continue;
             }
             let shown = if cell.style.hidden { " " } else { &cell.text };
-            // Only plain one-byte characters share a stretch of text: anything else
-            // is placed by its column, so that a wide or a combined character can
-            // never push the cells after it off the grid.
+            // Only plain one-byte characters share a stretch of text: a wide or combined character
+            // is placed by its column, so it cannot push later cells off the grid.
             let plain = shown.len() == 1;
             let contiguous = open
                 .as_ref()
@@ -228,8 +197,8 @@ pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut 
         let bounds = Bounds::new(at(cursor.line, cursor.column), grid.cell);
         if grid.focused {
             window.paint_quad(fill(bounds, colours.cursor));
-            // The character under the block is drawn again in the colour of the
-            // background, or it would vanish into the block.
+            // The character under the block cursor is drawn again in the background colour, or it
+            // would vanish into the block.
             if let Some((text, color)) = under_cursor
                 && !text.trim().is_empty()
             {

@@ -1,10 +1,4 @@
-//! Component tests: the user's answer on the language servers inside a repository, as a
-//! Window sets and reads it, with a real repository, a real database and the Keeper as the
-//! library on a thread of the test.
-//!
-//! The Keeper runs git with the environment of its process, so each test sets that
-//! environment as its first statement, and these tests are run by `cargo nextest`, which
-//! gives each test a process of its own.
+//! Each test cleans the process environment first, so each needs a process of its own (nextest).
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -19,18 +13,11 @@ use yaar_link::{
     Setting, WorkspaceId, handshake, read_message, write_message,
 };
 
-/// How long a test waits for the Keeper before it fails: longer than the plan's ten
-/// seconds, as every test file of this crate has it, since a Keeper starts git of its own
-/// and a throttled machine runs it slowly.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and cleans the environment of this process for git: no
-    /// configuration of the user or of the system, a fixed author and date, a home inside
-    /// the folder. It has to be the first statement of a test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -55,10 +42,8 @@ impl Scratch {
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
@@ -87,8 +72,6 @@ impl Scratch {
         self.0.join("data")
     }
 
-    /// Starts the Keeper's library on a thread of this test, on the data folder of the
-    /// test: a second call, after the first Keeper stopped, starts one on the same data.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -102,9 +85,8 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen, and waiting until it
-    /// serves this Window: a fact told before that is told to a Window that is not there
-    /// yet, and the first reply is the proof that it is.
+    /// Waits until the Keeper serves this Window: a fact told before that is lost to it, and the
+    /// first reply proves it.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -122,9 +104,6 @@ impl Scratch {
                     looked_at: 0,
                     replies: Vec::new(),
                 };
-                // The Keeper tells a fact to the Windows it serves: its first reply comes
-                // after the Window is one of them. `ListClis` tells no fact and keeps no
-                // state.
                 window
                     .ask(Request::ListClis)
                     .expect("the Keeper serves the Window");
@@ -139,8 +118,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main`, and an identity of its
-    /// own, since git guesses none on every system.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -175,8 +152,7 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// One end of the Link, as a Window holds it. Everything it is sent is kept, so that a
-/// test reads it in order, and what it has looked at is not looked at again.
+/// Keeps everything it is sent, in order; what has been looked at is not looked at again.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -193,8 +169,6 @@ impl Window {
         id
     }
 
-    /// Reads one frame and keeps it, a reply with the number of facts that came before it.
-    /// Fails the test at the deadline, with the facts that came.
     fn read(&mut self, waiting_for: &str) {
         match read_message(&mut self.stream) {
             Ok(Message::Fact(fact)) => self.facts.push(fact),
@@ -207,8 +181,7 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply, which comes with how many facts this
-    /// Window had been told when it came.
+    /// The reply comes with the number of facts this Window had been told when it came.
     fn ask_noting_facts(&mut self, request: Request) -> (Result<Reply, Refusal>, usize) {
         let id = self.send(request);
         loop {
@@ -220,12 +193,10 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         self.ask_noting_facts(request).0
     }
 
-    /// The next `SettingChanged` from here on, passing over the facts before it.
     fn setting_changed(&mut self) -> Setting {
         loop {
             while self.looked_at < self.facts.len() {
@@ -238,7 +209,6 @@ impl Window {
         }
     }
 
-    /// How many `SettingChanged` this Window was told so far.
     fn told(&self) -> usize {
         self.facts
             .iter()
@@ -256,7 +226,6 @@ impl Window {
         workspace
     }
 
-    /// The repositories the Keeper lists, with their worktrees.
     fn repositories(&mut self) -> Vec<Repository> {
         match self.ask(Request::ListWorkspaces) {
             Ok(Reply::Workspaces(repositories)) => repositories,
@@ -264,7 +233,6 @@ impl Window {
         }
     }
 
-    /// The repository that holds `workspace`, as the Keeper names it.
     fn repository_of(&mut self, workspace: &WorkspaceId) -> RepositoryId {
         self.repositories()
             .into_iter()
@@ -280,7 +248,6 @@ impl Window {
         }
     }
 
-    /// Sets `setting` and expects the Keeper to have kept it.
     fn set(&mut self, setting: &Setting) {
         let done = self.ask(Request::SetSetting {
             setting: setting.clone(),
@@ -317,7 +284,6 @@ fn an_answer_on_a_repository_is_kept_told_to_every_window_after_the_reply_and_li
         setting: yes.clone(),
     });
     assert!(matches!(reply, Ok(Reply::Done)), "{reply:?}");
-    // Every Window is told, the one that set it after its reply.
     assert_eq!(window.setting_changed(), yes);
     assert_eq!(second.setting_changed(), yes);
     let told_at = window
@@ -332,7 +298,6 @@ fn an_answer_on_a_repository_is_kept_told_to_every_window_after_the_reply_and_li
     assert_eq!(window.settings(), std::slice::from_ref(&yes));
     assert_eq!(second.settings(), [yes]);
 
-    // A second answer takes the place of the first: one setting, the new value, told again.
     let no = answer(&repository, false);
     second.set(&no);
     assert_eq!(window.setting_changed(), no);
@@ -352,8 +317,8 @@ fn the_answers_are_listed_by_a_keeper_started_again_on_the_same_data_folder() {
     let other = window.open(&b);
     let (first, other) = (window.repository_of(&first), window.repository_of(&other));
     assert_ne!(first, other);
-    // Set in the opposite order to the one the repositories were opened in; a change
-    // of the first one's answer is the last.
+    // Set in the opposite order to the one the repositories were opened in: the last change is to
+    // the first one's answer.
     window.set(&answer(&other, false));
     window.set(&answer(&first, false));
     window.set(&answer(&first, true));
@@ -386,13 +351,9 @@ fn an_answer_on_a_repository_the_keeper_does_not_know_is_refused_naming_it_and_t
         matches!(&refused, Err(Refusal::Failed { reason }) if reason.contains(unknown.as_str())),
         "{refused:?}"
     );
-    // The refusal itself is the barrier for what is kept: a list asked after it holds
-    // nothing.
+    // The refusal is the barrier for what is kept: a list asked after it holds nothing.
     assert_eq!(window.settings(), []);
 
-    // The barrier for what is told: an answer that is kept is told after the refused one
-    // would have been, to the same Windows, so that nothing told about the first can still
-    // be on its way when it is read.
     let kept = answer(&repository, true);
     window.set(&kept);
     assert_eq!(second.setting_changed(), kept);
@@ -426,15 +387,11 @@ fn one_answer_serves_every_worktree_of_a_repository_and_not_another_repository()
     let in_apart = window.open(&apart);
     assert_ne!(in_main, in_linked);
 
-    // The Keeper names the two worktrees of one repository by one id, and the other
-    // repository by its own.
     let repository = window.repository_of(&in_main);
     assert_eq!(window.repository_of(&in_linked), repository);
     let apart = window.repository_of(&in_apart);
     assert_ne!(apart, repository);
 
-    // Answered once, through either worktree's repository id, it is one setting, and
-    // after a restart it is still one.
     let mut second = scratch.window();
     let no = answer(&repository, false);
     window.set(&no);
@@ -445,8 +402,6 @@ fn one_answer_serves_every_worktree_of_a_repository_and_not_another_repository()
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     assert_eq!(window.settings(), std::slice::from_ref(&no));
-    // The other repository has no answer, and a form of Flow set in a worktree is listed
-    // before the answers.
     let form = Setting::FlowForm {
         workspace: in_linked,
         form: FlowForm::LiveDiff,

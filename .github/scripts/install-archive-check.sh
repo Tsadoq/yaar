@@ -1,41 +1,8 @@
 #!/bin/bash
-# Row PKG-10, its clause "and the install line checks what it downloaded against it", on the
-# route no machine of the rehearsal can show for both processors: the archive route of
-# install.sh finds the archive of its own processor in SHA256SUMS, downloads it, checks it
-# against the sum, and refuses a wrong sum with its sentence.
-#
-#   .github/scripts/install-archive-check.sh [<install.sh>]
-#
-# <install.sh> defaults to packaging/install.sh of this tree. Linux only: on another system
-# the script says so and exits 2 (install.sh takes its macOS route there, which is not the
-# one this checks). It needs bash, curl, tar, gzip, sha256sum and awk, writes only into a
-# scratch folder it makes (HOME, TMPDIR and the prefix of the install are in it), and reads
-# nothing of the user's.
-#   1. Makes a folder of release files laid out as a release is: for each processor,
-#      x86_64 and aarch64, an archive yaar-review-0.1.0-linux-<processor>.tar.gz holding the
-#      layout the install line expects (the programs in each say which processor it is for), a
-#      .zip and a .deb of the same version whose names the search must pass over, and a
-#      SHA256SUMS that lists all five with their right sums.
-#   2. For each processor, as YAAR_ARCH names it: runs install.sh with YAAR_METHOD=archive, a
-#      download address that is that folder (file://), and YAAR_PREFIX in the scratch folder.
-#      It must exit 0, say "SHA-256 matches", and leave under the prefix the program of that
-#      processor and not the other's.
-#   3. For each processor, again with a SHA256SUMS in which the sum of that archive has its
-#      first digit changed (a 0 becomes a 1, any other digit a 0) and nothing else differs:
-#      it must exit 1, say "SHA-256 of <archive> is <the real sum>, SHA256SUMS says <the
-#      wrong sum>. Nothing was installed.", not say "SHA-256 matches", and leave the prefix
-#      empty.
-# The two cases of one processor make the refusal a refusal of the sum: the same run with
-# the right sum installs, so a search that finds no archive, or an archive that cannot be
-# read, fails the first case before it can pass the second.
-#
-# Exit codes: 0 holds; 1 does not; 2 usage error.
-#
-# What the header leaves to the body: a command that stops the script without a sentence of
-# its own is named in one, and the exit code is 1; the archives are made here, small, so
-# what is checked is the install line's choice and checks and not a real build.
+# The archive route of install.sh for both processors: its own archive is found in SHA256SUMS,
+# installed on the right sum, and a wrong sum is refused. Linux only (exit 2 elsewhere).
+# .github/scripts/install-archive-check.sh [<install.sh>]   default packaging/install.sh
 set -euo pipefail
-# -E: the ERR trap below also runs inside functions and command substitutions.
 set -E
 
 NAME="install-archive-check.sh"
@@ -84,13 +51,11 @@ done
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/install-archive-check.XXXXXX") || fail "no scratch folder could be made"
 mkdir "$scratch/home" "$scratch/tmp" "$scratch/release" || fail "the folders of the scratch could not be made"
 
-# --- 1. The release files and their SHA256SUMS.
 version=0.1.0
 for machine in x86_64 aarch64; do
     root="$scratch/build-$machine/yaar-review"
     mkdir -p "$root/bin" "$root/libexec/yaar-review" || fail "the layout of the $machine archive could not be made"
-    # A real, dynamic program, which the install line's look at the libraries can read, with
-    # the name of the processor it is for appended.
+    # A real, dynamic program, which the install line's look at the libraries can read.
     cp "$(command -v sha256sum)" "$root/bin/yaar-review"
     printf 'window program for %s\n' "$machine" >> "$root/bin/yaar-review"
     cp "$(command -v sha256sum)" "$root/libexec/yaar-review/yaar-keeper"
@@ -105,8 +70,7 @@ printf 'a deb\n' > "$scratch/release/yaar-review_${version}_arm64.deb"
 (cd "$scratch/release" && sha256sum ./* | sed 's|  \./|  |') > "$scratch/sums" || fail "SHA256SUMS could not be made"
 [ "$(wc -l < "$scratch/sums" | tr -d ' ')" -eq 5 ] || fail "the SHA256SUMS made here does not list five files"
 
-# One run of the install line: <machine> <folder holding SHA256SUMS and the files>; sets
-# status and the log of the run in $scratch/log, and the prefix in $prefix.
+# Sets status, the log of the run ($scratch/log) and the prefix ($prefix).
 run_install() {
     local machine=$1 folder=$2
     prefix="$scratch/prefix-$machine-$3"
@@ -124,7 +88,6 @@ for machine in x86_64 aarch64; do
     real=$(awk -v n="$archive" '$2 == n { print $1 }' "$scratch/sums")
     [ -n "$real" ] || fail "the SHA256SUMS made here holds no sum for $archive"
 
-    # --- 2. The right sum: it installs the program of this processor.
     mkdir "$scratch/right-$machine" || fail "the folder of the right sums could not be made"
     for f in "$scratch/release"/*; do ln -s "$f" "$scratch/right-$machine/${f##*/}" || fail "$f could not be linked"; done
     cp "$scratch/sums" "$scratch/right-$machine/SHA256SUMS" || fail "SHA256SUMS could not be copied"
@@ -136,7 +99,6 @@ for machine in x86_64 aarch64; do
     grep -aqF -- "window program for $machine" "$prefix/bin/yaar-review" \
         || fail "the program the install line for $machine put at $prefix/bin/yaar-review is not the one of the $machine archive"
 
-    # --- 3. A wrong sum: it refuses with its sentence and installs nothing.
     case "$real" in
         0*) wrong="1${real#0}" ;;
         *) wrong="0${real#?}" ;;

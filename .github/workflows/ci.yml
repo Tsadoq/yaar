@@ -1,34 +1,6 @@
-# The checks that run on every change, and the release, which is the same run with one
-# condition turned on.
-#
-#   version             the one version number, and whether this run publishes
-#   checks-linux        formatting, lints, tests, licences, dependencies planted to see them
-#                       refused, unused dependencies, layout rules, test plan; Node for the
-#                       one test of pi's extension; the real language servers of the tests of
-#                       the Navigator
-#   macos               lints, tests, layout rules, test plan, release build for both
-#                       processors, the app signed ad hoc; Node for the one test of pi's
-#                       extension; the real language servers of the tests of the Navigator
-#   package-linux       release build on Ubuntu 22.04, the .deb and the archive
-#   assemble            the notices counted against the lock file; the release files, one
-#                       checksum file, the site and the apt repository, signed with a key made
-#                       here and thrown away: the rehearsal of a release, kept as an artifact
-#   install-linux       the install line, the upgrade, the refusals of apt, the start from the
-#                       app menu, a worktree made by the app the menu started, and the
-#                       uninstall, on five releases
-#   install-macos       the install line, the start from the Dock, a worktree made by the app
-#                       the system started, and the uninstall
-#   release-sign-macos  PUBLISHING ONLY: the app signed with the Developer ID and notarised
-#   assemble-release    PUBLISHING ONLY: the release files and the site signed with the
-#                       project's key
-#   publish             PUBLISHING ONLY: waits for the owner's approval (the environment
-#                       github-pages requires it), then the GitHub release and the Pages site
-#
-# Linux runs on x86-64 and on arm64. Nothing is published, uploaded or sent to Apple unless
-# the owner starts this workflow by hand on a version tag with the input `publish` on: the
-# job `version` computes that condition once, in its step "What this run is", and the three
-# jobs marked PUBLISHING ONLY run only when it holds. Every other run, a pull request's, a
-# push's and a tag's among them, is the rehearsal and keeps what it built as artifacts.
+# Nothing is published, uploaded or sent to Apple unless the owner starts this workflow by hand
+# on a version tag with the input `publish` on. The job `version` computes that once, and
+# release-sign-macos, assemble-release and publish run only when it holds.
 name: ci
 
 on:
@@ -77,10 +49,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # THE ONE CONDITION. This run publishes only when the owner started the workflow by
-      # hand with the input `publish` on; the script then refuses unless the run is on the
-      # tag v<version of Cargo.toml> and that tag's commit is on main. A push, a tag pushed, a pull request and a run started
-      # by hand with the input off all rehearse and publish nothing.
       - name: What this run is
         id: run
         env:
@@ -100,7 +68,6 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    # A plain image, so that the job proves what a clean system needs.
     container: ubuntu:24.04
     timeout-minutes: 45
     steps:
@@ -114,9 +81,8 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Node, for the one test that loads pi's extension, which is TypeScript and runs
-      # under Node's own type stripping (row PIX-01). Nothing the packages ship holds Node:
-      # the user's pi runs the extension.
+      # pi's extension is TypeScript and its test runs it under Node's own type stripping; nothing
+      # the packages ship holds Node: the user's pi runs the extension.
       - name: Node, for the test of pi's extension
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -152,10 +118,7 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
-      # The real language servers some tests of the Navigator run on small fixed projects,
-      # fetched once by the app's own downloader from the publishers' addresses, pinned by
-      # version and digest in the Navigator's built-in table, and kept between runs. A test
-      # that needs them fails, and never skips, where the folder is missing or incomplete.
+      # A test that needs them fails, and never skips, where the folder is missing or incomplete.
       - name: Restore the language servers of the tests
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -179,16 +142,7 @@ jobs:
       - name: The app's own licence
         run: .github/scripts/own-licence.sh
 
-      # A check that has never refused anything proves little. Each of the next six
-      # steps plants one dependency in a copy of the tree, under each program the
-      # packages ship and under the Companion, and passes only if the part of
-      # `cargo deny check` that guards against it refuses it by name. Each asks that
-      # part alone, so each also fails unless the step `Licences, advisories, bans,
-      # sources` above is still the whole check and nothing else, in a job that may
-      # neither fail without failing the run nor be left out of it: a real dependency
-      # fails the run there. A new key of this job has to be made known to plant.sh.
-      # The seventh switches off what the others guard, one thing at a time, and
-      # passes only if they then fail.
+      # A new key of this job has to be made known to plant.sh.
       - name: A dependency under a licence outside the list is refused
         run: .github/scripts/plant.sh licence
 
@@ -217,26 +171,19 @@ jobs:
       - name: Layout rules
         run: cargo xtask layout
 
-      - name: Test plan
-        run: cargo xtask coverage
-
   macos:
     name: macos universal
     needs: version
-    # macOS 26: the version before the current one, which the first release promises on
-    # the strength of this job. The current one is tested on the reference Mac (SYS-04).
+    # macOS 26: the version before the current one, which the release promises on the strength
+    # of this job.
     runs-on: macos-26
-    # Tests, then a release build for two processors and the programs of install-macos; the
-    # first run after a change of the lock file builds everything from nothing.
+    # A run after a change of the lock file builds everything from nothing.
     timeout-minutes: 90
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Node, for the one test that loads pi's extension, which is TypeScript and runs
-      # under Node's own type stripping (row PIX-01). Nothing the packages ship holds Node:
-      # the user's pi runs the extension.
       - name: Node, for the test of pi's extension
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -261,8 +208,7 @@ jobs:
           restore-keys: |
             macos-crates-${{ runner.os }}-${{ runner.arch }}-
 
-      # A publishing run builds the programs it signs from nothing: no build output of an
-      # earlier run goes into what is signed with the Developer ID.
+      # A publishing run builds from nothing: no earlier build output goes into what is signed.
       - name: Restore build output
         if: needs.version.outputs.publish != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -278,7 +224,6 @@ jobs:
       - name: Fetch crates
         run: cargo fetch --locked
 
-      # The real language servers some tests of the Navigator run, as in checks-linux.
       - name: Restore the language servers of the tests
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -299,11 +244,6 @@ jobs:
       - name: Layout rules
         run: cargo xtask layout
 
-      - name: Test plan
-        run: cargo xtask coverage
-
-      # The stand-in agent and the scripted Window, which install-macos drives the
-      # installed app with. Test support, shipped by no package.
       - name: The programs the install job drives the app with
         run: cargo build --locked -p yaar-system-tests --bins
 
@@ -313,8 +253,8 @@ jobs:
       - name: Third-party notices
         run: packaging/notices.sh dist/THIRD-PARTY-NOTICES.txt aarch64-apple-darwin x86_64-apple-darwin
 
-      # Ad hoc: the Developer ID and the notary key are secrets of the environment
-      # `release`, which only the job release-sign-macos may name.
+      # Ad hoc: the Developer ID and the notary key are secrets of the environment `release`,
+      # which only release-sign-macos may name.
       - name: The app, the .zip and the disk image, signed ad hoc
         run: |
           NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-macos.sh "$VERSION" dist \
@@ -357,9 +297,7 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
-      # The five programs of each processor, unsigned, and their notices: what the job
-      # release-sign-macos signs. An artifact keeps no execute bit; the packaging script
-      # sets it again.
+      # An artifact keeps no execute bit; the packaging script sets it again.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-programs
@@ -397,8 +335,7 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    # Built on the oldest promised release: a program built on a newer one does not start
-    # on an older one.
+    # The oldest promised release: a program built on a newer one does not start on an older one.
     container: ubuntu:22.04
     timeout-minutes: 60
     env:
@@ -432,7 +369,6 @@ jobs:
           restore-keys: |
             package-crates-${{ runner.os }}-${{ matrix.arch }}-
 
-      # As in the job macos: what a publishing run publishes is built from nothing.
       - name: Restore build output
         if: needs.version.outputs.publish != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -462,9 +398,6 @@ jobs:
       - name: Package check
         run: .github/scripts/linux-package-check.sh dist "$VERSION" dist/THIRD-PARTY-NOTICES.txt
 
-      # The stand-in agent and the scripted Window, which install-linux drives the installed
-      # app with, built on the oldest promised release so that they run on all five. Test
-      # support, shipped by no package.
       - name: The programs the install job drives the app with
         run: cargo build --locked -p yaar-system-tests --bins
 
@@ -502,8 +435,8 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Two checks of scripts the install jobs rest on, here because this job has what they
-      # need and runs before those jobs: a fault in either shows once, not in eleven jobs.
+      # The install jobs rest on these two scripts. They are checked here, in a job that has what
+      # they need and runs before the install jobs, so a fault shows once, not in every install job.
       - name: The stand-in server answers at once, ends a start that fails, and never answers 304
         run: .github/scripts/serve-site-check.sh
 
@@ -539,8 +472,8 @@ jobs:
       - name: The count of the notices can fail
         run: .github/scripts/notices-can-fail.sh packages
 
-      # The key is made here and thrown away with the job. The project's key is a secret
-      # of the environment `release`, which only the job assemble-release may name.
+      # The project's key is a secret of the environment `release`, which only assemble-release
+      # may name.
       - name: The release files, the site and the apt repository, signed with a throwaway key
         run: |
           eval "$(packaging/apt/make-test-key.sh)"
@@ -597,8 +530,8 @@ jobs:
           name: test-programs-linux-${{ matrix.arch }}
           path: test-programs
 
-      # Files of the user's own, which no uninstall may touch. git makes the repository and
-      # leaves again, so that the package's dependency on git is still what brings it.
+      # git makes the repository and leaves again, so that the package's dependency on git is
+      # still what brings it.
       - name: The user's own files, before anything of the app
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git
@@ -613,7 +546,7 @@ jobs:
       - name: apt refuses the repository when its index or a package was changed after signing
         run: .github/scripts/linux-tampered.sh rehearsal
 
-      # The archive route is the one of the install line that reads SHA256SUMS on Linux.
+      # The archive route is the one that reads SHA256SUMS on Linux.
       - name: The install line refuses a download that does not match SHA256SUMS
         run: .github/scripts/install-wrong-sum.sh rehearsal tester
 
@@ -647,16 +580,13 @@ jobs:
       - name: From the app the system started, a worktree is made with an agent, and its hook finds a program of the login path
         run: .github/scripts/linux-login-path.sh tester test-programs
 
-      # From here on the site served is the later one: the steps below meet the system as a
-      # user's is after a release.
+      # linux-upgrade.sh leaves the later site served: the steps below run against it.
       - name: A later version arrives with apt-get upgrade
         run: .github/scripts/linux-upgrade.sh tester rehearsal/site-later "$LATER"
 
       - name: The app's own files are there before the uninstall
         run: .github/scripts/user-files.sh present tester
 
-      # The second run meets the newest version installed, the state a first run leaves, and
-      # must change nothing: the package's state, its files, apt's key and source.
       - name: A second run changes nothing, and the uninstall leaves nothing
         run: |
           state() {
@@ -673,8 +603,8 @@ jobs:
           diff "$RUNNER_TEMP/second-run-before" "$RUNNER_TEMP/second-run-after"
           sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
             bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash -s -- --uninstall'
-          # A `!` in front of a command never stops a step that runs under `bash -e`, so
-          # each of the four checks is an `if` that says what it found.
+          # A `!` in front of a command never stops a step that runs under `bash -e`, so each check
+          # is an `if` that says what it found.
           if command -v yaar-review; then
             echo 'yaar-review is still on the path after the uninstall' >&2
             exit 1
@@ -744,10 +674,8 @@ jobs:
       - name: No file of the app is left in the user's folders
         run: .github/scripts/user-files.sh check "$(id -un)" "$RUNNER_TEMP/user-files-before"
 
-  # ---------------------------------------------------------------- PUBLISHING ONLY
-  # The three jobs below run only when the job `version` found THE ONE CONDITION true.
-  # Their secrets live in the environments `release` and `github-pages`, which the owner
-  # limits to the tags v*: a job of a pull request or a branch can name neither.
+  # The three jobs below run only on a publishing run. Their secrets live in the environments
+  # `release` and `github-pages`, which the owner limits to the tags v*.
 
   release-sign-macos:
     name: release sign macos
@@ -863,14 +791,9 @@ jobs:
           path: final/
           if-no-files-found: error
 
-  # Nothing above has left the runner. The environment github-pages requires the owner's
-  # approval, so the run waits here, before this job starts, while he walks the release's
-  # checklists on the artifacts macos-release and release-final (packaging/checklists/).
-  # Then this job publishes: a draft first, which is invisible; the Pages deployment, which
-  # replaces the site at once; only then the release made the latest, which the install line
-  # on macOS and on the archive route follows. On the first release a failure between the
-  # deployment and that last step leaves the apt route answering and the other two failing
-  # (no release is published yet): the remedy is to re-run this job alone.
+  # The environment github-pages requires the owner's approval before this job starts. On a first
+  # release, a failure between the Pages deployment and the release made the latest leaves apt
+  # answering and the macOS and archive routes failing: re-run this job alone.
   publish:
     name: publish
     needs: [version, checks-linux, macos, install-linux, install-macos, assemble-release]

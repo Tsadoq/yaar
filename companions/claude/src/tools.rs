@@ -1,33 +1,6 @@
-//! The reply tool's server: the program `yaar-claude-tools`, which Claude Code starts from
-//! the app's plugin and speaks MCP with over its standard input and output.
-//!
-//! It serves one tool, `reply_to_thread`, with three arguments: `thread`, the thread's id
-//! as the review names it; `body`, the reply; `addressed`, whether the agent's change
-//! addresses the thread. It has no argument and no other tool that resolves a thread:
-//! only the reviewer resolves.
-//!
-//! Each message is one line of JSON-RPC 2.0, as Claude Code writes them. The server
-//! answers `initialize` with the protocol version Claude Code asked for, the capability of
-//! tools and its name, [`SERVER_NAME`]; `tools/list` with the one tool; `ping` with an
-//! empty result; `tools/call` of the reply tool with the result the Keeper hands back; a
-//! request of any other method with the error `-32601`, "method not found"; and nothing to
-//! a notification, which carries no `id`. A line that is no JSON is skipped.
-//!
-//! A call is passed to the Keeper as one `yaar_link::Request::Report` of the Adapter
-//! `claude`, as the hook program passes a hook: with the terminal its environment names
-//! and its parent, Claude Code, and as payload the JSON object `{"tool_server": "yaar",
-//! "session_id": <CLAUDE_CODE_SESSION_ID>, "cwd": <its folder>, "name": <the tool>,
-//! "arguments": <the call's arguments, as Claude Code sent them>}`, so that the reply's
-//! body reaches the Keeper byte for byte. The Keeper's `yaar_link::Reply::Answer` holds a JSON
-//! object, which is the call's `result`: every key of it comes back with its value, though
-//! the keys need not keep the order the Keeper wrote them in. Any other answer, and none, is
-//! a result that says the reply was not kept, an error the agent reads,
-//! `{"isError": true, "content": [{"type": "text", "text": <why>}]}`, `why` one of: "the
-//! app did not keep the reply" for `yaar_link::Reply::Done`, the Keeper's reason for a
-//! refusal, "the app did not answer in time" past [`TOOL_DEADLINE`], and "the app is not
-//! running" with no Keeper or a Keeper of another protocol. The Keeper answers a call
-//! with `Reply::Done` only when it could not work it out: a report it could not read, or
-//! one that came while it stopped.
+//! MCP server of the reply tool `reply_to_thread` (`thread`, `body`, `addressed`). A call goes to
+//! the Keeper as one `Request::Report` with payload `{"tool_server", "session_id", "cwd", "name",
+//! "arguments"}`.
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
@@ -38,48 +11,34 @@ use yaar_link::{Reply, TERMINAL_VARIABLE, socket_path};
 
 use crate::{Reporter, Unanswered, report_to_keeper};
 
-/// The longest the server waits for the Keeper's answer to one call. Claude Code waits for
-/// the tool; a reply is kept by the Keeper with one write to the drive.
+/// The longest the server waits for the Keeper's answer to one call. Claude Code waits
+/// for the tool; the Keeper keeps a reply with one write to the drive.
 pub const TOOL_DEADLINE: Duration = Duration::from_secs(10);
 
-/// The server's name, as it gives it in its answer to `initialize`.
 pub const SERVER_NAME: &str = "yaar";
 
-/// The one tool the server lists.
 pub const TOOL: &str = "reply_to_thread";
 
-/// Where the server finds the Keeper, and what it says of the CLI that started it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolPlace {
-    /// The socket the Keeper is asked to listen at, as for the hook program.
     pub socket: PathBuf,
-    /// The terminal of the app Claude Code runs in, from `yaar_link::TERMINAL_VARIABLE`;
-    /// none outside the app's terminals.
     pub terminal: Option<String>,
-    /// The server's parent process: Claude Code.
     pub parent: u32,
-    /// Claude Code's own id of the session that started the server, from its variable
-    /// `CLAUDE_CODE_SESSION_ID`; none where it is not set.
+    /// Claude Code's session id, from `CLAUDE_CODE_SESSION_ID`; none where unset.
     pub session: Option<String>,
-    /// The folder the server was started in: the folder Claude Code works in.
     pub folder: PathBuf,
 }
 
-/// The variable in which Claude Code gives the tool servers it starts the id of the session
-/// that started them.
 const SESSION_VARIABLE: &str = "CLAUDE_CODE_SESSION_ID";
 
-/// The protocol version the server names when `initialize` asks for none: the one the
-/// recorded trace of Claude Code asked for.
+/// Named when `initialize` asks for none: the version Claude Code's recorded trace asked for.
 const PROTOCOL: &str = "2025-11-25";
 
 impl ToolPlace {
-    /// What the environment of this process says, its parent and its folder.
     pub fn of_this_process() -> ToolPlace {
         let set = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
         ToolPlace {
             socket: socket_path(),
-            // An empty variable is a shell's leftover, not a terminal.
             terminal: set(TERMINAL_VARIABLE),
             parent: std::os::unix::process::parent_id(),
             session: set(SESSION_VARIABLE),
@@ -88,9 +47,6 @@ impl ToolPlace {
     }
 }
 
-/// The tool as `tools/list` gives it: its name, a description that says what a call does,
-/// and the schema of its three arguments, `thread` and `body` required strings and
-/// `addressed` a boolean that defaults to false.
 pub fn tool() -> Value {
     json!({
         "name": TOOL,
@@ -119,15 +75,12 @@ pub fn tool() -> Value {
     })
 }
 
-/// Serves the messages of `input`, one JSON-RPC message a line, until it ends, writing
-/// each answer to `output` as one line and flushing it at once. Errors are only those of
-/// `output`: everything the Keeper does or fails to do is an answer to the call.
+/// Errors are only those of `output`: what the Keeper does or fails to do is an answer to the call.
 pub fn serve(mut input: impl BufRead, mut output: impl Write, place: &ToolPlace) -> io::Result<()> {
     let mut line = Vec::new();
     loop {
         line.clear();
-        // Claude Code is gone when its pipe breaks, as when it closes it: no one is left to
-        // serve.
+        // Claude Code is gone when its pipe breaks, as when it closes it.
         if !matches!(input.read_until(b'\n', &mut line), Ok(read) if read > 0) {
             return Ok(());
         }
@@ -143,8 +96,6 @@ pub fn serve(mut input: impl BufRead, mut output: impl Write, place: &ToolPlace)
     }
 }
 
-/// What the server writes for `message`; nothing for a notification, which has no `id`, and
-/// for what is no request.
 fn answer(message: &Value, place: &ToolPlace) -> Option<Value> {
     let id = message.get("id").filter(|id| !id.is_null())?;
     let method = message.get("method")?.as_str()?;
@@ -172,23 +123,18 @@ fn answer(message: &Value, place: &ToolPlace) -> Option<Value> {
     })
 }
 
-/// A successful JSON-RPC response.
 fn result(id: &Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
-/// A JSON-RPC error response.
 fn failure(id: &Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
-/// A result that tells the agent the call did not work, and why.
 fn not_kept(why: &str) -> Value {
     json!({"isError": true, "content": [{"type": "text", "text": why}]})
 }
 
-/// Passes one call of the reply tool to the Keeper and gives its result: what the Keeper
-/// answered, or an error result that says why it did not.
 fn call(arguments: &Value, place: &ToolPlace) -> Value {
     let no_arguments = json!({});
     let payload = json!({

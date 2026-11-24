@@ -1,7 +1,3 @@
-//! Component tests: a worktree that git moves or removes, and the reviews the Store keeps
-//! for it, through the calls the Keeper makes, in real repositories the tests make and
-//! with a real database file.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -17,19 +13,16 @@ use yaar_workspaces::{
     Head, Refusal, Repository, Workspace, WorkspaceError, WorkspaceId, Workspaces,
 };
 
-/// An id of 32 hexadecimal digits, from a number.
 fn id(n: u128) -> String {
     format!("{n:032x}")
 }
 
-/// The database file of the test's Keeper.
 fn file(scratch: &Scratch) -> PathBuf {
     scratch.join("app-data").join(FILE_NAME)
 }
 
-/// A Keeper's Workspaces over the database file of the scratch folder, with the Store it
-/// reads, which the test uses as the Review engine would. Making another is a Keeper
-/// that restarts: nothing but the file and the repositories is carried over.
+/// / A Keeper's Workspaces and Store over the scratch database file. Calling it again is a Keeper
+/// / that restarts: only the file and the repositories carry over.
 fn keeper(scratch: &Scratch) -> (Workspaces, Store) {
     keeper_through(scratch, Git::find().expect("git on the search path"))
 }
@@ -39,8 +32,6 @@ fn keeper_through(scratch: &Scratch, git: Git) -> (Workspaces, Store) {
     (Workspaces::new(git, store.clone()), store)
 }
 
-/// A review of `workspace` that holds one thread, whose one comment is a draft, put
-/// through the Store's calls as the engine puts one.
 fn review_with_a_thread(store: &Store, workspace: &WorkspaceId, n: u128) -> ReviewRecord {
     let thread = Thread {
         id: ThreadId::new(id(n + 1)),
@@ -81,8 +72,6 @@ fn review_with_a_thread(store: &Store, workspace: &WorkspaceId, n: u128) -> Revi
     }
 }
 
-/// A review of `workspace` with no thread: the review of no agent that every workspace
-/// has from its first reading.
 fn review_with_no_thread(store: &Store, workspace: &WorkspaceId, n: u128) {
     store
         .put_review(&ReviewRecord {
@@ -97,8 +86,6 @@ fn review_with_no_thread(store: &Store, workspace: &WorkspaceId, n: u128) {
         .expect("put the review");
 }
 
-/// A repository in `repo` with one commit on `main` and its linked worktrees, one for
-/// each name, each on a branch of its name in the folder of its name.
 fn a_repository_with_worktrees(scratch: &Scratch, names: &[&str]) -> PathBuf {
     let repo = scratch.join("repo");
     init(&repo);
@@ -152,7 +139,6 @@ fn in_its_folder(workspaces: &Workspaces, id: &WorkspaceId, folder: &Path) {
     assert_eq!(worktree.root(), folder);
 }
 
-// STORE-05.
 #[test]
 fn after_git_moves_a_worktree_opening_the_new_path_finds_its_review() {
     let scratch = Scratch::new();
@@ -166,11 +152,8 @@ fn after_git_moves_a_worktree_opening_the_new_path_finds_its_review() {
     git(&repo, &["worktree", "move", "../wt", "../wt-moved"]);
     let moved = scratch.join("wt-moved");
 
-    // The same workspace is found at the new path, listed there with its head, and its
-    // review, the thread in it, is as it was.
     let again = workspaces.open_folder(&moved).expect("open the new path");
     assert_eq!(again, opened);
-    // The open alone is enough to use the workspace at its new path, before any listing.
     in_its_folder(&workspaces, &opened.workspace, &moved);
     let repository = the_repository(&workspaces);
     let at_the_new_path = repository
@@ -190,7 +173,6 @@ fn after_git_moves_a_worktree_opening_the_new_path_finds_its_review() {
         std::slice::from_ref(&review)
     );
 
-    // After a restart: a second Workspaces on a second Store of the same file.
     drop((workspaces, store));
     let (workspaces, store) = keeper(&scratch);
     assert_eq!(workspaces.open_folder(&moved).expect("open"), opened);
@@ -209,7 +191,6 @@ fn after_git_moves_a_worktree_opening_the_new_path_finds_its_review() {
     );
 }
 
-// STORE-06.
 #[test]
 fn after_git_removes_a_worktree_its_review_is_still_listed_marked_as_worktree_gone() {
     let scratch = Scratch::new();
@@ -224,7 +205,6 @@ fn after_git_removes_a_worktree_its_review_is_still_listed_marked_as_worktree_go
     let bare = workspaces
         .open_folder(&scratch.join("bare"))
         .expect("open bare");
-    // The main worktree and `bare` have a review each, with no thread in it.
     review_with_no_thread(&store, &main.workspace, 0x20);
     review_with_no_thread(&store, &bare.workspace, 0x30);
     let review = review_with_a_thread(&store, &kept.workspace, 0x40);
@@ -240,8 +220,6 @@ fn after_git_removes_a_worktree_its_review_is_still_listed_marked_as_worktree_go
 
     let check = |workspaces: &Workspaces, store: &Store| {
         let repository = the_repository(workspaces);
-        // Still listed at the path it had; the one with no thread is not; the main
-        // worktree is listed as it was.
         assert_eq!(
             repository.workspaces,
             [
@@ -258,17 +236,14 @@ fn after_git_removes_a_worktree_its_review_is_still_listed_marked_as_worktree_go
             store.reviews_of(&kept.workspace).expect("reviews"),
             std::slice::from_ref(&review)
         );
-        // Nothing that needs its files is possible, as for an id nobody knows.
         assert_eq!(
             refused(workspaces.changes(&kept.workspace)),
             Refusal::UnknownWorkspace(kept.workspace.clone())
         );
-        // The review of the one with no thread is kept all the same.
         assert_eq!(store.reviews_of(&bare.workspace).expect("reviews").len(), 1);
     };
     check(&workspaces, &store);
 
-    // After a restart: a second Workspaces on a second Store of the same file.
     drop((workspaces, store));
     let (workspaces, store) = keeper(&scratch);
     check(&workspaces, &store);
@@ -288,8 +263,6 @@ fn a_gone_worktree_is_listed_after_the_listed_ones_in_order_and_leaves_with_its_
     review_with_a_thread(&store, &one.workspace, 0x10);
     let in_two = review_with_a_thread(&store, &two.workspace, 0x20);
 
-    // `one` is removed by git, `two` is deleted from the drive: both are gone, whichever
-    // way, and both come after the worktrees that are listed.
     git(&repo, &["worktree", "remove", "../one"]);
     std::fs::remove_dir_all(scratch.join("two")).expect("delete the folder");
     let repository = the_repository(&workspaces);
@@ -311,8 +284,6 @@ fn a_gone_worktree_is_listed_after_the_listed_ones_in_order_and_leaves_with_its_
     assert!(paths.contains(&scratch.join("one").as_path()));
     assert!(paths.contains(&scratch.join("two").as_path()));
 
-    // The last draft of `two` is deleted, which takes its thread with it: `two` is not
-    // listed any more, and the Store still holds its review.
     store
         .delete_draft(&in_two.threads[0].comments[0].id)
         .expect("delete the draft");
@@ -345,7 +316,6 @@ fn a_repository_whose_folder_is_gone_lists_its_gone_workspaces_that_hold_a_threa
         }]
     );
 
-    // With no thread left it lists nothing, as before.
     let other = scratch.join("other");
     init(&other);
     write(&other, "a.txt", "a\n");
@@ -366,7 +336,7 @@ fn a_gone_worktree_that_comes_back_at_its_path_is_listed_with_its_head_again() {
     let opened = workspaces.open_folder(&scratch.join("wt")).expect("open");
     review_with_a_thread(&store, &opened.workspace, 0x10);
 
-    // Moved by hand, so that git still lists the old folder, and then put back.
+    // Moved by hand, so that git still lists the old folder, then put back.
     let away = scratch.join("away");
     std::fs::rename(scratch.join("wt"), &away).expect("move the worktree");
     let repository = the_repository(&workspaces);
@@ -429,8 +399,8 @@ fn the_worktree_of_a_workspace_is_found_in_a_new_keeper_with_no_listing_of_git()
     let opened = workspaces.open_folder(&scratch.join("wt")).expect("open");
     drop(workspaces);
 
-    // A second Keeper, whose git writes down each of its starts: asking for a worktree
-    // starts no `git worktree list`, which a request of reviews may do at every call.
+    // A second Keeper whose git logs each start: asking for a worktree starts no `git worktree
+    // list`.
     let (wrapper, list) = git_that_keeps_a_list(&scratch);
     let (workspaces, _store) = keeper_through(&scratch, Git::at(wrapper));
     let worktree = workspaces
@@ -444,7 +414,6 @@ fn the_worktree_of_a_workspace_is_found_in_a_new_keeper_with_no_listing_of_git()
         "git listed the worktrees: {starts}"
     );
 
-    // Nor does it for one that is gone.
     git(&repo, &["worktree", "remove", "../wt"]);
     let _ = std::fs::remove_file(&list);
     assert!(

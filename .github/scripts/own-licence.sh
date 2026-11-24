@@ -1,21 +1,12 @@
 #!/bin/sh
-# Fails unless the app's own source is under the Apache License 2.0, and under nothing
-# else: every crate of the workspace declares exactly "Apache-2.0", and the file LICENSE
-# at the root is the text of that licence.
-#
-#   own-licence.sh
-#
-# `cargo deny check licenses` does not hold this: it would pass a crate of the app under
-# any licence of its list. The crates are those cargo finds in the workspace, so a new
-# crate is checked without being named anywhere.
-#
-# Needs jq.
+# Fails unless every crate of the workspace declares exactly "Apache-2.0" and LICENSE is that
+# licence's text: `cargo deny check licenses` passes a crate under any licence of its list. Needs
+# jq.
 set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 
-# The text as the Apache Software Foundation publishes it, 11,358 bytes:
-# https://www.apache.org/licenses/LICENSE-2.0.txt
+# The ASF text, 11,358 bytes: https://www.apache.org/licenses/LICENSE-2.0.txt
 APACHE_2_0_SHA256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
 
 failed=0

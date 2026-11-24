@@ -1,36 +1,23 @@
-//! The pane's own copy of what it saved: a save of a draft is told to nobody, so the pane
-//! puts each one into the reviews it shows itself.
+//! A save of a draft is told to nobody, so the pane puts each one into the reviews it shows itself.
 
 use std::io::{self, Read};
 
 use yaar_link::{Anchor, Author, Comment, CommentId, ReviewId, Thread, ThreadId, WorkspaceReviews};
 
-/// One draft as the pane last saved it: what the Keeper was asked to keep.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Save {
-    /// How many saves the pane had sent when this one was, itself counted: it says
-    /// whether an answer of the Keeper, asked at some count, already holds it.
+    /// Counts the saves sent, itself included: tells whether an answer of the Keeper already holds
+    /// it.
     pub(crate) seq: u64,
-    /// The review the draft belongs to.
     pub(crate) review: ReviewId,
-    /// Its thread.
     pub(crate) thread: ThreadId,
-    /// The draft.
     pub(crate) comment: CommentId,
-    /// Where the thread sits, for the draft that is the first comment of a new thread;
-    /// none for a draft of a thread that exists.
+    /// Set for the first comment of a new thread only.
     pub(crate) anchor: Option<Anchor>,
-    /// The whole text.
     pub(crate) text: String,
 }
 
-/// Puts a save into the reviews: the text of the draft is set, and a draft that is not
-/// there yet is added, as a new thread or as the reply at the end of its thread. Gives
-/// whether a thread or a comment was added, which changes the rows of the pane; a new
-/// text alone changes none.
-///
-/// A save that names what the reviews do not hold, a review or a thread, is left out, and
-/// so is one that names a comment that was sent since: a sent comment is not edited.
+/// True when a thread or comment was added (the rows change); a new text alone returns false.
 pub(crate) fn apply(reviews: &mut WorkspaceReviews, save: &Save) -> bool {
     let Some(review) = reviews.reviews.iter_mut().find(|r| r.id == save.review) else {
         return false;
@@ -55,7 +42,6 @@ pub(crate) fn apply(reviews: &mut WorkspaceReviews, save: &Save) -> bool {
             resolved: false,
             addressed: false,
             comments: vec![draft(save)],
-            // A thread the pane started itself holds its draft and sits on its anchor.
             state: yaar_link::ThreadState::Draft,
             now: None,
         });
@@ -65,7 +51,6 @@ pub(crate) fn apply(reviews: &mut WorkspaceReviews, save: &Save) -> bool {
     }
 }
 
-/// The comment a save makes: a draft of the reviewer.
 fn draft(save: &Save) -> Comment {
     Comment {
         id: save.comment.clone(),
@@ -75,9 +60,6 @@ fn draft(save: &Save) -> Comment {
     }
 }
 
-/// A new id for a thread or a comment, as the Keeper draws its own: 16 bytes of
-/// `/dev/urandom` as 32 lowercase hexadecimal digits. Fails only when `/dev/urandom`
-/// cannot be read.
 pub(crate) fn new_id() -> io::Result<String> {
     let mut bytes = [0u8; 16];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
@@ -161,7 +143,6 @@ mod tests {
                 round: None
             }]
         );
-        // Every save of a new thread carries its anchor; only the first makes it.
         assert!(!apply(&mut held, &save(2, 't', 'c', Some(anchor()), "he")));
         assert_eq!(first_comment_texts(&held), [["he"]]);
     }
@@ -170,7 +151,6 @@ mod tests {
     fn a_save_of_a_comment_the_answer_holds_already_is_not_added_twice() {
         let mut held = reviews();
         assert!(apply(&mut held, &save(1, 't', 'c', Some(anchor()), "h")));
-        // The same save again, as when it is put over an answer that holds the thread.
         assert!(!apply(&mut held, &save(1, 't', 'c', Some(anchor()), "h")));
         assert_eq!(held.reviews[0].threads.len(), 1);
         assert_eq!(held.reviews[0].threads[0].comments.len(), 1);
@@ -183,7 +163,6 @@ mod tests {
         held.reviews[0].threads[0].comments[0].round = Some(1);
         assert!(apply(&mut held, &save(2, 't', 'd', None, "reply")));
         assert_eq!(first_comment_texts(&held), [["first", "reply"]]);
-        // A late save of the comment that was sent meanwhile changes nothing.
         assert!(!apply(
             &mut held,
             &save(3, 't', 'c', Some(anchor()), "late")
@@ -197,7 +176,6 @@ mod tests {
         let mut elsewhere = save(1, 't', 'c', Some(anchor()), "h");
         elsewhere.review = review_id('x');
         assert!(!apply(&mut held, &elsewhere));
-        // A reply to a thread that is not there has no anchor to make one from.
         assert!(!apply(&mut held, &save(2, 'u', 'd', None, "reply")));
         assert!(held.reviews[0].threads.is_empty());
     }

@@ -1,8 +1,3 @@
-//! How a review is delivered to Claude Code: what a hook's input asks of the app, what the
-//! app answers a message with, and which read of a file the app allows. The recorded hooks
-//! go in through the Adapter's calls, as the Keeper makes them (the report, then the question
-//! of what it waits for), and the answers come out as bytes.
-
 mod support;
 
 use std::io;
@@ -15,28 +10,20 @@ use yaar_system_tests::recorded::{self, HookRecord};
 
 use support::{Scratch, feed_asked};
 
-/// The recording of a session that reads a file of the reviews' folder: lines 0 to 3 are the
-/// start, the instructions loaded, the user's message and the `PreToolUse` of the read.
+/// Lines 0 to 3: the start, the instructions loaded, the user's message, the `PreToolUse` read.
 const READ_FILE: &str = "claude/review-file-read.jsonl";
 
-/// The recording of the dialogs: messages at lines 2, 10 and 15, a self-started one at 23.
+/// Messages at lines 2, 10 and 15, a self-started one at 23.
 const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 
-/// The recording of a turn with every kind of tool: a message at line 2, a self-started
-/// one at line 33.
+/// A message at line 2, a self-started one at line 33.
 const TURNS: &str = "claude/turn-tools.jsonl";
 
-/// The review of the delivery tests, and the round it starts.
 const REVIEW: &str = "R";
 
-/// A folder of the Adapter and a project folder, inside one scratch folder: the Adapter's
-/// folder is not made, as it is not before the app first writes there.
 struct Place {
-    /// Removes everything when the test ends.
     _scratch: Scratch,
-    /// The Adapter's own folder of the app.
     folder: PathBuf,
-    /// The folder the recorded session works in, moved here from the recording's.
     project: PathBuf,
 }
 
@@ -53,18 +40,15 @@ impl Place {
         }
     }
 
-    /// The folder of reviews the Adapter's delivery writes into.
     fn reviews(&self) -> PathBuf {
         self.folder.join(REVIEWS)
     }
 
-    /// The record `line` of the recording `name`, as if it had been made in the project.
     fn record(&self, name: &str, line: usize) -> HookRecord {
         recorded::hook_events(name)[line].in_project(&self.project)
     }
 }
 
-/// Every file under `folder`, none when it is not there.
 fn files_under(folder: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return Vec::new();
@@ -82,13 +66,10 @@ fn files_under(folder: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// Claude Code's count of a string: UTF-16 code units.
 fn units(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
-/// What a JSON value is made of: the keys of every object and the kind of every other
-/// value, which is what Claude Code reads a hook's answer by.
 fn shape(value: &Value) -> Value {
     match value {
         Value::Object(fields) => Value::Object(
@@ -105,7 +86,6 @@ fn shape(value: &Value) -> Value {
     }
 }
 
-/// The shape of what a hook of the event `hook` prints, as the hand-made file gives it.
 fn answer_shape(hook: &str) -> Value {
     let shapes = recorded::hand_made_answers("claude-hook-answers.jsonl");
     let one = shapes
@@ -115,8 +95,6 @@ fn answer_shape(hook: &str) -> Value {
     shape(&one.stdout)
 }
 
-/// A review text of `characters` characters that starts with the instruction, as the
-/// Review engine renders it, and goes on with the cycle of `filler`'s characters.
 fn review(characters: usize, filler: &str) -> String {
     let mut text = String::from(INSTRUCTION);
     text.push_str("\n\n## Thread t1\n\n");
@@ -125,8 +103,6 @@ fn review(characters: usize, filler: &str) -> String {
     text
 }
 
-/// What the engine hands the delivery for `text`: the second round of review `R`, of two
-/// threads.
 fn rendered(text: &str) -> Rendered<'_> {
     Rendered {
         text,
@@ -136,15 +112,12 @@ fn rendered(text: &str) -> Rendered<'_> {
     }
 }
 
-/// The answer to the message `asked` stands for, as the hook's bytes.
 fn hand_out(adapter: &ClaudeCode, place: &Place, asked: &Asked, text: &str) -> io::Result<Vec<u8>> {
     adapter
         .delivery(&place.folder, asked)
         .hand_out(&rendered(text))
 }
 
-/// The session `review-file-read.jsonl` records, the Adapter that has heard its lines 0 to
-/// 3 (its folder under `place`), and the question line 2, the user's message, asked.
 fn heard_the_session(place: &Place) -> (ClaudeCode, Asked) {
     let mut adapter = ClaudeCode::new();
     let mut message = None;
@@ -157,14 +130,10 @@ fn heard_the_session(place: &Place) -> (ClaudeCode, Asked) {
     (adapter, message.expect("line 2 is the user's message"))
 }
 
-/// What a fresh Adapter says line 3 of the recording waits for, with `changes` made on its
-/// input (each named by the caller).
 fn read_asks(place: &Place, changes: impl FnOnce(&mut HookRecord)) -> Option<Asked> {
     read_asks_of(&mut ClaudeCode::new(), place, changes)
 }
 
-/// What `adapter` says line 3 of the recording waits for, with `changes` made on its input
-/// (each named by the caller): the Adapter may have heard the session's earlier lines.
 fn read_asks_of(
     adapter: &mut ClaudeCode,
     place: &Place,
@@ -175,9 +144,6 @@ fn read_asks_of(
     feed_asked(adapter, &place.folder, &record)
 }
 
-/// The file a pointer names and the line that asks to read it, from the answer's context:
-/// the path is the whole of the line it sits on, so a folder with a space in its name is
-/// one path.
 fn pointer_of(context: &str) -> (PathBuf, &str) {
     let after = context
         .strip_prefix(INSTRUCTION)
@@ -191,7 +157,6 @@ fn pointer_of(context: &str) -> (PathBuf, &str) {
     (PathBuf::from(lines[at[0]]), request)
 }
 
-/// The record of the read of `path`, in a session of its own id.
 fn reading(path: &Path, session: &str) -> impl FnOnce(&mut HookRecord) {
     let path = path.to_string_lossy().into_owned();
     let session = session.to_owned();
@@ -213,7 +178,6 @@ fn a_message_of_the_user_is_what_a_delivery_waits_for_and_a_short_review_rides_i
     let session = asked.session.clone();
     assert_eq!(session.0, place.record(READ_FILE, 2).session());
 
-    // Exactly the limit, in UTF-16 units.
     let text = review(INLINE_LIMIT, "x");
     assert_eq!(units(&text), INLINE_LIMIT);
     let answer = parsed(&hand_out(&adapter, &place, &asked, &text).expect("a delivery"));
@@ -238,8 +202,6 @@ fn a_message_of_the_user_is_what_a_delivery_waits_for_and_a_short_review_rides_i
     assert_eq!(files_under(&place.reviews()), Vec::<PathBuf>::new());
 }
 
-/// A text that is over the limit: delivered as a file under the session's folder of reviews,
-/// with a pointer in the answer; the answer and the file put together equal the text.
 fn assert_delivered_as_a_file(place: &Place, adapter: &ClaudeCode, asked: &Asked, text: &str) {
     let answer = parsed(&hand_out(adapter, place, asked, text).expect("a delivery"));
 
@@ -339,8 +301,6 @@ fn the_read_of_the_file_that_was_delivered_is_allowed_and_no_other_read_is() {
     let (delivered, _) = pointer_of(context);
     let session = asked.session.0.clone();
 
-    // The one field of line 3 that changes is the file it reads (and, where named, the
-    // session). The Adapter that heard lines 0 to 3 is asked it, as the Keeper does.
     let mut heard = adapter;
     let allowed =
         read_asks_of(&mut heard, &place, reading(&delivered, &session)).expect("the read is asked");
@@ -351,15 +311,12 @@ fn the_read_of_the_file_that_was_delivered_is_allowed_and_no_other_read_is() {
     assert_eq!(allow["hookSpecificOutput"]["hookEventName"], "PreToolUse");
     assert_eq!(allow["hookSpecificOutput"]["permissionDecision"], "allow");
 
-    // The Keeper started again (a second Adapter, which heard nothing): the rule needs
-    // nothing the first one heard.
     let after_restart = read_asks(&place, reading(&delivered, &session));
     assert_eq!(
         after_restart.map(|asked| asked.asks),
         Some(Asks::ReadOwnFile)
     );
 
-    // A path that goes up and comes back down inside the folder is that file.
     let roundabout = place
         .reviews()
         .join(&session)
@@ -371,10 +328,8 @@ fn the_read_of_the_file_that_was_delivered_is_allowed_and_no_other_read_is() {
         Some(Asks::ReadOwnFile)
     );
 
-    // Line 3 as recorded: a file outside the project and the folder.
     assert_eq!(read_asks(&place, |_| {}), None);
 
-    // The file of this session, asked by another session, which has a folder of its own.
     std::fs::create_dir_all(place.reviews().join("another-session")).expect("make the folder");
     assert_eq!(
         read_asks(&place, reading(&delivered, "another-session")),
@@ -382,24 +337,20 @@ fn the_read_of_the_file_that_was_delivered_is_allowed_and_no_other_read_is() {
         "session id changed along with the file"
     );
 
-    // A path that leaves the folder, to a file that is there.
     let outside = place.reviews().join("other.md");
     std::fs::write(&outside, "not a delivery").expect("write");
     let leaving = place.reviews().join(&session).join("..").join("other.md");
     assert!(leaving.exists());
     assert_eq!(read_asks(&place, reading(&leaving, &session)), None);
 
-    // A link inside the folder to a file outside it.
     let link = place.reviews().join(&session).join("link.md");
     std::os::unix::fs::symlink(&outside, &link).expect("make the link");
     assert_eq!(read_asks(&place, reading(&link, &session)), None);
 
-    // A session id that names the folder's own parent is no folder of reviews.
     let secret = place.folder.join("secret.txt");
     std::fs::write(&secret, "not a review").expect("write");
     assert_eq!(read_asks(&place, reading(&secret, "..")), None);
 
-    // Only the read tool is allowed to read it.
     for tool in ["Write", "Edit", "Bash"] {
         let asks = read_asks(&place, |record| {
             reading(&delivered, &session)(record);
@@ -412,8 +363,7 @@ fn the_read_of_the_file_that_was_delivered_is_allowed_and_no_other_read_is() {
 #[test]
 fn the_read_of_the_delivered_file_is_allowed_when_the_path_of_the_adapters_folder_holds_a_link() {
     let mut place = Place::new();
-    // The folder is given through a link that leads back to the scratch folder, as a data
-    // folder under /var is on macOS, where /var links to /private/var.
+    // The folder is given through a link, as a data folder under /var is on macOS.
     let link = place._scratch.path().join("linked");
     std::os::unix::fs::symlink(place._scratch.path(), &link).expect("make the link");
     place.folder = link.join("agents").join("claude");
@@ -449,7 +399,6 @@ fn the_read_of_the_delivered_file_is_allowed_when_the_path_of_the_adapters_folde
         );
     }
 
-    // Through the link, the folder of another session is still no folder of this one.
     std::fs::create_dir_all(place.reviews().join("another-session")).expect("make the folder");
     assert_eq!(
         read_asks(&place, reading(&delivered, "another-session")),
@@ -511,7 +460,6 @@ fn a_folder_that_cannot_be_written_fails_the_delivery_of_a_long_review() {
     let place = Place::new();
     let (adapter, asked) = heard_the_session(&place);
     std::fs::create_dir_all(place.folder.parent().expect("a parent")).expect("make the parent");
-    // A file where the folder of reviews should be.
     std::fs::write(&place.folder, "not a folder").expect("write");
 
     let failed = hand_out(&adapter, &place, &asked, &review(INLINE_LIMIT + 1, "x"));
@@ -522,7 +470,6 @@ fn a_folder_that_cannot_be_written_fails_the_delivery_of_a_long_review() {
     );
 }
 
-/// The answer of each prompt a session heard, in order, read as what it waits for.
 fn asks_of(name: &str, place: &Place, lines: std::ops::RangeInclusive<usize>) -> Vec<Option<Asks>> {
     let mut adapter = ClaudeCode::new();
     let records = recorded::hook_events(name);
@@ -563,7 +510,6 @@ fn the_answer_to_a_permission_prompt_asks_nothing_and_the_users_next_message_ask
     assert_eq!(asking, [2, 10], "only the user's two messages ask");
     assert_eq!(asks[2], Some(Asks::Message));
     assert_eq!(asks[10], Some(Asks::Message));
-    // The prompt itself (4) and the answer to it (6) ask for no review.
     assert_eq!(asks[4], None);
     assert_eq!(asks[6], None);
 }
@@ -572,17 +518,14 @@ fn the_answer_to_a_permission_prompt_asks_nothing_and_the_users_next_message_ask
 fn a_message_claude_code_starts_itself_asks_nothing_and_the_next_one_the_user_types_asks() {
     let place = Place::new();
 
-    // A turn of tools, then the message of a background task that finished.
     let turns = asks_of(TURNS, &place, 0..=33);
     assert_eq!(turns[2], Some(Asks::Message));
     assert_eq!(turns[33], None, "line 33 opens with <task-notification>");
 
-    // The same after a permission prompt: line 23 is the self-started message.
     let dialogs = asks_of(DIALOGS, &place, 0..=23);
     assert_eq!(dialogs[15], Some(Asks::Message));
     assert_eq!(dialogs[23], None);
 
-    // A message the user types after one Claude Code started.
     let mut adapter = ClaudeCode::new();
     let asks: Vec<_> = recorded::hand_made_hook_events("claude-typed-after-self-started.jsonl")
         .iter()

@@ -1,12 +1,10 @@
-//! Whether a round shows as sent: until its agent's first edit after the send. Built by
-//! the engine's package "rounds and what changed since" of slice 6.
+//! Whether a round shows as sent: until its agent's first edit after the send.
 
 use super::Review;
 
 impl Review {
-    /// The agent the review belongs to reported an edit: the newest round, when it is not
-    /// edited yet, is edited from now on, whatever way it was sent. Gives its number then;
-    /// none when nothing changed, as for a round edited already, or no round.
+    /// The newest round, when not yet edited, is edited from now on, however it was sent. Gives
+    /// its number; none when nothing changed.
     pub fn agent_edited(&mut self) -> Option<u32> {
         let newest = self.record.rounds.last_mut()?;
         if newest.edited {
@@ -16,10 +14,8 @@ impl Review {
         Some(newest.number)
     }
 
-    /// Whether the round shows as sent: it was sent and its agent reported no edit since.
-    /// False for a round the review does not hold. An edit is kept on the newest round
-    /// only, and one reported since a round's send is one kept on that round or a later
-    /// one, so a round is shown as sent while no round from it on is edited.
+    /// False for a round the review does not hold. An edit is kept on the newest round only, so
+    /// a round shows as sent while no round from it on is edited.
     pub fn shows_sent(&self, round: u32) -> bool {
         let rounds = &self.record.rounds;
         let Some(at) = rounds.iter().position(|held| held.number == round) else {
@@ -41,7 +37,6 @@ mod tests {
         Review::new(ReviewId::new("r"), WorkspaceId::new("w"), None)
     }
 
-    // A thread `n` with one draft, on the first line of a file.
     fn draft(review: &mut Review, n: u32) {
         let anchor = Anchor {
             tree: "S0".to_string(),
@@ -78,7 +73,6 @@ mod tests {
         assert!(!review.shows_sent(1));
         assert!(review.rounds()[0].edited);
 
-        // A second report of an edit changes nothing, and says so.
         let kept = review.clone();
         assert_eq!(review.agent_edited(), None);
         assert_eq!(review, kept);
@@ -120,11 +114,9 @@ mod tests {
             .send(Scope::Everything, "S2", SentBy::Delivered)
             .expect("send");
 
-        // No edit was reported yet: both rounds still show as sent.
         assert!(review.shows_sent(1));
         assert!(review.shows_sent(2));
 
-        // The edit comes after both sends: it is the first one since either.
         assert_eq!(review.agent_edited(), Some(2));
         assert!(!review.shows_sent(1));
         assert!(!review.shows_sent(2));

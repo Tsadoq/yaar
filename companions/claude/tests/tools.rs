@@ -1,7 +1,5 @@
-//! The reply tool's server speaks MCP as Claude Code does and hands the agent's replies to
-//! the Keeper whole: the built `yaar-claude-tools` is run, the test writes it the messages
-//! of the recorded trace of a Claude Code session, and plays the Keeper's end of the socket
-//! to read what the server sent and to answer it.
+//! The built `yaar-claude-tools` is run on the messages of a recorded Claude Code session; the test
+//! plays the Keeper's end of the socket.
 
 use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
@@ -23,22 +21,17 @@ use yaar_link::{
 };
 use yaar_system_tests::recorded::{self, Direction};
 
-/// The recorded trace of Claude Code speaking MCP with a tool server.
 const TRACE: &str = "claude/reply-tool-mcp.jsonl";
 
-/// What a test waits for at most when it does not expect to wait at all.
 const PATIENCE: Duration = Duration::from_secs(20);
 
-/// The session id the server's environment names.
 const SESSION: &str = "s1";
 
-/// A folder of this test's own, which is also the folder the server is started in.
 struct Scratch {
     folder: PathBuf,
 }
 
 impl Scratch {
-    /// A folder for the user alone, under a short path.
     fn new() -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -52,7 +45,6 @@ impl Scratch {
         Self { folder }
     }
 
-    /// Where the Keeper is wanted.
     fn socket(&self) -> PathBuf {
         self.folder.join("keeper.sock")
     }
@@ -64,11 +56,8 @@ impl Drop for Scratch {
     }
 }
 
-/// How the test's Keeper answers one report: none holds the connection and says nothing.
 type Behaviour = Box<dyn Fn(&AgentReport) -> Option<Result<Reply, Refusal>> + Send + Sync>;
 
-/// The Keeper's end of the socket: it accepts every connection, reads what the server
-/// sent, and tells the test each report it got.
 struct Keeper {
     reports: Receiver<AgentReport>,
     stop: Arc<AtomicBool>,
@@ -77,8 +66,6 @@ struct Keeper {
 }
 
 impl Keeper {
-    /// Binds the Keeper at `socket` and answers each report as `behaviour` says, with a
-    /// hello of the protocol `protocol`.
     fn start(socket: &Path, protocol: u16, behaviour: Behaviour) -> Self {
         let listener = UnixListener::bind(socket).expect("bind the Keeper's socket");
         let (tell, reports) = mpsc::channel();
@@ -103,14 +90,12 @@ impl Keeper {
         }
     }
 
-    /// The next report the server sent, within [`PATIENCE`] and no longer.
     fn report(&self) -> AgentReport {
         self.reports
             .recv_timeout(PATIENCE)
             .expect("the server sent a report")
     }
 
-    /// The reports that are there now and have not been taken.
     fn reports_waiting(&self) -> Vec<AgentReport> {
         self.reports.try_iter().collect()
     }
@@ -127,7 +112,6 @@ impl Drop for Keeper {
     }
 }
 
-/// One connection of the server: its hello, then its report, answered as `behaviour` says.
 fn converse(
     mut stream: UnixStream,
     protocol: u16,
@@ -158,7 +142,6 @@ fn converse(
     }
 }
 
-/// The server, run as Claude Code runs it.
 struct Server {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -166,8 +149,6 @@ struct Server {
 }
 
 impl Server {
-    /// Starts the built server in `scratch`'s folder with an environment of its own: the
-    /// socket wanted, the terminal `t1`, and `session` as Claude Code's session id.
     fn start(scratch: &Scratch, session: Option<&str>) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_yaar-claude-tools"));
         command
@@ -213,7 +194,6 @@ impl Server {
         }
     }
 
-    /// Writes `bytes` and a line end to the server.
     fn send_raw(&mut self, bytes: &[u8]) {
         let stdin = self.stdin.as_mut().expect("the server's input is open");
         stdin.write_all(bytes).expect("write to the server");
@@ -221,12 +201,10 @@ impl Server {
         stdin.flush().expect("flush to the server");
     }
 
-    /// Writes one JSON-RPC message.
     fn send(&mut self, message: &Value) {
         self.send_raw(message.to_string().as_bytes());
     }
 
-    /// The next line the server wrote, as JSON, within `patience`.
     fn next_within(&self, patience: Duration) -> Value {
         let line = self
             .lines
@@ -235,12 +213,10 @@ impl Server {
         serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON ({e}): {line}"))
     }
 
-    /// The next line the server wrote, as JSON, within [`PATIENCE`].
     fn next(&self) -> Value {
         self.next_within(PATIENCE)
     }
 
-    /// Ends the server's input, as Claude Code does when it stops, and waits for it to go.
     fn finish(mut self) -> ExitStatus {
         drop(self.stdin.take());
         self.child.wait().expect("wait for the server")
@@ -254,29 +230,23 @@ impl Drop for Server {
     }
 }
 
-/// The messages Claude Code sent in the recorded trace, by line.
 fn recorded_in(line: usize) -> Value {
     let message = recorded::mcp_messages(TRACE).swap_remove(line);
     assert_eq!(message.direction, Direction::In, "line {line} of the trace");
     message.message
 }
 
-/// Line 7 of the trace, a call of the reply tool, with `arguments.body` set to `body`: the
-/// one field changed.
 fn call_with_body(body: &str) -> Value {
     let mut call = recorded_in(7);
     call["params"]["arguments"]["body"] = Value::String(body.to_owned());
     call
 }
 
-/// A result of the kind the Keeper's Adapter writes for a kept reply, for a body of
-/// `characters` characters.
 fn kept(characters: usize) -> Value {
     json!({"content": [{"type": "text",
         "text": format!("recorded reply to T1 (addressed, {characters} characters)")}]})
 }
 
-/// A Keeper that answers every report with a result that names the body's length.
 fn keeper_that_keeps(scratch: &Scratch) -> Keeper {
     Keeper::start(
         &scratch.socket(),
@@ -290,7 +260,6 @@ fn keeper_that_keeps(scratch: &Scratch) -> Keeper {
     )
 }
 
-/// A Keeper that answers every report with `reply`.
 fn keeper_that_answers(scratch: &Scratch, reply: Result<Reply, Refusal>) -> Keeper {
     Keeper::start(
         &scratch.socket(),
@@ -299,7 +268,6 @@ fn keeper_that_answers(scratch: &Scratch, reply: Result<Reply, Refusal>) -> Keep
     )
 }
 
-/// What an error result of the agent's tool says, when `answer` is one.
 fn error_text(answer: &Value) -> String {
     assert_eq!(
         answer["result"]["isError"], true,
@@ -322,14 +290,12 @@ fn the_server_answers_claude_codes_opening_messages_and_lists_one_tool_that_cann
     let keeper = keeper_that_keeps(&scratch);
     let mut server = Server::start(&scratch, Some(SESSION));
 
-    // Line 0, the probe for a protocol the server does not speak.
     server.send(&recorded_in(0));
     let probe = server.next();
     assert_eq!(probe["id"], recorded_in(0)["id"]);
     assert_eq!(probe["error"]["code"], -32601, "{probe}");
     assert!(probe.get("result").is_none(), "{probe}");
 
-    // Line 2, `initialize`: the version Claude Code asked for, the server's name.
     server.send(&recorded_in(2));
     let initialized = server.next();
     assert_eq!(initialized["jsonrpc"], "2.0");
@@ -345,8 +311,7 @@ fn the_server_answers_claude_codes_opening_messages_and_lists_one_tool_that_cann
         "it says it serves tools: {initialized}"
     );
 
-    // The same line with its one field `params.protocolVersion` changed to a version the
-    // server has no reason to name unasked: it comes back as asked, not as a constant.
+    // Only `params.protocolVersion` changed: it must come back as asked, not as a constant.
     let mut other_version = recorded_in(2);
     other_version["params"]["protocolVersion"] = json!("2026-07-28");
     assert_ne!(
@@ -358,14 +323,12 @@ fn the_server_answers_claude_codes_opening_messages_and_lists_one_tool_that_cann
     assert_eq!(asked_again["id"], 0);
     assert_eq!(asked_again["result"]["protocolVersion"], "2026-07-28");
 
-    // Line 4 is a notification: nothing is written for it. The barrier is the answer to
-    // the next message, which is the next line the server writes.
+    // A notification gets no answer; the barrier is the answer to the next message.
     server.send(&recorded_in(4));
     server.send(&recorded_in(5));
     let listed = server.next();
     assert_eq!(listed["id"], 1, "nothing was written for the notification");
 
-    // Line 5, `tools/list`: exactly the one tool, with exactly the three arguments.
     let tools = listed["result"]["tools"]
         .as_array()
         .expect("a list of tools");
@@ -399,7 +362,7 @@ fn the_server_answers_claude_codes_opening_messages_and_lists_one_tool_that_cann
     required.sort_unstable();
     assert_eq!(required, ["body", "thread"]);
 
-    // Listing is not a call: the Keeper heard nothing, as the next call shows is the first.
+    // Listing is not a call: the Keeper has heard nothing yet.
     server.send(&call_with_body("first"));
     server.next();
     let first = keeper.report();
@@ -428,8 +391,8 @@ fn a_ping_is_answered_empty_an_unknown_method_is_not_found_and_a_line_that_is_no
     assert_eq!(unknown["id"], 9);
     assert_eq!(unknown["error"]["code"], -32601, "{unknown}");
 
-    // A call of a tool the server does not list is an error and reaches no Keeper; the
-    // barrier is the answer to a ping sent after it.
+    // A call of an unlisted tool reaches no Keeper; the barrier is the answer to a ping sent after
+    // it.
     let mut other = call_with_body("x");
     other["params"]["name"] = json!("resolve_thread");
     other["id"] = json!(10);
@@ -525,8 +488,6 @@ fn reply_bodies_with_quotes_backticks_line_breaks_and_shell_syntax_arrive_byte_f
 
 #[test]
 fn the_result_the_keeper_hands_back_reaches_the_agent_whole_an_error_result_too() {
-    // The kinds of result the Keeper's Adapter writes, and one with a key of its own: the
-    // agent is told what the Keeper said, an `isError` of a refused reply above all.
     let results = [
         (
             "a reply that was refused",
@@ -573,7 +534,6 @@ fn with_no_keeper_listening_a_call_is_an_error_the_agent_reads() {
     let scratch = Scratch::new();
     let mut server = Server::start(&scratch, Some(SESSION));
 
-    // No socket at all, then a socket file nobody listens at.
     server.send(&call_with_body("one"));
     let nothing_there = server.next();
     drop(UnixListener::bind(scratch.socket()).expect("bind a socket"));
@@ -675,7 +635,6 @@ fn a_keeper_that_never_answers_is_waited_for_until_the_tool_deadline_and_no_less
         started.elapsed()
     );
     assert_eq!(error_text(&answer), "the app did not answer in time");
-    // The server goes on: the next message is answered.
     server.send(&json!({"jsonrpc": "2.0", "id": 5, "method": "ping"}));
     assert_eq!(server.next()["id"], 5);
 }

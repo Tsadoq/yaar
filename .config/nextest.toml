@@ -1,11 +1,7 @@
 # Settings of `cargo nextest`, which CI runs the tests with.
 
-# Four system tests hold a Keeper to a time or load it heavily: the agent that a client
-# which reads nothing may not slow (HOLD-06), the fifty clients killed in a flood
-# (HOLD-02), the quit that stops everything within 3 s (HOLD-03), and the turn of two
-# hundred hooks that a client that left must find kept (HOLD-01). Run beside each other,
-# their own load would be what they measure. They run one at a time; every other test
-# runs as it did.
+# System tests that hold a Keeper to a time or load it heavily run one at a time: beside each other,
+# their own load would be what they measure.
 [test-groups]
 timed = { max-threads = 1 }
 
@@ -13,10 +9,8 @@ timed = { max-threads = 1 }
 filter = "package(yaar-system-tests) & (binary(keeping) | binary(holding))"
 test-group = "timed"
 
-# The three tests that run rust-analyzer: it loads every core for seconds, and run beside
-# other tests it makes the Keeper tests that hold a time, the quit that stops everything
-# within 3 s among them, take longer than their limits, which are not raised. Each takes
-# every test thread, so that nothing runs beside it.
+# The tests that run rust-analyzer load every core for seconds and would push the timed
+# Keeper tests past their limits, so each takes every test thread.
 [[profile.default.overrides]]
 filter = "package(yaar-navigator) & (binary(=real) | binary(=old_real) | binary(=downloaded)) & test(rust)"
 threads-required = "num-test-threads"

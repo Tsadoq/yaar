@@ -1,7 +1,3 @@
-//! The reply tool's end of the Adapter: a call of the tool server is a report that asks to
-//! keep a reply, the agent's permission to call the tool is allowed, and what the app answers
-//! comes out as the call's result.
-
 mod support;
 
 use std::path::Path;
@@ -17,7 +13,6 @@ use support::feed_asked;
 /// tool: its `PreToolUse` of the tool is line 11, the `PostToolUse` after it line 12.
 const REPLIES: &str = "claude/reply-tool-hooks.jsonl";
 
-/// What the tool server writes for a call of `arguments`, as the Keeper's report.
 fn call(arguments: Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "tool_server": TOOL_SERVER_NAME,
@@ -29,7 +24,6 @@ fn call(arguments: Value) -> Vec<u8> {
     .expect("JSON is written")
 }
 
-/// The report of a call, from terminal `t` and process 41.
 fn report(payload: &[u8]) -> Report<'_> {
     Report {
         terminal: Some("t"),
@@ -153,11 +147,8 @@ fn the_agents_call_of_the_reply_tool_is_allowed_and_nothing_after_it_asks() {
     assert_eq!(asks[11], Some(Asks::OwnTool));
     assert_eq!(asks[13], Some(Asks::OwnTool), "each call is allowed");
     for line in [3, 4, 6, 7, 8, 9, 12] {
-        // The read of the project's own file, the search, the edit and the PostToolUse of the
-        // tool.
         assert_eq!(asks[line], None, "line {line}: {}", records[line].event);
     }
-    // The permission to call the tool tells the app nothing of the agent's steps.
     let events = adapter.report(&Report {
         terminal: records[11].terminal(),
         pid: records[11].parent,

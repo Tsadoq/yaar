@@ -347,7 +347,7 @@ kitty3	pagedown	1b5b367e	ghostty m-ghostty-kitty7 plain+pagedown
 kitty3	alt-pagedown	1b5b363b337e	ghostty m-ghostty-kitty7 a+pagedown
 kitty3	ctrl-pagedown	1b5b363b357e	ghostty m-ghostty-kitty7 c+pagedown
 kitty3	cmd-pagedown		ghostty m-ghostty-kitty7 m+pagedown (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
-kitty3	cmd-backspace	15	not compared: not in Ghostty's matrix: the app's own line edit, from ADR-018's table	macos
+kitty3	cmd-backspace	15	not compared: not in Ghostty's matrix: the app's own line edit	macos
 kitty3	f1	1b5b50	ghostty m-ghostty-kitty7 plain+f1 (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	f2	1b5b51	ghostty m-ghostty-kitty7 plain+f2 (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	f3	1b5b31337e	ghostty m-ghostty-kitty7 plain+f3
@@ -805,7 +805,7 @@ kitty3-release	pagedown	1b5b363b313a337e	ghostty m-ghostty-kitty7 plain+pagedown
 kitty3-release	alt-pagedown	1b5b363b333a337e	ghostty m-ghostty-kitty7 a+pagedown
 kitty3-release	ctrl-pagedown	1b5b363b353a337e	ghostty m-ghostty-kitty7 c+pagedown
 kitty3-release	cmd-pagedown		ghostty m-ghostty-kitty7 m+pagedown	macos
-kitty3-release	cmd-backspace		not compared: not in Ghostty's matrix: the app's own line edit, from ADR-018's table	macos
+kitty3-release	cmd-backspace		not compared: not in Ghostty's matrix: the app's own line edit	macos
 kitty3-release	f1	1b5b313b313a3350	ghostty m-ghostty-kitty7 plain+f1
 kitty3-release	f2	1b5b313b313a3351	ghostty m-ghostty-kitty7 plain+f2
 kitty3-release	f3	1b5b31333b313a337e	ghostty m-ghostty-kitty7 plain+f3

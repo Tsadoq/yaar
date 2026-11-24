@@ -1,6 +1,3 @@
-//! One terminal: the master of its pseudo-terminal, the queue of what is typed to it, and
-//! the three threads that serve it.
-
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::ExitStatusExt;
 use std::process::Child;
@@ -14,23 +11,19 @@ use crate::queue::Input;
 use crate::ring::Ring;
 use crate::{Ending, Event, Events, Inner, MAX_WAITING_INPUT, TerminalId};
 
-/// How long after the program was collected the Dock waits for the terminal to close:
-/// a process the program left behind can hold it open for ever.
+/// How long after the program is collected the Dock waits for the terminal to close: a leftover
+/// process can hold it open for ever.
 const LEFTOVER_WAIT: Duration = Duration::from_secs(1);
 
-/// What one read takes at most.
 const READ_SIZE: usize = 32 * 1024;
 
-/// What one write hands the terminal at most: a program's terminal takes only what its
-/// line discipline holds, and the writer looks again at whether it should go on between
-/// two pieces.
+/// A terminal takes only what its line discipline holds; the writer re-checks between pieces.
 const WRITE_SIZE: usize = 16 * 1024;
 
-/// The most `drain` reads: a process the program left behind may write for ever, and the
-/// terminal must still be let go.
+// The most `drain` reads: a leftover process may write for ever, and the terminal must still be let
+// go.
 const DRAIN_LIMIT: usize = 1024 * 1024;
 
-/// How the program ended, and when it was collected.
 #[derive(Clone, Copy)]
 struct Collected {
     ending: Ending,
@@ -39,17 +32,16 @@ struct Collected {
 
 pub(crate) struct Terminal {
     master: OwnedFd,
-    /// The program's id, which is also its session's.
+    /// Also the id of its session.
     pid: pid_t,
     input: Mutex<Input>,
     input_ready: Condvar,
-    /// The newest output, and the scan for marks. Held while an event of the output is
-    /// told, and while `attach` hands the ring over: see [`Terminal::attach`].
+    /// Held while an event of the output is told and while `attach` hands the ring over.
     ring: Mutex<Ring>,
     collected: Mutex<Option<Collected>>,
     collected_ready: Condvar,
-    /// A byte is written to the pipe once the program was collected, and stays there:
-    /// the threads that wait for the master wait for the pipe too.
+    /// Written once the program is collected and never read: threads waiting for the master poll it
+    /// too.
     wake_read: OwnedFd,
     wake_write: OwnedFd,
 }
@@ -88,7 +80,7 @@ impl Terminal {
         self.master.as_raw_fd()
     }
 
-    /// Queues what is typed. `false` when the program has ended and nothing is taken.
+    /// `false` when the program has ended and nothing is taken.
     pub(crate) fn type_in(&self, bytes: &[u8]) -> bool {
         let mut input = locked(&self.input);
         if input.is_closed() {
@@ -100,15 +92,11 @@ impl Terminal {
         true
     }
 
-    /// Takes nothing more for the program and drops what waits: the program is being
-    /// stopped, and what is typed into a terminal whose programs are dying only keeps the
-    /// terminal busy.
     pub(crate) fn stop_typing(&self) {
         locked(&self.input).close();
         self.input_ready.notify_all();
     }
 
-    /// Collects the program and tells the other threads.
     pub(crate) fn wait_for_program(&self, mut child: Child) {
         let ending = match child.wait() {
             Ok(status) => match (status.code(), status.signal()) {
@@ -125,11 +113,9 @@ impl Terminal {
         self.collected_ready.notify_all();
         locked(&self.input).close();
         self.input_ready.notify_all();
-        // A failed write only means the threads have gone already.
         let _ = pty::write(self.wake_write.as_raw_fd(), &[1]);
     }
 
-    /// Writes what is typed to the program, in order, until the program is collected.
     pub(crate) fn write_input(&self) {
         let master = self.master();
         'chunks: loop {
@@ -150,8 +136,8 @@ impl Terminal {
             };
             let mut offset = 0;
             while offset < chunk.len() {
-                // Looked at between every two writes: a stop must not wait for a long
-                // chunk to be fed into a terminal that is going away.
+                // Looked at between every two writes: a stop must not wait for a long chunk to be
+                // fed into a terminal that is going away.
                 if locked(&self.input).is_closed() {
                     break 'chunks;
                 }
@@ -162,7 +148,6 @@ impl Terminal {
                         locked(&self.input).written(count);
                     }
                     Ok(None) => {
-                        // The program reads nothing now: wait for room, or for its end.
                         match pty::wait(
                             master,
                             libc::POLLOUT,
@@ -177,21 +162,17 @@ impl Terminal {
                 }
             }
         }
-        // Whatever ended this, nothing more can be written.
         locked(&self.input).close();
     }
 
-    /// Tells what the program writes until its terminal is closed, then how it ended.
     pub(crate) fn tell_events(&self, inner: &Arc<Inner>, id: &TerminalId, mut events: Events) {
         // Counts the end as told whatever happens below, also when `events` panics.
         let retired = Retired { inner, id };
         self.read_to_the_end(&mut events);
         let ending = self.wait_until_collected();
-        // A process the program left behind stays the Dock's to stop. It is noted before
-        // the terminal is forgotten, so that a stop finds the session in one list or the
-        // other.
+        // A leftover process stays the Dock's to stop. Noted before the terminal is forgotten, so a
+        // stop finds the session in one list or the other.
         inner.leave_behind(self.pid);
-        // The terminal no longer runs a program once the end is told.
         inner.forget(id);
         events(Event::Ended(ending));
         drop(retired);
@@ -207,7 +188,6 @@ impl Terminal {
                 Some(at) => {
                     let left = LEFTOVER_WAIT.saturating_sub(at.elapsed());
                     if left.is_zero() {
-                        // A process the program left behind holds the terminal open.
                         self.drain(events, &mut buffer);
                         return;
                     }
@@ -235,9 +215,8 @@ impl Terminal {
         }
     }
 
-    /// Keeps what the program wrote and tells it, then each mark it completed, all under
-    /// the lock `attach` takes: an attach runs before this read is kept and told, or after,
-    /// never between.
+    /// Keeps and tells the read, then its marks, under the lock `attach` takes: an attach runs
+    /// before or after this read, never between.
     fn tell_output(&self, events: &mut Events, bytes: &[u8]) {
         let mut ring = locked(&self.ring);
         let marks = ring.push(bytes);
@@ -247,17 +226,14 @@ impl Terminal {
         }
     }
 
-    /// Hands `attach` the kept output while no event of this terminal is told: the events
-    /// told before are in the ring, those told after are not, and the caller, which adds
-    /// itself to where the events go inside `attach`, gets each byte once.
+    /// Events told before are in the ring, those after are not, so a caller that adds itself to the
+    /// targets inside `attach` gets each byte once.
     pub(crate) fn attach(&self, attach: impl FnOnce(&[u8], bool)) {
         let mut ring = locked(&self.ring);
         let (kept, dropped) = ring.kept();
         attach(kept, dropped);
     }
 
-    /// Reads what the terminal holds now, and no more than a bounded amount: a process the
-    /// program left behind may keep writing, and the terminal then never runs dry.
     fn drain(&self, events: &mut Events, buffer: &mut [u8]) {
         let master = self.master();
         let mut read = 0;
@@ -292,8 +268,6 @@ impl Terminal {
     }
 }
 
-/// Makes sure the Dock hears that a terminal's events are over, whichever way the thread
-/// that tells them ends.
 struct Retired<'a> {
     inner: &'a Arc<Inner>,
     id: &'a TerminalId,

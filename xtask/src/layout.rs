@@ -1,43 +1,29 @@
-//! The rules between the crates of the workspace, checked on what Cargo itself reports.
-//!
-//! 1. No `*-pane` crate depends on another `*-pane` crate.
-//! 2. No crate of the Keeper, no shared crate and no companion has GPUI among its
-//!    dependencies.
-//! 3. No crate of the Window depends on a crate of the Keeper, nor the reverse.
-//! 4. Only `yaar-keeper` depends on an Adapter, and an Adapter depends on shared crates
-//!    only.
-//! 5. The programs the packages ship, as built for a user, hold no GPUI test support and
-//!    no `harness` feature.
-//!
-//! "Depends" means through normal and build dependencies, direct or not. What only a
-//! crate's tests use does not count.
+//! Rules: 1. No `*-pane` crate depends on another `*-pane` crate. 2. No Keeper crate, shared crate
+//! or companion has GPUI among its dependencies. 3. No Window crate depends on a Keeper crate, nor
+//! the reverse. 4. Only `yaar-keeper` depends on an Adapter, and an Adapter depends on shared
+//! crates only. 5. The programs the packages ship hold no GPUI test support and no `harness`
+//! feature. "Depends" means through normal and build dependencies, direct or not.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-/// Where a crate of the workspace lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Group {
     Shared,
     Keeper,
     Window,
     Companion,
-    /// The system tests and the xtask.
     Tooling,
 }
 
-/// The crates of the workspace and everything they depend on.
 #[derive(Debug, Default)]
 pub struct Graph {
-    /// Each crate of the workspace, by name.
     members: BTreeMap<String, Group>,
-    /// For every package, the packages it depends on outside of tests.
     needs: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Graph {
-    /// Reads the output of `cargo metadata --format-version 1`.
     pub fn from_metadata(json: &str) -> Result<Self, String> {
         let meta: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
         let root = meta["workspace_root"].as_str().ok_or("no workspace_root")?;
@@ -84,7 +70,6 @@ impl Graph {
         Ok(graph)
     }
 
-    /// Everything `name` depends on, directly or not.
     fn closure(&self, name: &str) -> BTreeSet<&str> {
         let mut seen = BTreeSet::new();
         let mut todo: Vec<&str> = vec![name];
@@ -125,7 +110,6 @@ fn is_gpui(name: &str) -> bool {
     name.starts_with("gpui")
 }
 
-/// Rules 1 to 4. Returns one sentence per breach.
 pub fn check(graph: &Graph) -> Vec<String> {
     let mut breaches = Vec::new();
     for (name, group) in &graph.members {
@@ -184,9 +168,8 @@ pub fn check(graph: &Graph) -> Vec<String> {
     breaches
 }
 
-/// Rule 5, on the lines `name version (path)|feature,feature` that
-/// `cargo tree -e normal,build --prefix none -f "{p}|{f}"` prints for the programs the
-/// packages ship.
+/// Rule 5, on the `name version (path)|feature,feature` lines of `cargo tree -e normal,build
+/// --prefix none -f "{p}|{f}"`.
 pub fn check_shipped_features(tree: &str) -> Vec<String> {
     let mut breaches = BTreeSet::new();
     for line in tree.lines() {
@@ -211,7 +194,6 @@ pub fn check_shipped_features(tree: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// A small workspace that keeps every rule.
     fn sound() -> Graph {
         let mut graph = Graph::default();
         for (name, group) in [
@@ -279,7 +261,6 @@ mod tests {
     #[test]
     fn gpui_in_the_keeper_breaks_rule_2_also_through_another_crate() {
         let found = breaches_of("yaar-dock", "gpui-pre");
-        // The Dock itself, and the Keeper program that depends on it.
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found.iter().all(|b| b.starts_with("rule 2")), "{found:?}");
         assert!(

@@ -1,6 +1,5 @@
-//! The tree of Changes: the history of the worktree above the files, which entry or range
-//! of entries the files are the change of, and the keys and clicks that move between
-//! them.
+//! The history of the worktree above the files, and which entry or range of entries the files are
+//! the change of.
 
 use std::ops::Range;
 
@@ -19,52 +18,34 @@ use crate::{
     MarkChange, ReviewPane, ShowChange,
 };
 
-/// How many entries of the tree are in view at the most. A longer history scrolls inside
-/// its own list, so that it never takes the files' room.
 const ENTRIES_IN_VIEW: usize = 8;
 
-/// Where the two versions of the files shown come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Source {
-    /// The comparison of the workspace, read as slice 1 reads it.
     Comparison,
-    /// Two versions the Keeper names: the old one, none where nothing came before, and
-    /// the new one, none for the files on disk.
+    /// The two versions the Keeper names: the old one (none where nothing came before), the new one
+    /// (none for the files on disk).
     Versions {
         old: Option<String>,
         new: Option<String>,
     },
 }
 
-/// Who is credited with each file of a list the Keeper made for a review: what
-/// `CompareForReview` answered, kept beside the files it listed.
 pub(crate) struct Credits {
-    /// The review the list was asked for.
     pub(crate) review: ReviewId,
-    /// The files with the sessions credited with them, as answered.
     pub(crate) files: Vec<CreditedFile>,
 }
 
-/// What the list of a change that starts at a version and ends at another was made for. It
-/// says whether the list is a review's own, and so is made again when another review is
-/// shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ListedFor {
-    /// No review: what changed since a round, a turn end of a session the pane holds no
-    /// review of, an entry or a range of the tree, the files on disk. It stays as it is when
-    /// another review is shown.
+    /// No review: a change since a round, a turn end of a session with no review here, an entry,
+    /// a range, the files on disk. It stays as it is when another review is shown.
     NoReview,
-    /// The review of a session, through `CompareForReview`: only the files it shows, each
-    /// with its credits.
     Review(ReviewId),
-    /// The review of no agent, through `CompareVersions`, as the review of a session that
-    /// was shown before it left the change on screen. A session's review shown next lists
-    /// the change again for itself.
     NoAgentReview,
 }
 
 impl ListedFor {
-    /// The review `CompareForReview` is asked for, if it is.
     fn review(&self) -> Option<&ReviewId> {
         match self {
             Self::Review(review) => Some(review),
@@ -73,44 +54,27 @@ impl ListedFor {
     }
 }
 
-/// What the pane holds of the tree of Changes.
 pub(crate) struct Tree {
-    /// The workspace the history and the uncommitted changes are of.
     pub(crate) of: Option<WorkspaceId>,
-    /// The history, as the Keeper last answered.
     pub(crate) history: Option<History>,
-    /// The last question for the history: of two answers, only the last asked counts.
     reading_history: Option<Task<()>>,
-    /// The uncommitted changes of the review shown, as the Keeper last answered.
     pub(crate) uncommitted: Option<Vec<CreditedFile>>,
-    /// The review the uncommitted changes were last asked for; none while they were not.
     uncommitted_for: Option<ReviewId>,
     reading_uncommitted: Option<Task<()>>,
-    /// The entry under the cursor.
     pub(crate) cursor: Option<usize>,
-    /// The entries marked for a range, in order.
     pub(crate) marked: Vec<usize>,
-    /// The focus of the tree: its keys work while it has it.
     pub(crate) focus: FocusHandle,
     scroll: UniformListScrollHandle,
-    /// The credits of the files last listed through `CompareForReview`; none when they were
-    /// listed by `CompareVersions`, which carries none (`shared.rs`).
     pub(crate) credits: Option<Credits>,
-    /// The change whose files the pane shows.
     pub(crate) shown: ChangeShown,
-    /// Whether `shown` is what the pane picked for a window that has no changes yet, and
-    /// not what the reviewer selected: the comparison takes its place when it comes.
+    /// Whether `shown` was picked by the pane for a window with no changes yet, not selected by the
+    /// reviewer.
     pub(crate) first_picture: bool,
-    /// Where the files of `shown` come from.
     pub(crate) wanted: Source,
-    /// What the list of `wanted` was asked for. It is kept with `wanted` and not read off
-    /// `credits`, which hold the review of the list last answered, not of the request still
-    /// on its way.
+    /// Kept apart from `credits`, which hold the review of the list last answered, not of the
+    /// request on its way.
     pub(crate) wanted_for: ListedFor,
-    /// The question for the files of an entry or a range, while one is on its way.
     pub(crate) listing: Option<Task<()>>,
-    /// What a turn end offered while the pane kept the selection; selecting anything
-    /// takes it away.
     pub(crate) offer: Option<Offer>,
 }
 
@@ -138,8 +102,6 @@ impl Tree {
     }
 }
 
-/// The version an entry stands for: a commit's id, or the state recorded at a turn's end;
-/// none for a turn whose state was not kept.
 fn version_of(entry: &HistoryEntry) -> Option<&str> {
     match entry {
         HistoryEntry::Commit(commit) => Some(&commit.id),
@@ -148,8 +110,6 @@ fn version_of(entry: &HistoryEntry) -> Option<&str> {
     }
 }
 
-/// The version a change that starts at entry `first` is counted from: the nearest version
-/// above it, or the history's start.
 fn before(history: &History, first: usize) -> Option<String> {
     history.entries[..first]
         .iter()
@@ -159,8 +119,8 @@ fn before(history: &History, first: usize) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The commit checked out: the newest commit of the history, or its start where it holds
-/// none. The uncommitted changes are counted from it.
+/// The newest commit, or the history's start where it holds none; the uncommitted changes are
+/// counted from it.
 pub(crate) fn checked_out(history: &History) -> Option<String> {
     history
         .entries
@@ -174,7 +134,6 @@ pub(crate) fn checked_out(history: &History) -> Option<String> {
 }
 
 impl ReviewPane {
-    /// How many entries the tree has: those of the history and the uncommitted changes.
     fn tree_len(&self) -> usize {
         self.tree
             .history
@@ -182,9 +141,6 @@ impl ReviewPane {
             .map_or(0, |history| history.entries.len() + 1)
     }
 
-    /// Whether the tree is drawn: the history is here and there is something in it to
-    /// select. A worktree with no commit and no turn and nothing uncommitted has no tree,
-    /// and its changes are drawn as they always were.
     pub(crate) fn has_tree(&self) -> bool {
         self.tree.history.as_ref().is_some_and(|history| {
             !history.entries.is_empty()
@@ -196,7 +152,6 @@ impl ReviewPane {
         })
     }
 
-    /// Whether the entry at `index` of the history can be selected.
     fn selectable(&self, index: usize) -> bool {
         self.tree
             .history
@@ -206,14 +161,11 @@ impl ReviewPane {
             .is_some()
     }
 
-    /// Takes up the workspace on screen: when it is another than the one the tree is of,
-    /// the tree is let go, and the history of the new one is asked for.
     pub(crate) fn follow_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let workspace = self.models.changes.read(cx).workspace().cloned();
         if workspace == self.tree.of {
             return;
         }
-        // The keys must not be left without a place: the rows take the focus the tree had.
         if self.tree.focus.is_focused(window) {
             self.focus.focus(window, cx);
         }
@@ -224,8 +176,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// Asks the Keeper for the history of the workspace on screen. Only the answer to the
-    /// last question is taken.
     pub(crate) fn read_history(&mut self, cx: &mut Context<Self>) {
         let Some(workspace) = self.tree.of.clone() else {
             return;
@@ -252,11 +202,9 @@ impl ReviewPane {
         }));
     }
 
-    /// Shows an answer for the history, and keeps what is selected in it when what was
-    /// selected is still there.
     fn history_answered(&mut self, history: History, cx: &mut Context<Self>) {
-        // An answer that tells nothing new, as the second of two questions asked close
-        // together, leaves what is shown as it is.
+        // An answer that tells nothing new (the second of two questions asked close together)
+        // changes nothing.
         if self.tree.history.as_ref() == Some(&history) {
             return;
         }
@@ -268,16 +216,11 @@ impl ReviewPane {
         }
         match self.tree.shown.clone() {
             ChangeShown::Entries { first, last } => {
-                // What was selected stays when the entries are still what they were; the
-                // files are asked for again only when the version they lead from or to
-                // has changed.
                 if !self.select_entries(first, last, !self.tree.first_picture, cx) {
                     self.back_to_comparison(cx);
                 }
             }
             ChangeShown::Uncommitted => {
-                // The files are read again only when the commit they are counted from
-                // is another.
                 let base = self.tree.history.as_ref().and_then(checked_out);
                 if self.tree.wanted
                     != (Source::Versions {
@@ -289,8 +232,8 @@ impl ReviewPane {
                 }
             }
             ChangeShown::Comparison => {
-                // A window that has no changes yet shows the last turn that was recorded:
-                // the history is read from the Keeper's records, and the changes need git.
+                // The history is read from the Keeper's records, the changes need git: show the
+                // last recorded turn meanwhile.
                 if self.changes.is_none()
                     && let Some(last) = self.tree.history.as_ref().and_then(|history| {
                         history.entries.iter().rposition(|entry| {
@@ -303,15 +246,11 @@ impl ReviewPane {
             }
             ChangeShown::Since { .. } => {}
         }
-        // Flow reads the newest turn of the history, and what a turn's change counts from
-        // where the turn says nothing.
         self.flow_history(cx);
         self.live_history(cx);
         cx.notify();
     }
 
-    /// Asks the Keeper for the uncommitted changes of the review shown. Nothing is asked
-    /// while the pane holds no review: they are asked for when it does.
     pub(crate) fn read_uncommitted(&mut self, cx: &mut Context<Self>) {
         let (Some(workspace), Some(review)) = (
             self.tree.of.clone(),
@@ -343,8 +282,6 @@ impl ReviewPane {
         }));
     }
 
-    /// The review shown may have changed: the uncommitted changes are those of the review
-    /// shown, so they are asked for again when it is another than the last asked for.
     pub(crate) fn review_shown(&mut self, cx: &mut Context<Self>) {
         let now = self.review().map(|review| &review.id);
         if now.is_some() && self.tree.uncommitted_for.as_ref() != now {
@@ -353,11 +290,8 @@ impl ReviewPane {
         self.list_again_for_review_shown(cx);
     }
 
-    /// A change listed for a review is that review's own list, the review of no agent's
-    /// included. When another review is shown, the change shown is listed again for it:
-    /// through `CompareForReview` for a session's review, through `CompareVersions` for the
-    /// review of no agent. A change listed with no review, as what changed since a round is,
-    /// stays as it is.
+    /// A change listed for a review is that review's own list, the review of no agent included:
+    /// when another review is shown it is listed again. A change listed with no review stays.
     fn list_again_for_review_shown(&mut self, cx: &mut Context<Self>) {
         let (ChangeShown::Since { from, to }, Some(review)) =
             (self.tree.shown.clone(), self.review())
@@ -379,18 +313,13 @@ impl ReviewPane {
 
     fn uncommitted_answered(&mut self, listed: Vec<CreditedFile>, cx: &mut Context<Self>) {
         self.tree.uncommitted = Some(listed);
-        // The files on disk are read again with the list: that is what a change of the
-        // files is told by.
         if self.tree.shown == ChangeShown::Uncommitted {
             self.select_uncommitted(cx);
         }
         cx.notify();
     }
 
-    /// Selects the entries `first` to `last` of the history, both included, as the change
-    /// to show: from the version before `first` to the version of `last`. `by_reviewer`
-    /// says whether the reviewer chose them, and not the pane for want of changes. False when no such change can be shown: the
-    /// history is not here, an entry does not exist, or an end of the range holds no
+    /// False when the history is not here, an entry does not exist, or an end of the range holds no
     /// version.
     pub(crate) fn select_entries(
         &mut self,
@@ -419,8 +348,6 @@ impl ReviewPane {
         true
     }
 
-    /// Selects what changed between two versions, `from` to `to`, as the change to show:
-    /// what changed since a round was sent, listed with no credits.
     pub(crate) fn select_since(
         &mut self,
         from: Option<String>,
@@ -430,9 +357,8 @@ impl ReviewPane {
         self.select_since_for(from, to, ListedFor::NoReview, cx);
     }
 
-    /// Selects what changed between two versions as `select_since` does, listed for
-    /// `listed_for`: for the review of an agent session, only the files it shows, each with
-    /// its credits; for the review of no agent, which has none, every file with none.
+    /// For an agent session's review only the files it shows, each with its credits; for the review
+    /// of no agent, every file with none.
     pub(crate) fn select_since_for(
         &mut self,
         from: Option<String>,
@@ -453,9 +379,6 @@ impl ReviewPane {
         self.list_change(workspace, from, Some(to), listed_for, cx);
     }
 
-    /// Lists the files of the change from `old` to `new`, none for the files on disk, and
-    /// shows them, unless they are shown already. For a review of a session the list is the
-    /// one `CompareForReview` makes for it, and its credits are kept beside the files.
     fn list_change(
         &mut self,
         workspace: WorkspaceId,
@@ -474,9 +397,8 @@ impl ReviewPane {
             other => other,
         };
         let review = listed_for.review().cloned();
-        // The same two versions listed for another review are another list, also while the
-        // request for the one before is still on its way. A list for a review that the
-        // Keeper refused is asked for again.
+        // The same two versions for another review are another list, even while the earlier request
+        // is on its way. A list for a review the Keeper refused is asked for again.
         let credited_for = self.tree.credits.as_ref().map(|credits| &credits.review);
         if self.tree.wanted == source
             && self.listed.as_ref() == Some(&source)
@@ -489,8 +411,6 @@ impl ReviewPane {
         self.tree.wanted_for = listed_for;
         self.tree.listing = None;
         let Some(from) = old else {
-            // The Keeper compares two versions: with none before the change, there is
-            // nothing to list its files from.
             self.say(
                 "Nothing came before this change, so its files cannot be listed",
                 cx,
@@ -517,8 +437,7 @@ impl ReviewPane {
                 cx,
             )
         });
-        // A selection that takes the place of this one drops the task, and its answer
-        // with it.
+        // A selection that replaces this one drops the task, and its answer with it.
         self.tree.listing = Some(cx.spawn(async move |pane, cx| {
             let answer = asked.await;
             pane.update(cx, |pane, cx| {
@@ -550,8 +469,6 @@ impl ReviewPane {
         }));
     }
 
-    /// Selects the uncommitted changes of the review shown as the change to show: from the
-    /// commit checked out to the files on disk, the files those of the list.
     pub(crate) fn select_uncommitted(&mut self, cx: &mut Context<Self>) {
         let source = Source::Versions {
             old: self.tree.history.as_ref().and_then(checked_out),
@@ -574,7 +491,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// Puts the comparison of the workspace back in the place of an entry or a range.
     pub(crate) fn back_to_comparison(&mut self, cx: &mut Context<Self>) {
         self.tree.shown = ChangeShown::Comparison;
         self.tree.credits = None;
@@ -592,8 +508,6 @@ impl ReviewPane {
         }
     }
 
-    /// What [`FocusHistory`] does: puts the focus on the tree, with the cursor on the
-    /// first entry the first time.
     pub(crate) fn focus_history(
         &mut self,
         _: &FocusHistory,
@@ -609,7 +523,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// What [`FocusRows`] does: gives the focus back to the rows of the diff.
     pub(crate) fn focus_rows(
         &mut self,
         _: &FocusRows,
@@ -621,7 +534,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// Moves the cursor by `by` entries, and stays at the first and at the last.
     fn step_cursor(&mut self, by: isize, cx: &mut Context<Self>) {
         self.acted(cx);
         let Some(last) = self.tree_len().checked_sub(1) else {
@@ -636,19 +548,14 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// What [`HistoryDown`] does.
     pub(crate) fn history_down(&mut self, _: &HistoryDown, _: &mut Window, cx: &mut Context<Self>) {
         self.step_cursor(1, cx);
     }
 
-    /// What [`HistoryUp`] does.
     pub(crate) fn history_up(&mut self, _: &HistoryUp, _: &mut Window, cx: &mut Context<Self>) {
         self.step_cursor(-1, cx);
     }
 
-    /// What [`MarkChange`] does: marks the entry under the cursor for the range, or takes
-    /// its mark away. An entry that cannot be selected, and the uncommitted changes, which
-    /// no range holds, are not marked.
     pub(crate) fn mark_change(&mut self, _: &MarkChange, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
         let Some(entry) = self.tree.cursor.filter(|&entry| self.selectable(entry)) else {
@@ -661,8 +568,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// What [`ShowChange`] does: shows the change of the marked entries, from the first
-    /// to the last, or of the entry under the cursor when none is marked.
     pub(crate) fn show_change(&mut self, _: &ShowChange, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
         if let (Some(&first), Some(&last)) = (self.tree.marked.first(), self.tree.marked.last()) {
@@ -677,9 +582,6 @@ impl ReviewPane {
         self.select(entry, false, cx);
     }
 
-    /// Selects the entry at `index` of the tree, the uncommitted changes being the one
-    /// after the last of the history: alone, or, with `extend`, as the range from the
-    /// entries shown to it.
     fn select(&mut self, index: usize, extend: bool, cx: &mut Context<Self>) {
         self.tree.offer = None;
         self.tree.marked.clear();
@@ -698,8 +600,6 @@ impl ReviewPane {
         self.select_entries(first, last, true, cx);
     }
 
-    /// What a click on the entry at `index` does: gives the tree the focus, puts the cursor
-    /// there and shows its change at once, or with Shift the range from the one shown.
     fn click_entry(
         &mut self,
         index: usize,
@@ -711,18 +611,14 @@ impl ReviewPane {
         self.tree.focus.focus(window, cx);
         self.tree.cursor = Some(index);
         if index < self.tree_len().saturating_sub(1) && !self.selectable(index) {
-            // A turn with no state to show.
             return cx.notify();
         }
         self.select(index, shift, cx);
     }
 
-    /// The tree, drawn above the files; none when there is nothing in it to select.
     pub(crate) fn tree_view(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
         if !self.has_tree() {
             if self.tree.focus.is_focused(window) {
-                // The tree is gone, and the keys are left without a place: the rows take
-                // the focus once this frame is drawn.
                 cx.defer_in(window, |pane, window, cx| pane.focus.focus(window, cx));
             }
             return None;
@@ -758,8 +654,8 @@ impl ReviewPane {
         )
     }
 
-    /// What the row of entry `index` says, and whether the entry can be selected. A turn
-    /// whose state was not kept, and one whose recording expired, can not.
+    /// The bool is whether the entry can be selected: not a turn whose state was not kept or whose
+    /// recording expired.
     fn entry_words(&self, index: usize, cx: &App) -> (String, bool) {
         let entries = self
             .tree
@@ -799,7 +695,6 @@ impl ReviewPane {
         }
     }
 
-    /// The entry at `index` of the tree as a row.
     fn draw_entry(&self, index: usize, window: &Window, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let entries = self
@@ -816,8 +711,6 @@ impl ReviewPane {
         let here = self.tree.cursor == Some(index) && self.tree.focus.is_focused(window);
         let marked = self.tree.marked.contains(&index);
         let (label, selectable) = self.entry_words(index, cx);
-        // The words the row draws are in the selector of the text, as the other labels'
-        // are: "review-history-<index>:<words>", "review-history-uncommitted:<words>".
         let words_selector = if uncommitted {
             format!("review-history-uncommitted:{label}")
         } else {

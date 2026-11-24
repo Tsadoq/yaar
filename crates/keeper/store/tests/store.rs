@@ -1,6 +1,3 @@
-//! Component tests: the Store through the calls the parts of the Keeper use, on a real
-//! database file.
-
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -10,7 +7,6 @@ use yaar_store::{
     FILE_NAME, RepositoryId, RepositoryRecord, Store, StoreError, WorkspaceId, WorkspaceRecord,
 };
 
-/// A folder of the test's own, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -106,8 +102,8 @@ fn a_store_opened_later_on_the_same_file_holds_what_the_earlier_one_was_given() 
             .set_base(&WorkspaceId::new("w-1"), "main")
             .expect("set base");
     }
-    // With the last clone dropped the file is closed: it alone, copied to another
-    // place with nothing beside it, is the whole database.
+    // With the last clone dropped the file is closed: it alone, copied elsewhere, is the whole
+    // database.
     let elsewhere = Scratch::new();
     std::fs::copy(scratch.file(), elsewhere.file()).expect("copy the file");
 
@@ -140,7 +136,6 @@ fn keeping_what_is_known_brings_it_up_to_date_and_leaves_its_place_and_its_base(
         .set_base(&WorkspaceId::new("w-1"), "release")
         .expect("set base");
 
-    // The first repository moved, and its workspace with it, into the other one.
     store
         .put_repository(&repository("r-a", "/new/a/.git"))
         .expect("put repository");
@@ -161,7 +156,6 @@ fn keeping_what_is_known_brings_it_up_to_date_and_leaves_its_place_and_its_base(
         ]
     );
 
-    // A base set again replaces the one before.
     store
         .set_base(&WorkspaceId::new("w-1"), "0123abcd")
         .expect("set base");
@@ -255,7 +249,6 @@ fn a_file_that_is_no_database_is_refused_and_left_as_it_is() {
     }
     assert_eq!(std::fs::read(scratch.file()).expect("read the file"), notes);
 
-    // Nor is a place where no file can be made.
     let under_a_file = scratch.file().join("below").join(FILE_NAME);
     assert!(matches!(
         Store::open(&under_a_file),
@@ -281,7 +274,6 @@ fn clones_on_several_threads_reach_the_one_writer() {
                     store
                         .set_base(&WorkspaceId::new(&id), &format!("base-{thread}-{n}"))
                         .expect("set base");
-                    // What a call has returned is there for every later call.
                     let kept = store.workspaces().expect("workspaces");
                     let mine = kept.iter().find(|w| w.id.as_str() == id).expect("kept");
                     assert_eq!(mine.base, Some(format!("base-{thread}-{n}")));
@@ -295,7 +287,6 @@ fn clones_on_several_threads_reach_the_one_writer() {
     let kept = store.workspaces().expect("workspaces");
     assert_eq!(kept.len(), 60);
     for thread in 0..6 {
-        // Each thread's own are in the order it kept them.
         let mine: Vec<&str> = kept
             .iter()
             .map(|w| w.id.as_str())

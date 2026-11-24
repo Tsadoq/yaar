@@ -1,7 +1,7 @@
 #!/bin/sh
-# Fetches the prebuilt check tools from their GitHub releases into $1 (default: $CARGO_HOME/bin or ~/.cargo/bin).
-# Versions are pinned here; the sha256 of every download is printed so a later run can be compared.
-#   install-tools.sh [dest-dir] [tool ...]      tools: nextest deny machete about (default: all four)
+# Fetches the prebuilt check tools from their GitHub releases into $1 (default: $CARGO_HOME/bin
+# or ~/.cargo/bin). Versions are pinned here; the sha256 of every download is printed.
+#   install-tools.sh [dest-dir] [tool ...]    tools: nextest deny machete about (default: all)
 set -eu
 DEST=${1:-${CARGO_HOME:-$HOME/.cargo}/bin}; [ $# -gt 0 ] && shift
 [ $# -gt 0 ] || set -- nextest deny machete about

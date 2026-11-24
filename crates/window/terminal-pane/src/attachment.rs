@@ -1,26 +1,6 @@
-//! The review attached to an agent's next message, shown at the agent's terminal: a line
-//! over the bottom of the terminal's slot that says what is attached, with a control that
-//! views what will be sent, one that detaches it, and, while the agent shows no permission
-//! prompt, the one control that types [`ADDRESS_EACH_COMMENT`] at its prompt. Built by the
-//! package "the terminal pane" of slice 6.
-//!
-//! What is attached is the agents model's: `yaar_link::Session::attached` of the session
-//! that runs in the terminal. The text the view shows is the Keeper's answer to
-//! `yaar_link::Request::GetAttachment`, asked when the view opens and asked again at each
-//! `yaar_link::Fact::ReviewsChanged` of the terminal's workspace while it is open, so that
-//! an edited or a new draft shows in what will be sent; it closes when the attachment
-//! goes. Detaching sends `yaar_link::Request::DetachReview`.
-//!
-//! The three keys act on the terminal of `TerminalPane::focused`, the one the keys go to
-//! while the pane has the focus, wherever the focus is now: on Linux a key of the app does
-//! nothing while a terminal has the focus, and the user presses them from another pane.
-//! The sentence goes to the program as the bytes of the sentence alone, as keys the user
-//! typed would: never a line end, never anything else; the user presses Enter.
-//!
-//! Drawn, for slot `n`, under the selectors `terminal-attachment-<n>` (the line),
-//! `terminal-attachment-view-<n>`, `terminal-attachment-detach-<n>` and, while it is
-//! offered, `terminal-attachment-address-<n>` (the controls), and, while the view is open,
-//! `terminal-attachment-text-<n>`.
+//! The review attached to an agent's next message: a line over the terminal's slot with controls.
+//! The keys act on `TerminalPane::focused`, wherever the focus is: on Linux an app key does nothing
+//! while a terminal has the focus.
 
 use std::collections::HashMap;
 
@@ -33,35 +13,24 @@ use crate::{
     AddressEachComment, DetachAttachment, TerminalPane, ViewAttachment, WORKTREE_BEING_MADE,
 };
 
-/// The sentence the one control types at the agent's prompt.
 pub const ADDRESS_EACH_COMMENT: &str = "Address each comment.";
 
-/// The height of the line the controls sit in, which the text of the view stops above.
 const LINE: Pixels = px(28.);
 
-/// The view of one terminal's attachment, while it is open.
 struct View {
-    /// What the Keeper last answered; none before the first answer.
     text: Option<String>,
-    /// The review and what of it was attached when the text was last asked for, so that a
-    /// change of either asks again.
     asked_for: (ReviewId, Attachment),
-    /// The question in flight. A newer one takes its place, which drops the older answer:
-    /// the text shown is always the answer to the last question.
+    /// A newer question replaces this one, which drops the older answer.
     asking: Option<Task<()>>,
-    /// What tells the view the reviews or the attachment changed. Dropped with the view.
     _subscriptions: [Subscription; 2],
 }
 
-/// What the pane keeps of the attachments it shows: the views that are open, by terminal.
 #[derive(Default)]
 pub(crate) struct Attachments {
     views: HashMap<TerminalId, View>,
 }
 
 impl TerminalPane {
-    /// What is attached to the next message of the agent session that runs in `terminal`,
-    /// as the agents model says; none when nothing is, or no session runs there.
     pub fn attachment(&self, terminal: &TerminalId, cx: &App) -> Option<Attachment> {
         self.models
             .agents
@@ -70,9 +39,7 @@ impl TerminalPane {
             .and_then(|session| session.attached.clone())
     }
 
-    /// Whether the terminal offers the control that types [`ADDRESS_EACH_COMMENT`]: a
-    /// review is attached to the next message of the session that runs in it, and that
-    /// session runs and does not wait at a permission prompt.
+    /// Whether a review is attached and the session runs, not waiting at a permission prompt.
     pub fn offers_address(&self, terminal: &TerminalId, cx: &App) -> bool {
         self.models
             .agents
@@ -87,22 +54,16 @@ impl TerminalPane {
             })
     }
 
-    /// The text the view of the attachment of `terminal` shows while it is open, as the
-    /// Keeper answered it; none while it is closed, or before the answer came.
     pub fn viewed_attachment(&self, terminal: &TerminalId) -> Option<String> {
         self.attachments.views.get(terminal)?.text.clone()
     }
 
-    /// The review of the session that runs in `terminal`, and what of it is attached to
-    /// that session's next message; none when nothing is attached.
     fn attached_review(&self, terminal: &TerminalId, cx: &App) -> Option<(ReviewId, Attachment)> {
         let agents = self.models.agents.read(cx);
         let session = agents.in_terminal(terminal)?;
         Some((session.review.clone()?, session.attached.clone()?))
     }
 
-    /// Opens the view of the attachment of `terminal`, which asks the Keeper for its text,
-    /// or closes it; nothing while nothing is attached.
     fn toggle_view(&mut self, terminal: &TerminalId, cx: &mut Context<Self>) {
         if self.attachments.views.remove(terminal).is_some() {
             cx.notify();
@@ -111,9 +72,6 @@ impl TerminalPane {
         let Some(asked_for) = self.attached_review(terminal, cx) else {
             return;
         };
-        // The view keeps what it shows up to date: it asks again when the reviews of the
-        // terminal's workspace change, and when what is attached to the session does; it
-        // closes when nothing is attached any more.
         let (for_reviews, for_agents) = (terminal.clone(), terminal.clone());
         let reviews = cx.subscribe(&self.models.link, move |pane, _, fact: &Fact, cx| {
             if let Fact::ReviewsChanged { workspace } = fact
@@ -139,7 +97,6 @@ impl TerminalPane {
         cx.notify();
     }
 
-    /// The agents changed: the view of `terminal`, if open, follows what is attached now.
     fn attachment_moved(&mut self, terminal: &TerminalId, cx: &mut Context<Self>) {
         let Some(view) = self.attachments.views.get(terminal) else {
             return;
@@ -154,8 +111,6 @@ impl TerminalPane {
         }
     }
 
-    /// Asks the Keeper for what will be sent with the next message of `terminal`'s agent,
-    /// for the open view of it.
     fn ask_text(&mut self, terminal: &TerminalId, cx: &mut Context<Self>) {
         let Some((review, attached)) = self.attached_review(terminal, cx) else {
             self.attachments.views.remove(terminal);
@@ -182,9 +137,6 @@ impl TerminalPane {
         }
     }
 
-    /// Takes the Keeper's answer to the question for the text of `terminal`'s attachment.
-    /// A Keeper that has none to give, because nothing is attached any more or the review
-    /// is gone, closes the view: there is nothing to show.
     fn text_answered(
         &mut self,
         terminal: &TerminalId,
@@ -203,8 +155,6 @@ impl TerminalPane {
         cx.notify();
     }
 
-    /// Sends the detach of the review attached to the next message of `terminal`'s agent;
-    /// nothing while nothing is attached. The agents change when the Keeper has done it.
     fn detach(&mut self, terminal: &TerminalId, cx: &mut Context<Self>) {
         let Some((review, _)) = self.attached_review(terminal, cx) else {
             return;
@@ -219,9 +169,6 @@ impl TerminalPane {
         .detach();
     }
 
-    /// Types [`ADDRESS_EACH_COMMENT`] at the prompt of `terminal`'s program as the user's
-    /// own keys would be: the bytes of the sentence and nothing more, so that the user
-    /// words the rest and presses Enter. Nothing while the control is not offered.
     fn type_sentence(&mut self, terminal: &TerminalId, cx: &mut Context<Self>) {
         if !self.offers_address(terminal, cx) {
             return;
@@ -231,12 +178,8 @@ impl TerminalPane {
         });
     }
 
-    /// The line of slot `n`, which shows `terminal`, while a review is attached to the
-    /// next message of its agent; none otherwise.
-    ///
-    /// The line lies over the bottom of the slot and the text of the view over its lower
-    /// part; both hold the mouse over them, so that a click on a control is no click in
-    /// the program, and take the focus to the terminal, where the user presses Enter.
+    /// The line and the view text take the mouse, so a click on a control is no click in the
+    /// program.
     pub(crate) fn render_attachment(
         &self,
         n: usize,
@@ -341,14 +284,6 @@ impl TerminalPane {
         )
     }
 
-    /// The Frame wants a worktree made with an agent in it, [`Wanted::Worktree`]: sends
-    /// `Request::CreateWorktree` with the pane's size, and on `Reply::WorktreeCreated` shows
-    /// the agent's terminal and gives it the focus as for a terminal the pane opened, in the
-    /// new workspace, which the Frame puts on screen with the list that holds it
-    /// (`WorkspaceList::want_on_screen`); the output that comes after the reply is that
-    /// terminal's. While the answer is awaited the pane's notice says the worktree of the
-    /// branch is being made ([`WORKTREE_BEING_MADE`] and the branch); a refusal is the
-    /// notice, as for a terminal.
     pub(crate) fn worktree_wanted(&mut self, wanted: &Wanted, cx: &mut Context<Self>) {
         let Wanted::Worktree {
             repository,
@@ -374,9 +309,6 @@ impl TerminalPane {
         let program = Program::Agent {
             agent: agent.clone(),
         };
-        // Detached, as the question for a shell is: a task that is dropped is cancelled,
-        // and its answer lost. The pane is held weakly, so a pane that is gone takes no
-        // answer.
         cx.spawn(async move |pane, cx| {
             let answer = asked.await;
             pane.update(cx, |pane, cx| pane.worktree_made(program, answer, cx))
@@ -386,12 +318,8 @@ impl TerminalPane {
         cx.notify();
     }
 
-    /// Takes the Keeper's answer to the question for a worktree made with an agent. The
-    /// agent's terminal is added as one the pane opened would be, in the new workspace, and
-    /// the Frame is asked to put that workspace on screen: at once when its list holds it,
-    /// else when the list that does arrives, which the Keeper tells about the time of its
-    /// reply, either side of it. The terminal has the focus when the workspace is on screen.
-    /// A refusal is the notice.
+    /// The Frame is asked to show the new workspace: at once when its list holds it, else when a
+    /// list that holds it arrives. The agent's terminal has the focus once it is on screen.
     fn worktree_made(
         &mut self,
         program: Program,
@@ -416,10 +344,6 @@ impl TerminalPane {
         cx.notify();
     }
 
-    /// A pane wants a terminal opened: for [`Wanted::AgentFor`], the launcher of that CLI
-    /// in that workspace for that review, `yaar_link::Program::AgentFor`, as
-    /// [`crate::NewTerminal`] opens a shell. It is shown and takes the focus as that
-    /// terminal does; the Keeper's refusal is the pane's notice.
     pub(crate) fn agent_wanted(
         &mut self,
         wanted: &Wanted,
@@ -432,8 +356,6 @@ impl TerminalPane {
                 agent,
                 review,
             } => (workspace, agent, review),
-            // A worktree with an agent, which is not a terminal of one workspace: see
-            // `worktree_wanted`.
             Wanted::Worktree { .. } => return self.worktree_wanted(wanted, cx),
         };
         self.notice = None;
@@ -451,8 +373,6 @@ impl TerminalPane {
             .link
             .update(cx, |link, cx| link.ask(request, cx));
         let workspace = workspace.clone();
-        // Detached, as the question for a shell is: a task that is dropped is cancelled,
-        // and its answer lost.
         cx.spawn(async move |pane, cx| {
             let answer = asked.await;
             pane.update(cx, |pane, cx| pane.opened(workspace, program, answer, cx))
@@ -462,8 +382,6 @@ impl TerminalPane {
         cx.notify();
     }
 
-    /// [`ViewAttachment`]: opens the view of the attachment of the focused terminal, which
-    /// asks the Keeper for its text, or closes it.
     pub(crate) fn view_attachment(
         &mut self,
         _: &ViewAttachment,
@@ -475,8 +393,6 @@ impl TerminalPane {
         }
     }
 
-    /// [`DetachAttachment`]: sends the detach of the review attached to the next message
-    /// of the focused terminal's agent.
     pub(crate) fn detach_attachment(
         &mut self,
         _: &DetachAttachment,
@@ -488,8 +404,6 @@ impl TerminalPane {
         }
     }
 
-    /// [`AddressEachComment`]: while it is offered for the focused terminal, sends
-    /// [`ADDRESS_EACH_COMMENT`] to its program, and nothing else; else does nothing.
     pub(crate) fn address_each_comment(
         &mut self,
         _: &AddressEachComment,

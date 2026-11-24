@@ -1,28 +1,13 @@
 #!/bin/bash
-# PERF-03 (and HW-03's memory on Linux): the resident memory of the app's own processes, one
-# workspace open and idle, against 200 MB.
+# The resident memory of the app's own processes, one workspace open and idle, against 200 MB.
 #
-#   packaging/checklists/memory.sh [--idle SECONDS]            macOS: the app in /Applications
-#   packaging/checklists/memory.sh --linux [--idle SECONDS]    Linux: the installed package
+# packaging/checklists/memory.sh [--idle SECONDS]            macOS: the app in /Applications
+# packaging/checklists/memory.sh --linux [--idle SECONDS]    Linux: the installed package
 #
-# What it measures: the sum of the resident set sizes (`ps -o rss=`, in KiB) of this user's
-# processes whose program is the Window (`yaar-review`) and the Keeper (`yaar-keeper`), each
-# matched by its FULL PATH (macOS: inside the bundle, /Applications/YAAR.app, or YAAR_APP;
-# Linux: /usr/bin/yaar-review and /usr/libexec/yaar-review/yaar-keeper, else under YAAR_PREFIX,
-# default ~/.local; YAAR_REVIEW and YAAR_KEEPER name them outright). The language servers
-# and the agents in the terminals are other programs and are left out by their path, and so
-# is a Window or Keeper of another copy of the app. It waits the idle time (default 60 s),
-# taking a sample every 10 s, and judges the last one: the sum, in bytes, against 200,000,000
-# (the stricter reading of "200 MB"; the sum in MiB is printed too).
-#
-# What it needs of the owner: the app running, one workspace open, nothing being typed or
-# scrolled, as in PERF-03. It starts nothing and posts no input.
-#
-# Where it writes: ~/yaar-checklists/<YYYY-MM-DD>/memory-<macos|linux>-<HHMMSS>.txt, the
-# printed table.
-#
-# Exit codes: 0 the last sample is within 200 MB; 1 over, or no Window or no Keeper of the app
-# is running, or one left during the wait (a sentence says which); 2 usage error.
+# Sums `ps -o rss=` (KiB) of this user's Window and Keeper processes, matched by full path, so
+# language servers, agents and other copies of the app are left out. Samples every 10 s for the
+# idle time (default 60) and judges the last against 200,000,000 bytes.
+# Exit: 0 within 200 MB, 1 over or an app process missing or lost, 2 usage.
 set -euo pipefail
 
 CK_NAME=memory.sh
@@ -66,7 +51,6 @@ fi
 WINDOW_PROGRAM=$(ck_window_program)
 KEEPER_PROGRAM=$(ck_keeper_program)
 
-# sample: prints "window_kb keeper_kb"; fails with a sentence when one is not running.
 sample() {
   local total_w=0 total_k=0 pid kb found_w=0 found_k=0
   for pid in $(ck_pids_of "$WINDOW_PROGRAM"); do
@@ -118,7 +102,6 @@ while [ $((SECONDS - START)) -lt "$IDLE" ]; do
   fi
   sleep 0.2
 done
-# The sample that counts is the one taken at the end of the idle time.
 take "$((SECONDS - START))"
 
 BYTES=$((LAST_SUM * 1024))

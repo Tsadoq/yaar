@@ -1,13 +1,4 @@
-//! Component tests: what a Window reads of the agents' side that is no agent, through the
-//! Link: one turn, the history of a worktree, the uncommitted changes a review lists, and
-//! two versions of a change. A real Keeper runs in this process on a database, a folder of
-//! state stores and repositories the test makes. What the Keeper keeps about sessions and
-//! turns, and the states of the worktrees, the test puts there with the Store's and the
-//! engine's own calls before the Keeper starts: no hook program runs.
-//!
-//! The Keeper runs git as its user does, with the environment of its process. Each test
-//! therefore cleans that environment as its first statement, and these tests are run by
-//! `cargo nextest`, which gives each test a process of its own.
+//! Each test cleans the process environment first, so each needs a process of its own (nextest).
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -29,16 +20,11 @@ use yaar_review_engine::Reviews;
 use yaar_store::{EndedBy, SessionRecord, StepRecord, Store, TurnEndRecord, TurnRecord};
 use yaar_workspaces::Workspaces;
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and cleans the environment of this process for git: no
-    /// configuration of the user or of the system, a fixed author and date, an empty
-    /// home. It has to be the first statement of a test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -59,20 +45,16 @@ impl Scratch {
             ("GIT_COMMITTER_NAME", "A Test"),
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
-            // The shell of a terminal the test opens.
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's lists of files go: a folder that goes
-            // with the test.
+            // Where the Keeper's copies of git's file lists go.
             std::env::set_var("TMPDIR", root.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -92,12 +74,10 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    /// The app's folder of the Keeper of this test.
     fn data(&self) -> PathBuf {
         self.0.join("data")
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -111,7 +91,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -133,13 +112,12 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit, `base.txt`, on `main`.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
         git(&folder, &["init", "--quiet", "-b", "main"]);
-        // Git on Linux guesses no identity, and a repository's own is the one nothing of
-        // the user's can change.
+        // Git on Linux guesses no identity; a repository's own is the one nothing of the user's can
+        // change.
         git(&folder, &["config", "user.name", "A Test"]);
         git(&folder, &["config", "user.email", "test@example.invalid"]);
         write(&folder, "base.txt", "base\n");
@@ -183,15 +161,12 @@ fn write(folder: &Path, name: &str, text: &str) {
     std::fs::write(folder.join(name), text).expect("write a file");
 }
 
-/// One end of the Link, as a Window holds it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
 }
 
 impl Window {
-    /// Sends a request and expects its reply as the very next frame: nothing here leads
-    /// to a fact.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = RequestId(self.next_id);
         self.next_id += 1;
@@ -202,8 +177,8 @@ impl Window {
         }
     }
 
-    /// Sends a request and expects its reply, whatever facts come before it: a Keeper that
-    /// watches the worktree of a running session tells the changes it sees to every Window.
+    /// A Keeper that watches the worktree of a running session tells the changes it sees to every
+    /// Window.
     fn ask_past_facts(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = RequestId(self.next_id);
         self.next_id += 1;
@@ -217,9 +192,6 @@ impl Window {
         }
     }
 
-    /// Reads frames until two sessions were told to have written `path` with their own
-    /// tool, whatever else comes: the facts of a report are told after what the report did
-    /// to the Keeper's records, and the reports were sent one after the other.
     fn until_written_by_two(&mut self, path: &str) {
         let mut writers: Vec<SessionId> = Vec::new();
         // The read timeout is for one frame: unrelated facts must not keep the wait going.
@@ -242,12 +214,8 @@ impl Window {
         }
     }
 
-    /// Reads frames until `count` turns have ended with a state recorded, whatever else
-    /// comes, and gives the sessions they were of with those states, in the order they were
-    /// told. A turn's end is told after the state was recorded and its credits kept.
     fn until_turns_ended(&mut self, count: usize) -> Vec<(SessionId, String)> {
         let mut ended = Vec::new();
-        // The read timeout is for one frame: unrelated facts must not keep the wait going.
         let deadline = Instant::now() + DEADLINE;
         while ended.len() < count {
             assert!(
@@ -272,10 +240,8 @@ impl Window {
     }
 }
 
-/// What the Keeper keeps, made before the Keeper starts: the workspaces of the
-/// repositories, the sessions, the turns, the states and the reviews, each with the call
-/// the Keeper itself makes. Dropped before the Keeper starts, which then holds the
-/// database alone.
+/// What the Keeper keeps, made with the calls the Keeper itself makes. Dropped before the Keeper
+/// starts, which then holds the database alone.
 struct Kept {
     store: Store,
     workspaces: Workspaces,
@@ -294,7 +260,6 @@ impl Kept {
         }
     }
 
-    /// The workspace of `repo`, and its worktree.
     fn open(&self, repo: &Path) -> (yaar_store::WorkspaceId, Arc<Worktree>) {
         let workspace = self.workspaces.open_folder(repo).expect("open").workspace;
         let worktree = self
@@ -305,7 +270,6 @@ impl Kept {
         (workspace, worktree)
     }
 
-    /// The state of the worktree as its files are now, by its full id.
     fn state(&self, workspace: &yaar_store::WorkspaceId, worktree: &Worktree) -> String {
         self.reviews
             .states_of(workspace)
@@ -317,8 +281,6 @@ impl Kept {
             .to_owned()
     }
 
-    /// A session of the claude Adapter that started, was given its review as the Keeper
-    /// gives one, and ended, so that the next one that starts has a review of its own.
     fn session(&self, workspace: &yaar_store::WorkspaceId, n: u32) -> SessionRecord {
         let record = SessionRecord {
             id: yaar_store::SessionId::new(format!("session-{n}")),
@@ -339,7 +301,6 @@ impl Kept {
         record
     }
 
-    /// The `number`th turn of `session`, as the Keeper keeps one that started.
     fn turn_begun(&self, session: &SessionRecord, number: u32) -> yaar_store::TurnId {
         let id = yaar_store::TurnId::new(format!("{}-turn-{number}", session.id));
         self.store
@@ -355,7 +316,6 @@ impl Kept {
         id
     }
 
-    /// A turn that ended `Finished` with `state`, which is none when its recording failed.
     fn turn(
         &self,
         session: &SessionRecord,
@@ -378,7 +338,6 @@ fn link_workspace(id: &yaar_store::WorkspaceId) -> WorkspaceId {
     WorkspaceId::new(id.as_str())
 }
 
-/// The history entry of a turn that ended.
 fn turn_entry(
     id: &yaar_store::TurnId,
     session: &SessionRecord,
@@ -391,7 +350,6 @@ fn turn_entry(
     }
 }
 
-/// A turn whose state the Store names and the state store no longer holds.
 fn expired_entry(id: &yaar_store::TurnId, session: &SessionRecord) -> HistoryEntry {
     HistoryEntry::ExpiredTurn {
         turn: link_turn(id),
@@ -429,9 +387,6 @@ fn credited(path: &str, status: FileStatus, by: &[&str]) -> CreditedFile {
     }
 }
 
-// The contract's first body for each request gives the refusal "does not answer yet": the
-// assertions of these tests fail on it, as on any answer that is not the one they name.
-
 #[test]
 fn the_history_lists_commits_and_the_turns_that_ended_on_them_in_the_order_they_happened_and_asks_git_no_status()
  {
@@ -445,10 +400,8 @@ fn the_history_lists_commits_and_the_turns_that_ended_on_them_in_the_order_they_
 
     write(&repo, "one.txt", "one\n");
     let c1 = commit_all(&repo, "first of the branch");
-    // A state no turn made, as a comment on the files on disk leaves: not in the history.
     write(&repo, "note.txt", "a note\n");
     kept.state(&workspace, &worktree);
-    // A's turn ends with its state; the next commit takes the file in.
     write(&repo, "two.txt", "two\n");
     let s1 = kept.state(&workspace, &worktree);
     let t1 = kept.turn(&a, 1, Some(&s1));
@@ -459,8 +412,6 @@ fn the_history_lists_commits_and_the_turns_that_ended_on_them_in_the_order_they_
     write(&repo, "four.txt", "four\n");
     kept.state(&workspace, &worktree);
     drop((kept, worktree));
-    // The Keeper's own `git status` of this worktree would now fail: the list of its
-    // files is no list, and a lock lies on it.
     std::fs::write(repo.join(".git/index"), "not a list of files").expect("break the index");
     std::fs::write(repo.join(".git/index.lock"), "").expect("lock the index");
     let keeper = scratch.keeper();
@@ -508,9 +459,7 @@ fn a_turn_with_no_state_is_listed_with_none_and_one_whose_state_was_lost_as_expi
     write(&repo, "one.txt", "one\n");
     let s1 = kept.state(&workspace, &worktree);
     let t1 = kept.turn(&a, 1, Some(&s1));
-    // The recording failed.
     let t2 = kept.turn(&a, 2, None);
-    // A state the store never held, as one it has lost.
     let lost = "0".repeat(40);
     let t3 = kept.turn(&a, 3, Some(&lost));
     let c1 = commit_all(&repo, "first of the branch");
@@ -545,14 +494,11 @@ fn turns_with_no_state_and_no_turn_with_one_are_listed_after_the_last_commit_in_
     let (workspace, worktree) = kept.open(&repo);
     let a = kept.session(&workspace, 1);
 
-    // Two commits of the branch, then only turns with no state: nothing places them among
-    // the commits, and a turn is not listed before a commit it may well have followed.
     write(&repo, "one.txt", "one\n");
     let c1 = commit_all(&repo, "first of the branch");
     write(&repo, "two.txt", "two\n");
     let c2 = commit_all(&repo, "second of the branch");
     let t1 = kept.turn(&a, 1, None);
-    // A state the store never held, as one it has lost.
     let lost = "0".repeat(40);
     let t2 = kept.turn(&a, 2, Some(&lost));
     let t3 = kept.turn(&a, 3, None);
@@ -586,8 +532,8 @@ fn a_turn_that_runs_one_of_another_workspace_and_one_before_the_start_are_not_li
     let (elsewhere, other_worktree) = kept.open(&other);
     let (a, b) = (kept.session(&workspace, 1), kept.session(&elsewhere, 2));
 
-    // On main with no remote the changes count from the commit checked out: a turn that
-    // ended before the next commit is before the start of what Changes shows.
+    // On main with no remote the changes count from the commit checked out: a turn that ended
+    // before the next commit is before the start of what Changes shows.
     write(&repo, "one.txt", "one\n");
     let before = kept.state(&workspace, &worktree);
     kept.turn(&a, 1, Some(&before));
@@ -595,13 +541,10 @@ fn a_turn_that_runs_one_of_another_workspace_and_one_before_the_start_are_not_li
     commit_all(&repo, "first of the branch");
     git(&repo, &["switch", "--quiet", "main"]);
     git(&repo, &["merge", "--quiet", "--ff-only", "feature"]);
-    // Another workspace's turn, with its own state.
     write(&other, "two.txt", "two\n");
     let theirs = kept.state(&elsewhere, &other_worktree);
     kept.turn(&b, 1, Some(&theirs));
-    // A turn of this session that has not ended.
     kept.turn_begun(&a, 2);
-    // One that ended on the commit now checked out is in.
     write(&repo, "three.txt", "three\n");
     let now = kept.state(&workspace, &worktree);
     let t3 = kept.turn(&a, 3, Some(&now));
@@ -624,10 +567,8 @@ fn a_turn_with_no_state_and_no_turn_before_it_is_listed_before_the_next_turn_wit
     let (workspace, worktree) = kept.open(&repo);
     let a = kept.session(&workspace, 1);
 
-    // The first turn of the workspace has no state; a commit follows, then a turn with one.
-    // Nothing the Store holds places the first turn among the commits (it really ended
-    // before the commit), so just before the next turn with a state is a choice made for
-    // lack of a fact, and the order asserted is that choice, not what happened.
+    // Nothing places the first turn among the commits, so putting it just before the next turn with
+    // a state is a choice made for lack of a fact.
     let t1 = kept.turn(&a, 1, None);
     write(&repo, "one.txt", "one\n");
     let c1 = commit_all(&repo, "first of the branch");
@@ -660,8 +601,6 @@ fn a_turn_with_no_state_that_follows_one_before_the_start_is_listed() {
     let (workspace, worktree) = kept.open(&repo);
     let a = kept.session(&workspace, 1);
 
-    // On main with no remote the changes count from the commit checked out: the first turn
-    // ended before the next commit, so it is before the start of what Changes shows.
     write(&repo, "one.txt", "one\n");
     let before = kept.state(&workspace, &worktree);
     kept.turn(&a, 1, Some(&before));
@@ -669,7 +608,6 @@ fn a_turn_with_no_state_that_follows_one_before_the_start_is_listed() {
     commit_all(&repo, "first of the branch");
     git(&repo, &["switch", "--quiet", "main"]);
     git(&repo, &["merge", "--quiet", "--ff-only", "feature"]);
-    // The next turn ended after the start; its recording failed.
     let t2 = kept.turn(&a, 2, None);
     write(&repo, "two.txt", "two\n");
     let now = kept.state(&workspace, &worktree);
@@ -695,8 +633,6 @@ fn a_turn_with_no_state_that_started_before_one_before_the_start_is_not_listed()
     let (workspace, worktree) = kept.open(&repo);
     let a = kept.session(&workspace, 1);
 
-    // The first turn has no state, and the turn after it ended before the start of what
-    // Changes shows: the first started before that one, so it ended before the start too.
     kept.turn(&a, 1, None);
     write(&repo, "one.txt", "one\n");
     let before = kept.state(&workspace, &worktree);
@@ -862,8 +798,6 @@ fn a_turn_is_read_with_its_steps_in_order_also_while_it_runs_and_an_unknown_one_
     window.stop(keeper);
 }
 
-/// A repository with `a.txt`, `gone.txt` and `moved.txt` committed on `main`, one commit
-/// more on `feature` that renames, edits and removes, and a state of the files on top.
 struct Versions {
     repo: PathBuf,
     workspace: yaar_store::WorkspaceId,
@@ -920,7 +854,6 @@ fn two_versions_are_compared_whether_commits_states_or_the_files_on_disk() {
     let keeper = scratch.keeper();
     let mut window = scratch.window();
 
-    // Two commits, ordered by path, a rename paired with its old path.
     assert_eq!(
         compare(&mut window, &v.workspace, &v.c1, Some(&v.c2)),
         Ok(Reply::Compared(vec![
@@ -935,12 +868,10 @@ fn two_versions_are_compared_whether_commits_states_or_the_files_on_disk() {
             ),
         ]))
     );
-    // A commit and a state taken on the next one.
     assert_eq!(
         compare(&mut window, &v.workspace, &v.c2, Some(&v.state)),
         Ok(Reply::Compared(vec![file("a.txt", FileStatus::Modified)]))
     );
-    // A version and the files on disk, which hold one more file than the state.
     write(&v.repo, "later.txt", "later\n");
     assert_eq!(
         compare(&mut window, &v.workspace, &v.state, None),
@@ -953,7 +884,6 @@ fn two_versions_are_compared_whether_commits_states_or_the_files_on_disk() {
             file("later.txt", FileStatus::Added),
         ]))
     );
-    // The same version on both sides differs in nothing.
     assert_eq!(
         compare(&mut window, &v.workspace, &v.c1, Some(&v.c1)),
         Ok(Reply::Compared(Vec::new()))
@@ -1004,7 +934,6 @@ fn what_the_store_holds_is_compared_when_the_worktree_is_gone_and_the_files_on_d
     drop(kept);
     let keeper = scratch.keeper();
     let mut window = scratch.window();
-    // The commit of the state, kept in the store while the worktree is there.
     assert!(matches!(
         compare(&mut window, &v.workspace, &v.c2, Some(&v.state)),
         Ok(Reply::Compared(_))
@@ -1058,7 +987,6 @@ fn the_two_sides_of_a_file_are_read_in_any_two_versions_and_on_disk_each_at_its_
     let mut window = scratch.window();
     let ws = &v.workspace;
 
-    // A commit and a state.
     assert_eq!(
         read(
             &mut window,
@@ -1068,13 +996,11 @@ fn the_two_sides_of_a_file_are_read_in_any_two_versions_and_on_disk_each_at_its_
         ),
         sides(text("one\ntwo\nthree\n"), text("one\n2\nthree\nfour\n"))
     );
-    // The file on disk, which is not what the state holds.
     write(&v.repo, "a.txt", "on disk\n");
     assert_eq!(
         read(&mut window, ws, Some((&v.c2, "a.txt")), (None, "a.txt")),
         sides(text("one\n2\nthree\n"), text("on disk\n"))
     );
-    // A renamed file: each side at the path it had.
     assert_eq!(
         read(
             &mut window,
@@ -1087,7 +1013,6 @@ fn the_two_sides_of_a_file_are_read_in_any_two_versions_and_on_disk_each_at_its_
             text("the file that is moved\nfrom one place\nto another\nand keeps its lines\n")
         )
     );
-    // A file that is not there on a side, and no old side asked for.
     assert_eq!(
         read(
             &mut window,
@@ -1132,7 +1057,6 @@ fn a_side_that_is_not_text_or_too_large_to_travel_is_sent_as_its_size_alone() {
     let mut late = vec![b'y'; 8000];
     late.push(0);
     std::fs::write(v.repo.join("late.bin"), &late).expect("write");
-    // A file that is both too large and not text is said to be not text.
     let mut huge = vec![0u8];
     huge.extend(vec![b'x'; too_large]);
     std::fs::write(v.repo.join("huge.bin"), &huge).expect("write");
@@ -1218,8 +1142,6 @@ fn reading_the_sides_of_a_file_refuses_what_leads_out_of_the_worktree_and_what_i
     window.stop(keeper);
 }
 
-/// A workspace with two sessions that each have a review, and a worktree with three
-/// uncommitted changes: a modified file, a new one and a removed one.
 struct Reviewed {
     repo: PathBuf,
     workspace: yaar_store::WorkspaceId,
@@ -1246,7 +1168,6 @@ fn reviewed(scratch: &Scratch, kept: &Kept) -> Reviewed {
             ended_by: None,
         };
         kept.store.put_session(&record).expect("keep the session");
-        // Both run at once, as the review of one is never taken by the other.
         let review = kept.reviews.session_started(&record).expect("its review");
         ReviewId::new(review.as_str())
     });
@@ -1272,7 +1193,6 @@ fn uncommitted(
     })
 }
 
-/// [`uncommitted`] for a Keeper that tells facts of its own beside the reply.
 fn uncommitted_past_facts(
     window: &mut Window,
     workspace: &yaar_store::WorkspaceId,
@@ -1290,7 +1210,6 @@ fn with_no_agent_credited_with_a_change_every_review_lists_all_of_them_by_path_w
     let scratch = Scratch::new();
     let kept = Kept::new(&scratch);
     let r = reviewed(&scratch, &kept);
-    // The review of no agent of another workspace, in which nothing is credited either.
     let other = scratch.repository("other");
     let (elsewhere, _) = kept.open(&other);
     write(&other, "x.txt", "x\n");
@@ -1310,9 +1229,7 @@ fn with_no_agent_credited_with_a_change_every_review_lists_all_of_them_by_path_w
         credited("removed.txt", FileStatus::Deleted, &[]),
     ]));
 
-    // No review named: every change.
     assert_eq!(uncommitted(&mut window, &r.workspace, None), every);
-    // A review of a session that made none: the changes no agent made, which are all.
     assert_eq!(
         uncommitted(&mut window, &r.workspace, Some(&r.review_a)),
         every
@@ -1321,7 +1238,6 @@ fn with_no_agent_credited_with_a_change_every_review_lists_all_of_them_by_path_w
         uncommitted(&mut window, &r.workspace, Some(&r.review_b)),
         every
     );
-    // The review of no agent.
     assert_eq!(
         uncommitted(&mut window, &elsewhere, Some(&ReviewId::new(none.as_str()))),
         Ok(Reply::Uncommitted(vec![credited(
@@ -1330,7 +1246,6 @@ fn with_no_agent_credited_with_a_change_every_review_lists_all_of_them_by_path_w
             &[]
         )]))
     );
-    // Committed, a change is listed no more.
     commit_all(&r.repo, "everything");
     assert_eq!(
         uncommitted(&mut window, &r.workspace, Some(&r.review_a)),
@@ -1356,7 +1271,6 @@ fn the_uncommitted_changes_of_a_review_the_keeper_does_not_hold_or_of_another_wo
         uncommitted(&mut window, &r.workspace, Some(&unknown)),
         Err(Refusal::UnknownReview { review: unknown })
     );
-    // A review of the first workspace names no change of the second.
     assert_eq!(
         uncommitted(&mut window, &elsewhere, Some(&r.review_a)),
         Err(Refusal::UnknownReview {
@@ -1379,9 +1293,6 @@ fn the_uncommitted_changes_of_a_review_the_keeper_does_not_hold_or_of_another_wo
     window.stop(keeper);
 }
 
-/// The hooks of the recording of two sessions in one folder that tell a session started,
-/// its first prompt, and one write of a file with its own tool, each as the CLI's piece
-/// would pass them on, for the files `paths`, read as if the recording was made in `repo`.
 fn writes_of(session: usize, repo: &Path, paths: &[&str]) -> Vec<Vec<u8>> {
     let events = yaar_system_tests::recorded::hook_events("claude/two-sessions-files.jsonl");
     let mut sessions: Vec<&str> = Vec::new();
@@ -1439,8 +1350,6 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
     }
     let keeper = scratch.keeper();
     let mut window = scratch.window();
-    // Each session runs in a shell of the app of its own. The Windows that open them are
-    // kept to the end: the output of a shell goes to the one that opened it.
     let size = TerminalSize {
         columns: 80,
         rows: 24,
@@ -1459,8 +1368,8 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
         terminals.push(terminal);
         openers.push(opener);
     }
-    // Two processes that are alive for as long as the test runs: this one and its parent.
-    // SAFETY: `getppid` takes no argument and cannot fail.
+    // SAFETY: `getppid` takes no argument and cannot fail; this process and its parent live as long
+    // as the test.
     let pids = [
         std::process::id(),
         unsafe { libc::getppid() }.unsigned_abs(),
@@ -1470,8 +1379,8 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
         writes_of(0, &repo, &["a-only.txt", "both.txt"]),
         writes_of(1, &repo, &["b-only.txt", "both.txt"]),
     ];
-    // One connection for each report: a piece of a CLI leaves once it is answered, and
-    // reads past the facts told before its answer.
+    // One connection for each report: a piece of a CLI leaves once it is answered, and reads past
+    // the facts told before its answer.
     for (session, payloads) in reports.into_iter().enumerate() {
         for payload in payloads {
             let answered = scratch.window().ask_past_facts(Request::Report {
@@ -1485,8 +1394,6 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
             assert_eq!(answered, Ok(Reply::Done));
         }
     }
-    // The barrier: the last file the reports name was written by both, and a step is told
-    // after the Keeper noted who wrote the file.
     window.until_written_by_two("both.txt");
     let Ok(Reply::Agents(agents)) = window.ask_past_facts(Request::ListAgents) else {
         panic!("no list of agents");
@@ -1532,9 +1439,6 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
     window.stop(keeper);
 }
 
-/// Two sessions that run in one workspace, each with the review the Keeper gives it, and two
-/// states of its worktree between which they are compared: the first of a clean worktree,
-/// the second of a worktree with every kind of change in it, kept with who made each.
 struct Compared {
     workspace: yaar_store::WorkspaceId,
     review_a: ReviewId,
@@ -1547,7 +1451,6 @@ struct Compared {
 
 fn compared(scratch: &Scratch, kept: &Kept) -> Compared {
     let repo = scratch.repository("repo");
-    // Several lines, so that git pairs the rename by what the file holds.
     let moved = "the file that is moved\nfrom one place\nto another\nand keeps its lines\n";
     write(&repo, "kept.txt", "kept\n");
     write(&repo, "removed.txt", "removed\n");
@@ -1580,8 +1483,6 @@ fn compared(scratch: &Scratch, kept: &Kept) -> Compared {
     std::fs::remove_file(repo.join("removed.txt")).expect("remove a file");
     std::fs::rename(repo.join("moved.txt"), repo.join("renamed.txt")).expect("move a file");
     let second = kept.state(&workspace, &worktree);
-    // What the Keeper keeps at a turn's end: who is credited with each path. `nobody.txt`
-    // is credited to no one, and so is not named.
     let by = |path: &str, sessions: &[&str]| yaar_review_engine::Credited {
         path: PathBuf::from(path),
         by: sessions
@@ -1604,7 +1505,6 @@ fn compared(scratch: &Scratch, kept: &Kept) -> Compared {
         )
         .expect("keep the credits");
 
-    // The review of no agent of another workspace, which the first one's review is not of.
     let other = scratch.repository("other");
     let (elsewhere, _) = kept.open(&other);
     let review_elsewhere = kept
@@ -1651,8 +1551,6 @@ fn a_review_lists_the_paths_of_its_session_and_those_no_agent_made_each_with_its
     let mut window = scratch.window();
     let (one, two) = ("session-1", "session-2");
 
-    // The first session's review: its own paths and the one no agent made, a path both made
-    // whole with both sessions, and nothing of the other session alone.
     assert_eq!(
         compare_for_review(&mut window, &c.workspace, &c.review_a, &c.first, &c.second),
         Ok(Reply::ComparedForReview(vec![
@@ -1678,7 +1576,6 @@ fn a_review_lists_the_paths_of_its_session_and_those_no_agent_made_each_with_its
             credited("shared.txt", FileStatus::Added, &[one, two]),
         ]))
     );
-    // The same version on both sides differs in nothing.
     assert_eq!(
         compare_for_review(&mut window, &c.workspace, &c.review_a, &c.second, &c.second),
         Ok(Reply::ComparedForReview(Vec::new()))
@@ -1701,7 +1598,6 @@ fn a_comparison_for_a_review_is_refused_for_an_unknown_review_workspace_or_versi
         compare_for_review(&mut window, &c.workspace, &unknown, &c.first, &c.second),
         Err(Refusal::UnknownReview { review: unknown })
     );
-    // A review of another workspace names no change of this one.
     assert_eq!(
         compare_for_review(
             &mut window,
@@ -1746,9 +1642,6 @@ fn a_comparison_for_a_review_is_refused_for_an_unknown_review_workspace_or_versi
     window.stop(keeper);
 }
 
-/// The reports of the Claude Code session `session` of the recording of two sessions in one
-/// folder: its start, its prompt, a write of each of `paths` with its own tool, and the end
-/// of its turn, as `writes_of` gives them, read as if the recording was made in `repo`.
 fn claude_turn(session: usize, repo: &Path, paths: &[&str]) -> Vec<Vec<u8>> {
     let events = yaar_system_tests::recorded::hook_events("claude/two-sessions-files.jsonl");
     let mut sessions: Vec<&str> = Vec::new();
@@ -1766,10 +1659,7 @@ fn claude_turn(session: usize, repo: &Path, paths: &[&str]) -> Vec<Vec<u8>> {
     payloads
 }
 
-/// The reports of a pi session, from the recording `pi/turn-tools.jsonl`: its start (line 1),
-/// its message (53), a write with its own tool for each of `paths` (64, whose `input.path`
-/// is the one field changed, since the recording wrote one file of its own), and the end of
-/// its run (76), as if the recording was made in `repo`.
+/// From `pi/turn-tools.jsonl`; only `input.path` changes, the recording wrote one file of its own.
 fn pi_turn(repo: &Path, paths: &[&str]) -> Vec<Vec<u8>> {
     let events = yaar_system_tests::recorded::pi_events("pi/turn-tools.jsonl");
     let of = |line: usize| events[line].in_project(repo);
@@ -1804,8 +1694,6 @@ fn a_claude_code_and_a_pi_session_in_one_worktree_are_each_shown_their_own_paths
     }
     let keeper = scratch.keeper();
     let mut window = scratch.window();
-    // Each session runs in a shell of the app of its own. The Windows that open them are
-    // kept to the end: the output of a shell goes to the one that opened it.
     let size = TerminalSize {
         columns: 80,
         rows: 24,
@@ -1824,8 +1712,8 @@ fn a_claude_code_and_a_pi_session_in_one_worktree_are_each_shown_their_own_paths
         terminals.push(terminal);
         openers.push(opener);
     }
-    // Two processes that are alive for as long as the test runs: this one and its parent.
-    // SAFETY: `getppid` takes no argument and cannot fail.
+    // SAFETY: `getppid` takes no argument and cannot fail; this process and its parent live as long
+    // as the test.
     let pids = [
         std::process::id(),
         unsafe { libc::getppid() }.unsigned_abs(),
@@ -1837,8 +1725,6 @@ fn a_claude_code_and_a_pi_session_in_one_worktree_are_each_shown_their_own_paths
         ),
         ("pi", pi_turn(&repo, &["pi-only.txt", "both.txt"])),
     ];
-    // One connection for each report: a piece of a CLI leaves once it is answered, and
-    // reads past the facts told before its answer.
     for (session, (agent, payloads)) in reports.into_iter().enumerate() {
         for payload in payloads {
             let answered = scratch.window().ask_past_facts(Request::Report {
@@ -1852,7 +1738,6 @@ fn a_claude_code_and_a_pi_session_in_one_worktree_are_each_shown_their_own_paths
             assert_eq!(answered, Ok(Reply::Done), "{agent}");
         }
     }
-    // The barrier: both turns ended, each with a state and the credits kept with it.
     let ended = window.until_turns_ended(2);
     let newest = &ended[1].1;
 
@@ -1881,8 +1766,6 @@ fn a_claude_code_and_a_pi_session_in_one_worktree_are_each_shown_their_own_paths
     assert_ne!(review_claude, review_pi);
     let (c, p) = (claude.id.as_str(), pi.id.as_str());
 
-    // From the commit the worktree started on, which the state store does not hold yet, to
-    // the state the last turn ended on.
     let compare_review = |window: &mut Window, review: &ReviewId| {
         window.ask_past_facts(Request::CompareForReview {
             workspace: link_workspace(&workspace),

@@ -1,6 +1,3 @@
-//! Component tests: a worktree made from a branch by the user's own git, in real
-//! repositories the tests make, through the calls the Workspaces part makes.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -13,8 +10,6 @@ fn open(folder: &Path) -> Worktree {
     Worktree::open(&Git::find().expect("git on the search path"), folder).expect("open")
 }
 
-/// Everything the user's repository holds that a refusal must leave as it was: the seven
-/// reads of the plan.
 #[derive(Debug, PartialEq, Eq)]
 struct Reads {
     status: Vec<u8>,
@@ -27,11 +22,9 @@ struct Reads {
     objects: Vec<(PathBuf, u64)>,
 }
 
-/// What a test reads of the repository and of the folder it lies in.
 #[derive(Debug, PartialEq, Eq)]
 struct Snapshot {
     reads: Reads,
-    // Every name below the folder the repository lies in, with its kind.
     listing: Vec<(PathBuf, char)>,
 }
 
@@ -110,8 +103,8 @@ fn snapshot(repo: &Path, lair: &Path) -> Snapshot {
     }
 }
 
-/// A repository `lair/repo` with `main` at two commits and a file `a.txt`, and two
-/// objects no ref reaches: a blob and a dangling commit.
+/// `main` at two commits and a file `a.txt`, and two objects no ref reaches: a blob and a dangling
+/// commit.
 struct Place {
     lair: PathBuf,
     repo: PathBuf,
@@ -152,7 +145,6 @@ impl Place {
         snapshot(&self.repo, &self.lair)
     }
 
-    /// The folder the app puts worktrees in, beside the repository.
     fn worktrees(&self) -> PathBuf {
         self.lair.join("repo.worktrees")
     }
@@ -168,8 +160,7 @@ fn main_commit(repo: &Path) -> CommitId {
     CommitId::new(git(repo, &["rev-parse", "refs/heads/main"]))
 }
 
-/// Calls `add_worktree` for a refusal and says what came back; the barrier of a negative
-/// clause is that the call returned.
+/// Calls `add_worktree` for a refusal, asserts that nothing changed, and gives the error.
 fn refused(place: &Place, folder: &Path, branch: &str, from: &str) -> AddError {
     let before = place.snapshot();
     let folder_of_worktrees_was_there = place.worktrees().exists();
@@ -185,8 +176,7 @@ fn refused(place: &Place, folder: &Path, branch: &str, from: &str) -> AddError {
     outcome.expect_err("refused")
 }
 
-// A branch name git does not take, one that starts with a dash and the name `@{-1}`, which
-// git expands to the branch left last.
+// `@{-1}` is expanded by git to the branch left last.
 #[test]
 fn a_name_git_does_not_take_for_a_branch_is_refused_and_nothing_is_made() {
     let scratch = Scratch::new();
@@ -225,8 +215,6 @@ fn a_branch_that_exists_is_refused_checked_out_or_not_and_nothing_is_made() {
     }
 }
 
-// A tag is no branch, and a name that is a revision but not a branch name (`main^`,
-// `HEAD`, an id) is none either.
 #[test]
 fn a_start_that_is_no_branch_is_refused_and_nothing_is_made() {
     let scratch = Scratch::new();
@@ -285,7 +273,6 @@ fn the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit
     let folder = place.worktrees().join("task-one");
     let at = main_commit(&place.repo);
     let config_before = std::fs::read(place.repo.join(".git/config")).expect("config");
-    // The user's hook runs, as it does when the user types the command.
     program(
         &place.repo.join(".git/hooks/post-checkout"),
         &format!("echo \"$PWD\" > '{}'", scratch.join("hook-ran").display()),
@@ -323,17 +310,13 @@ fn the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit
         git(&folder, &["symbolic-ref", "--short", "HEAD"]),
         "task/one"
     );
-    // Nothing is written into the repository beyond what git writes for a worktree: no
-    // setting for a branch made from a local one.
     assert_eq!(
         std::fs::read(place.repo.join(".git/config")).expect("config"),
         config_before
     );
-    // The hook of the user ran, in the new worktree.
     let ran = std::fs::read_to_string(scratch.join("hook-ran")).expect("the hook ran");
     assert_eq!(Path::new(ran.trim()), folder);
 
-    // A second one finds the folder of worktrees there.
     let second = place.worktrees().join("two");
     let added = open(&place.repo)
         .add_worktree(&second, "two", "main")
@@ -341,7 +324,6 @@ fn the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit
     assert!(!added.made_parent);
 }
 
-// The remote branch has the name `origin/main` in a clone of a second repository.
 fn a_clone(scratch: &Scratch) -> Place {
     let source = scratch.join("source");
     init(&source);
@@ -382,7 +364,6 @@ fn a_branch_of_a_remote_as_the_start_makes_the_branch_and_taking_it_away_leaves_
     assert_eq!(added.at, at);
     assert!(!added.had_branch_config);
     assert_eq!(git(&folder, &["rev-parse", "HEAD"]), at.as_str());
-    // git set the remote branch as the upstream, as it does for the user.
     assert_eq!(
         git(&place.repo, &["config", "branch.from-remote.remote"]),
         "origin"
@@ -403,7 +384,6 @@ fn a_tag_with_the_name_of_the_start_counts_for_nothing() {
     let place = place(&scratch);
     let first = git(&place.repo, &["rev-parse", "main~1"]);
     git(&place.repo, &["branch", "dev"]);
-    // The tag `dev` names the first commit, the branch `dev` the second.
     git(&place.repo, &["tag", "dev", &first]);
     assert_eq!(git(&place.repo, &["rev-parse", "dev"]), first);
     let folder = place.worktrees().join("from-dev");
@@ -455,7 +435,6 @@ fn taking_a_worktree_away_leaves_a_parent_folder_that_it_did_not_make_and_one_th
     worktree.remove_added(&one).expect("take away");
     assert!(place.worktrees().is_dir(), "a folder that was there stays");
 
-    // One the add made, and something of the user's put into it since.
     let other = place.lair.join("fresh");
     let two = worktree
         .add_worktree(&other.join("two"), "two", "main")
@@ -523,8 +502,7 @@ fn a_hook_of_the_user_that_fails_leaves_nothing_and_gives_the_error_of_git_with(
     place.assert_planted_objects_are_there();
 }
 
-// A branch `main/x` cannot be made while `main` is one: git fails after the folder was
-// made and before it made a worktree.
+// git fails after the folder was made and before it made a worktree.
 #[test]
 fn a_failure_of_git_before_it_made_the_worktree_leaves_nothing_either() {
     let scratch = Scratch::new();
@@ -539,10 +517,8 @@ fn a_failure_of_git_before_it_made_the_worktree_leaves_nothing_either() {
     assert!(!place.worktrees().exists());
 }
 
-// Every read the add makes comes before the parent folder is made: git, asked for the
-// configuration's section of the branch, fails after every other check passed, and the
-// folder is not there afterwards. The git is the real one, wrapped by a program of the
-// test that answers that one question with an error.
+// The real git, wrapped by a test program that answers the query for the branch's configuration
+// section with an error.
 #[test]
 fn a_read_of_git_that_fails_after_the_other_checks_leaves_no_folder_made() {
     let scratch = Scratch::new();
@@ -571,9 +547,6 @@ fn a_read_of_git_that_fails_after_the_other_checks_leaves_no_folder_made() {
     place.assert_planted_objects_are_there();
 }
 
-// Only the folder's parent is made, never its parents: when the parent's own parent is
-// not there, no folder is made and git is not run. A call that made both levels would
-// leave a folder the user never named whenever the add then failed.
 #[test]
 fn a_folder_whose_parent_has_no_parent_either_makes_nothing() {
     let scratch = Scratch::new();
@@ -594,8 +567,6 @@ fn a_folder_whose_parent_has_no_parent_either_makes_nothing() {
     place.assert_planted_objects_are_there();
 }
 
-// The checks and git's run hold one lock: of several calls for one branch one makes it and
-// the others find it there.
 #[test]
 fn calls_for_one_branch_at_once_make_it_once_and_the_others_are_refused_cleanly() {
     let scratch = Scratch::new();
@@ -630,7 +601,6 @@ fn calls_for_one_branch_at_once_make_it_once_and_the_others_are_refused_cleanly(
         1,
         "{listed}"
     );
-    // Nothing is left of the calls that found it there.
     let folders = std::fs::read_dir(place.worktrees())
         .expect("folder")
         .count();

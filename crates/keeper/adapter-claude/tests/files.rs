@@ -1,7 +1,3 @@
-//! The clean-up of the files of long reviews: what the Adapter removes of its own folder
-//! for sessions that no longer run, and what it leaves. The folders are the test's own, and
-//! the Adapter is asked through the call the Keeper makes.
-
 mod support;
 
 use std::collections::BTreeSet;
@@ -16,15 +12,10 @@ use yaar_agent::Adapter;
 
 use support::Scratch;
 
-/// Thirty days, the time the user sets unless they change it.
 const THIRTY_DAYS: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// A folder of the Adapter's own, with no review in it yet, inside a scratch folder that
-/// also holds a file and a folder outside it.
 struct Place {
-    /// Removes everything when the test ends.
     scratch: Scratch,
-    /// The Adapter's own folder of the app.
     folder: PathBuf,
 }
 
@@ -36,12 +27,10 @@ impl Place {
         Place { scratch, folder }
     }
 
-    /// The folder of one session's reviews.
     fn session(&self, id: &str) -> PathBuf {
         self.folder.join(REVIEWS).join(id)
     }
 
-    /// Writes `bytes` as the file `name` of the session `id`, making the session's folder.
     fn write(&self, id: &str, name: &str, bytes: &[u8]) -> PathBuf {
         let folder = self.session(id);
         fs::create_dir_all(&folder).expect("make the session's folder");
@@ -51,8 +40,6 @@ impl Place {
         file
     }
 
-    /// A file, and a folder holding one, outside the Adapter's folder: what a link must not
-    /// lead the clean-up to.
     fn outside(&self) -> (PathBuf, PathBuf) {
         let file = self.scratch.path().join("outside.txt");
         fs::write(&file, noise(20_000, 1)).expect("write the outside file");
@@ -63,7 +50,6 @@ impl Place {
         (file, folder)
     }
 
-    /// Asks the Adapter, as the Keeper does, with the sessions of `running` running.
     fn remove(&self, running: &[&str], written_before: Option<SystemTime>) -> io::Result<u64> {
         let running: BTreeSet<&str> = running.iter().copied().collect();
         ClaudeCode::new().remove_files_of_ended(
@@ -74,8 +60,7 @@ impl Place {
     }
 }
 
-/// `len` bytes that no file system can squeeze into fewer blocks, so that the blocks a file
-/// uses are more than none; `seed` makes two of them differ.
+/// Incompressible bytes, so that a file uses more than no blocks; `seed` makes two differ.
 fn noise(len: usize, seed: u32) -> Vec<u8> {
     let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
     (0..len)
@@ -86,7 +71,6 @@ fn noise(len: usize, seed: u32) -> Vec<u8> {
         .collect()
 }
 
-/// The blocks the file at `path` uses on disk, in bytes, as the Adapter counts them.
 fn blocks_of(path: &Path) -> u64 {
     fs::symlink_metadata(path)
         .expect("a file to count")
@@ -94,7 +78,6 @@ fn blocks_of(path: &Path) -> u64 {
         * 512
 }
 
-/// Sets the modification time of the file at `path`.
 fn set_modified(path: &Path, time: SystemTime) {
     File::options()
         .write(true)
@@ -143,7 +126,6 @@ fn a_link_inside_a_session_is_removed_as_a_link_and_never_followed() {
     let to_folder = place.session("s1").join("to-folder");
     symlink(&file, &to_file).expect("link to a file");
     symlink(&folder, &to_folder).expect("link to a folder");
-    // What the session uses itself: the review and the links as they lie, not what they name.
     let expected = blocks_of(&review) + blocks_of(&to_file) + blocks_of(&to_folder);
     assert!(expected > 0, "the review uses blocks");
     let outside = blocks_of(&file) + blocks_of(&folder.join("inside.txt"));
@@ -191,8 +173,7 @@ fn a_link_in_the_place_of_a_session_made_within_the_set_time_is_kept() {
         .remove(&[], Some(SystemTime::now() - THIRTY_DAYS))
         .expect("the clean-up runs");
 
-    // A link's own time cannot be set back with std, so only the kept half shows here: the
-    // untimed test above shows the link going.
+    // A link's own time cannot be set back with std, so only the kept half shows here.
     assert_eq!(removed, 0, "a link made now is within the time");
     assert!(fs::symlink_metadata(place.session("s1")).is_ok());
     assert_eq!(
@@ -260,10 +241,8 @@ fn a_session_with_one_file_still_new_keeps_all_of_them() {
     assert_eq!(fs::read(&new).expect("kept"), b"new");
 }
 
-// Which file of a folder `read_dir` gives first depends on the file system: by name, by
-// creation, or the other way. The two sessions hold the same names with the old and the new
-// file swapped, so that in any order one of them meets its old file, which uses blocks,
-// before its new one, and a count kept from the walk so far would show.
+// `read_dir` order depends on the file system: the two sessions hold the old and the new file
+// swapped, so in any order one meets its old file first and a running count would show.
 #[test]
 fn a_session_kept_for_a_new_file_adds_nothing_to_the_bytes_removed_in_whatever_order_its_files_come()
  {
@@ -361,8 +340,6 @@ fn what_is_no_session_folder_is_left_where_it_lies() {
     let place = Place::new();
     let stray = place.folder.join(REVIEWS).join("notes.txt");
     fs::write(&stray, b"not a session").expect("write a stray file");
-    // A plain file that a session's folder could be named like is no session either: only
-    // its type tells it from one.
     let named_like_a_session = place.folder.join(REVIEWS).join("s9");
     fs::write(&named_like_a_session, noise(9_000, 14)).expect("write a file named like a session");
     assert!(blocks_of(&named_like_a_session) > 0, "the file uses blocks");
@@ -415,8 +392,6 @@ fn a_session_folder_whose_name_is_not_text_is_passed_over() {
     assert!(!place.session("s2").exists());
 }
 
-/// Gives back the write permission of the folders a test took it from, so that the scratch
-/// folder can be removed when the test ends, also when it failed.
 #[cfg(target_os = "macos")]
 struct Unlocked(Vec<PathBuf>);
 
@@ -430,18 +405,15 @@ impl Drop for Unlocked {
     }
 }
 
-// Only macOS compiles this test: it needs a folder that refuses its owner, and the Linux
-// tests run as root, who is refused nothing (and `chattr +i` fails on an overlay file
-// system). The Mac and its CI runner run as a user who is not root.
+// Needs a folder that refuses its owner: the Linux tests run as root, who is refused nothing.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_session_that_cannot_be_removed_stays_the_others_go_on_and_the_call_gives_the_failure() {
     use std::os::unix::fs::PermissionsExt;
 
     let place = Place::new();
-    // The session `read_dir` names first is the one that cannot be removed, whatever the
-    // order of this file system: a call that gave up at the first failure would leave the
-    // others behind.
+    // The session `read_dir` names first cannot be removed: a call that gave up at the first
+    // failure would leave the others behind.
     let ids = ["s1", "s2", "s3", "s4"];
     for id in ids {
         place.write(id, "r-1.md", &noise(9_000, 20));
@@ -482,8 +454,6 @@ fn a_session_that_cannot_be_removed_stays_the_others_go_on_and_the_call_gives_th
     }
 }
 
-/// Gives back the right to remove the files a test marked immutable, so that the scratch
-/// folder can be removed when the test ends, also when it failed.
 #[cfg(target_os = "macos")]
 struct Unflagged(Vec<PathBuf>);
 
@@ -499,16 +469,11 @@ impl Drop for Unflagged {
     }
 }
 
-// Only macOS compiles this test, for the reason of the one above. Two sessions that cannot
-// be removed fail with errors that differ in their number (a folder that refuses its owner
-// gives EACCES, a file marked immutable EPERM, both "permission denied" by kind), so the
-// number tells which of the two the call gave: the one met first, not the one met last.
 #[cfg(target_os = "macos")]
 #[test]
 fn the_failure_the_call_gives_is_the_first_of_two_sessions_that_cannot_be_removed() {
     use std::os::unix::fs::PermissionsExt;
 
-    // The numbers of the two errors, as the system's headers give them.
     const EPERM: i32 = 1;
     const EACCES: i32 = 13;
 

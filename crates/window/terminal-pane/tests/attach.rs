@@ -1,12 +1,5 @@
-//! Component test: the terminal pane attaching to terminals the Keeper holds that this
-//! Window did not open, as after a plain quit and a new Window, on GPUI's test platform
-//! with no window on any screen. The test plays the Keeper on the other end of a socket
-//! pair: it lists terminals, answers the attach requests, and sends the kept output and the
-//! live output as the Keeper does, after the reply. The pane is read back through the model
-//! it shows and the elements it draws.
-//!
-//! A negative clause, such as "no second attach", is read after a barrier: a request the
-//! test causes after it that must be the next one the Keeper hears.
+//! A negative clause (no second attach, no second resize) is read after a barrier: a key typed or a
+//! request caused afterwards that must be the next thing the Keeper hears.
 
 mod common;
 
@@ -24,7 +17,6 @@ use common::{
     terminal, two_workspaces, wait_until, workspace_id,
 };
 
-/// A terminal of `workspace` that runs the user's shell.
 fn info(id: &TerminalId, workspace: &WorkspaceId) -> TerminalInfo {
     TerminalInfo {
         id: id.clone(),
@@ -33,8 +25,6 @@ fn info(id: &TerminalId, workspace: &WorkspaceId) -> TerminalInfo {
     }
 }
 
-/// Keeps the app running until `holds` says yes: [`wait_until`] for what is read from the
-/// window as drawn. Fails at the deadline, naming `what`.
 fn wait_drawn(
     cx: &mut VisualTestContext,
     what: &str,
@@ -51,7 +41,6 @@ fn wait_drawn(
     }
 }
 
-/// The next request, which has to attach to a terminal: gives the request and what it asked.
 fn attach_request(
     panes: &Panes,
     cx: &mut VisualTestContext,
@@ -63,8 +52,6 @@ fn attach_request(
     (id, terminal, size)
 }
 
-/// Answers an attach request as the Keeper does, and sends the kept output, in as many
-/// frames as it is given, and then what the program writes live.
 fn answer_attach(panes: &Panes, to: RequestId, terminal: &TerminalId, cut: bool, frames: &[&[u8]]) {
     panes.keeper.reply(to, Ok(Reply::Attached { cut }));
     for frame in frames {
@@ -72,7 +59,6 @@ fn answer_attach(panes: &Panes, to: RequestId, terminal: &TerminalId, cut: bool,
     }
 }
 
-/// A window whose Keeper holds `held` when the Window reaches it, with one workspace.
 fn open_holding(cx: &mut TestAppContext, held: Vec<TerminalInfo>) -> (Panes, VisualTestContext) {
     open_panes_staged(
         cx,
@@ -82,8 +68,6 @@ fn open_holding(cx: &mut TestAppContext, held: Vec<TerminalInfo>) -> (Panes, Vis
     )
 }
 
-/// The lines of the screen of a terminal as its view reads them; none while the pane has no
-/// such terminal.
 fn text(panes: &Panes, id: &TerminalId, cx: &impl gpui_kit::AppContext) -> Vec<String> {
     let view = panes.pane.read_with(cx, |pane, _| pane.terminal(id));
     view.map(|view| view.read_with(cx, |view, _| view.lines()))
@@ -104,14 +88,11 @@ fn a_terminal_the_keeper_holds_at_connect_is_attached_and_shows_what_it_wrote_in
     let t1 = terminal('a');
     let (panes, mut cx) = open_holding(cx, vec![info(&t1, &workspace_id('1'))]);
 
-    // The size is the one the pane will show the terminal at, which it learns from the room
-    // it has: not the size it opens terminals at before it was laid out.
+    // The size is the one the pane will show the terminal at, not the one it opens terminals at.
     let (id, asked, size) = attach_request(&panes, &mut cx);
     assert_eq!(asked, t1);
     assert_ne!(size, FIRST_SIZE);
 
-    // What the Keeper kept comes after the reply in frames, then what is written live; all
-    // of it may arrive before the pane has looked, and is shown in the order it came.
     answer_attach(&panes, id, &t1, false, &[b"kept one\r\n", b"kept two\r\n"]);
     panes.keeper.output(&t1, b"live");
     wait_until(&mut cx, "the output of the terminal", |cx| {
@@ -120,8 +101,6 @@ fn a_terminal_the_keeper_holds_at_connect_is_attached_and_shows_what_it_wrote_in
     });
     assert_eq!(screen(&panes, &t1, &cx), ["kept one", "kept two", "live"]);
 
-    // It is a terminal of the pane like the others: listed, of its workspace, shown, not
-    // cut, and the keys go to it.
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.terminals()),
         std::slice::from_ref(&t1)
@@ -140,9 +119,6 @@ fn a_terminal_the_keeper_holds_at_connect_is_attached_and_shows_what_it_wrote_in
     assert_eq!(panes.focused_terminal(&mut cx), Some(t1.clone()));
     cx.simulate_input("k");
     assert_eq!(panes.keeper.input(&mut cx), (t1.clone(), b"k".to_vec()));
-    // The size came once, in the request: the view fitted the room to that very grid and
-    // told the Keeper nothing more. The key is the barrier, since the resize of a view
-    // that fitted another grid would have gone out before it.
     assert!(panes.keeper.resizes(&t1).is_empty());
 }
 
@@ -171,7 +147,6 @@ fn the_output_of_a_cut_ring_starts_under_a_line_that_says_older_output_is_gone(
         )),
         (true, false)
     );
-    // A terminal this Window opened was never cut.
     let opened = terminal('c');
     panes.open_terminal(&opened, &mut cx);
     assert!(
@@ -180,13 +155,11 @@ fn the_output_of_a_cut_ring_starts_under_a_line_that_says_older_output_is_gone(
             .read_with(&cx, |pane, _| pane.attached_cut(&opened))
     );
 
-    // The first terminal is shown (the pane shows one terminal of a workspace at a time:
-    // the one opened after takes the slot, so the cut one is brought back with Next
-    // Terminal until it is shown).
+    // The pane shows one terminal of a workspace at a time and the one opened after takes the
+    // slot, so the cut one is brought back with Next Terminal.
     while panes.pane.read_with(&cx, |pane, _| pane.shown()) != [cut.clone()] {
         panes.press_in_the_app::<NextTerminal>(&mut cx);
     }
-    // The line says it, above the kept output, and the mark is drawn on that very line.
     let screen = text(&panes, &cut, &cx);
     assert!(
         screen[0].to_lowercase().contains("older output is gone"),
@@ -204,8 +177,8 @@ fn the_output_of_a_cut_ring_starts_under_a_line_that_says_older_output_is_gone(
     assert_eq!(mark.origin.y, slot.origin.y, "on the first line");
     assert!(mark.size.height > Pixels::ZERO && mark.size.height < slot.size.height / 4.);
 
-    // The line is part of the output: when more output pushes it off the screen the mark
-    // goes with it, and when the view is scrolled back to it the mark returns.
+    // The line is part of the output: pushed off the screen the mark goes, scrolled back it
+    // returns.
     let flood: Vec<u8> = (0..300)
         .flat_map(|n| format!("line {n}\r\n").into_bytes())
         .collect();
@@ -221,7 +194,6 @@ fn the_output_of_a_cut_ring_starts_under_a_line_that_says_older_output_is_gone(
         drawn("terminal-cut-0", cx).is_some()
     });
 
-    // The terminal that was whole carries no mark.
     while panes.pane.read_with(&cx, |pane, _| pane.shown()) != [whole.clone()] {
         panes.press_in_the_app::<NextTerminal>(&mut cx);
     }
@@ -248,15 +220,12 @@ fn a_terminal_this_window_opened_is_listed_for_the_others_and_never_attached(
     let (t1, t2) = (terminal('a'), terminal('b'));
     panes.open_terminal(&t1, &mut cx);
 
-    // It joined the shared list, with its workspace and the shell it runs.
     let held = panes
         .models
         .terminals
         .read_with(&cx, |list, _| list.terminals().to_vec());
     assert_eq!(held, [info(&t1, &workspace_id('1'))]);
 
-    // The barrier: the next request the Keeper hears is the one for the next terminal, so
-    // no attach to the first came between.
     panes.open_terminal(&t2, &mut cx);
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.terminals()),
@@ -272,9 +241,8 @@ fn a_terminal_the_list_gains_is_attached_at_the_size_the_pane_shows_terminals_at
     let (one, two) = (workspace_id('1'), workspace_id('2'));
     let (t1, t2) = (terminal('a'), terminal('b'));
     panes.open_terminal(&t1, &mut cx);
-    // The pane laid its terminal out at a size of its own, which the Keeper was told: the
-    // test waits until the Keeper's end has read it, since the terminal's opening names
-    // another size.
+    // The terminal's opening names another size, so wait until the Keeper's end has read the
+    // pane's own.
     wait_until(&mut cx, "the size the pane fitted the terminal to", |_| {
         !panes.keeper.resizes(&t1).is_empty()
     });
@@ -297,8 +265,6 @@ fn a_terminal_the_list_gains_is_attached_at_the_size_the_pane_shows_terminals_at
         std::slice::from_ref(&t2)
     );
 
-    // The size came once, in the request: the view fitted the room it has to the size it
-    // was given and told the Keeper nothing more. A key typed after is the barrier.
     panes.click_slot(0, &mut cx);
     cx.simulate_input("k");
     assert_eq!(panes.keeper.input(&mut cx), (t2.clone(), b"k".to_vec()));
@@ -326,15 +292,12 @@ fn a_terminal_for_a_workspace_that_shows_none_is_attached_at_the_whole_room_in_t
     });
     let whole = panes.grid(&t1);
 
-    // The split view puts every terminal of the first workspace at half the room.
     panes.open_terminal(&t2, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     wait_until(&mut cx, "the terminals at half the room", |_| {
         panes.grid(&t1).columns < whole.columns && panes.grid(&t2).columns < whole.columns
     });
 
-    // The second workspace shows none: what the list gains for it fills the room, and
-    // is asked for at that size and not at the half the last view fitted.
     click_in(&format!("sidebar-workspace-{two}"), &mut cx);
     panes
         .models
@@ -365,7 +328,6 @@ fn a_terminal_gained_for_a_split_workspace_is_attached_at_the_size_of_a_slot(
     });
     let whole = panes.grid(&t1);
 
-    // The workspace is split: its terminals are at half the room.
     panes.open_terminal(&t2, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     wait_until(&mut cx, "the terminals at half the room", |_| {
@@ -373,8 +335,6 @@ fn a_terminal_gained_for_a_split_workspace_is_attached_at_the_size_of_a_slot(
     });
     let half = panes.grid(&t1);
 
-    // What the list gains for it is shown in a slot when the user asks for it, so it is
-    // asked for at the size of a slot and not at the whole room.
     panes
         .models
         .terminals
@@ -393,8 +353,6 @@ fn a_terminal_gained_for_a_split_workspace_is_attached_at_the_size_of_a_slot(
             .pane
             .read_with(cx, |pane, _| pane.shown().contains(&t3))
     });
-    // The size came once, in the request: a key typed after is the barrier, since the
-    // resize of a view that fitted another grid would have gone out before it.
     cx.simulate_input("k");
     assert_eq!(panes.keeper.input(&mut cx), (t3.clone(), b"k".to_vec()));
     assert!(panes.keeper.resizes(&t3).is_empty());
@@ -413,7 +371,6 @@ fn a_terminal_gained_for_a_workspace_that_shows_one_is_attached_at_the_whole_roo
     });
     let whole = panes.grid(&t1);
 
-    // The second workspace is split, and its terminals are the last the pane fitted.
     click_in(&format!("sidebar-workspace-{two}"), &mut cx);
     panes.open_terminal(&t2, &mut cx);
     panes.open_terminal(&t3, &mut cx);
@@ -422,9 +379,6 @@ fn a_terminal_gained_for_a_workspace_that_shows_one_is_attached_at_the_whole_roo
         panes.grid(&t2).columns < whole.columns && panes.grid(&t3).columns < whole.columns
     });
 
-    // What the list gains for the first workspace, which shows one terminal, is asked for
-    // at the whole room that terminal will be shown at, and not at the half the last view
-    // fitted.
     panes
         .models
         .terminals
@@ -457,7 +411,6 @@ fn a_terminal_gained_for_a_split_workspace_is_attached_at_a_slot_whatever_anothe
     let (one, two) = (workspace_id('1'), workspace_id('2'));
     let (t1, t2, t3, t4) = (terminal('a'), terminal('b'), terminal('c'), terminal('d'));
 
-    // The first workspace is split: its two terminals are at half the room.
     panes.open_terminal(&t1, &mut cx);
     wait_until(&mut cx, "the size the pane fitted the terminal to", |_| {
         !panes.keeper.resizes(&t1).is_empty()
@@ -470,16 +423,12 @@ fn a_terminal_gained_for_a_split_workspace_is_attached_at_a_slot_whatever_anothe
     });
     let half = panes.grid(&t1);
 
-    // The second workspace shows one terminal, which fills the room: that is the last
-    // size the pane fitted.
     click_in(&format!("sidebar-workspace-{two}"), &mut cx);
     panes.open_terminal(&t3, &mut cx);
     wait_until(&mut cx, "the terminal alone at the whole room", |_| {
         panes.grid(&t3) == whole
     });
 
-    // What the list gains for the first workspace is shown in a slot, so it is asked for
-    // at the size of a slot and not at the whole room the other workspace fitted last.
     panes
         .models
         .terminals
@@ -499,8 +448,6 @@ fn a_terminal_gained_for_a_split_workspace_is_attached_at_a_slot_whatever_anothe
             .pane
             .read_with(cx, |pane, _| pane.shown().contains(&t4))
     });
-    // The size came once, in the request: a key typed after is the barrier, since the
-    // resize of a view that fitted another grid would have gone out before it.
     cx.simulate_input("k");
     assert_eq!(panes.keeper.input(&mut cx), (t4.clone(), b"k".to_vec()));
     assert!(panes.keeper.resizes(&t4).is_empty());
@@ -514,8 +461,6 @@ fn a_terminal_gained_for_a_split_workspace_after_the_window_was_resized_is_attac
     let (one, two) = (workspace_id('1'), workspace_id('2'));
     let (t1, t2, t3, t4) = (terminal('a'), terminal('b'), terminal('c'), terminal('d'));
 
-    // The first workspace is split: its two terminals are at half the room, which is the
-    // slot the pane last saw.
     panes.open_terminal(&t1, &mut cx);
     wait_until(&mut cx, "the size the pane fitted the terminal to", |_| {
         !panes.keeper.resizes(&t1).is_empty()
@@ -528,7 +473,6 @@ fn a_terminal_gained_for_a_split_workspace_after_the_window_was_resized_is_attac
     });
     let old_slot = panes.grid(&t1);
 
-    // The second workspace, on screen, shows one terminal, and the window gets smaller.
     click_in(&format!("sidebar-workspace-{two}"), &mut cx);
     panes.open_terminal(&t3, &mut cx);
     wait_until(&mut cx, "the terminal alone at the whole room", |_| {
@@ -546,8 +490,6 @@ fn a_terminal_gained_for_a_split_workspace_after_the_window_was_resized_is_attac
     };
     assert_ne!(slot, old_slot);
 
-    // What the list gains for the split workspace is shown in a slot of the room as it is
-    // now, and not at the slot the old room held.
     panes
         .models
         .terminals
@@ -567,8 +509,6 @@ fn a_terminal_gained_for_a_split_workspace_after_the_window_was_resized_is_attac
             .pane
             .read_with(cx, |pane, _| pane.shown().contains(&t4))
     });
-    // The size came once, in the request: a key typed after is the barrier, since the
-    // resize of a view that fitted another grid would have gone out before it.
     cx.simulate_input("k");
     assert_eq!(panes.keeper.input(&mut cx), (t4.clone(), b"k".to_vec()));
     assert!(panes.keeper.resizes(&t4).is_empty());
@@ -581,7 +521,6 @@ fn a_terminal_being_attached_is_not_attached_again_when_the_list_changes(cx: &mu
     let (t1, t2, t3, t4) = (terminal('a'), terminal('b'), terminal('c'), terminal('d'));
     panes.open_terminal(&t1, &mut cx);
 
-    // Two terminals join the list one after the other, the first still unanswered.
     panes
         .models
         .terminals
@@ -602,8 +541,6 @@ fn a_terminal_being_attached_is_not_attached_again_when_the_list_changes(cx: &mu
             .read_with(cx, |pane, _| pane.terminals().len() == 3)
     });
 
-    // The barrier: the next request is the one for a new terminal, and the list, changed
-    // by that terminal's joining it, has not sent another attach.
     panes.open_terminal(&t4, &mut cx);
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.terminals()),
@@ -621,8 +558,6 @@ fn an_attach_the_keeper_refuses_adds_no_terminal(cx: &mut TestAppContext) {
         .keeper
         .reply(id, Err(Refusal::UnknownTerminal { terminal: gone }));
 
-    // The pane goes on as before: the next request it makes is the one the user asked
-    // for, and the terminal it opens is its only one.
     panes.open_terminal(&next, &mut cx);
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.terminals()),
@@ -655,7 +590,6 @@ fn a_terminal_of_a_workspace_off_screen_is_shown_when_its_workspace_comes_on_scr
         panes.pane.read_with(&cx, |pane, _| pane.workspace(&t1)),
         Some(two.clone())
     );
-    // The workspace on screen is the first, which has none.
     assert_eq!(panes.pane.read_with(&cx, |pane, _| pane.shown()), []);
     assert!(drawn("terminal-slot-0", &mut cx).is_none());
 
@@ -698,9 +632,7 @@ fn an_ending_told_before_the_pane_takes_the_answer_to_its_attach_reaches_its_vie
     let (panes, mut cx) = open_holding(cx, vec![info(&t1, &one)]);
     let (id, _, _) = attach_request(&panes, &mut cx);
 
-    // The program writes and ends while the answer to the attach is not yet taken. The fact
-    // after the ending is the barrier: facts are told in the order they came, so when the
-    // agents of the workspace are held, the pane has heard the ending.
+    // Facts are told in order: once the agents are held the pane has heard the ending.
     panes.keeper.output(&t1, b"bye\r\n");
     panes.keeper.tell(Fact::TerminalEnded {
         terminal: t1.clone(),
@@ -724,7 +656,6 @@ fn an_ending_told_before_the_pane_takes_the_answer_to_its_attach_reaches_its_vie
             .is_empty()
     );
 
-    // The answer comes after the ending: the view the pane makes then says how it ended.
     answer_attach(&panes, id, &t1, false, &[]);
     wait_until(&mut cx, "the ending in the view", |cx| {
         let view = panes.pane.read_with(cx, |pane, _| pane.terminal(&t1));
@@ -745,8 +676,6 @@ fn a_terminal_attached_in_a_workspace_that_shows_one_takes_no_slot_from_it(
     panes.open_terminal(&t1, &mut cx);
     assert_eq!(panes.focused_terminal(&mut cx), Some(t1.clone()));
 
-    // The list gains a terminal of the workspace on screen, which the user looks at one
-    // terminal of.
     panes
         .models
         .terminals
@@ -760,7 +689,6 @@ fn a_terminal_attached_in_a_workspace_that_shows_one_takes_no_slot_from_it(
             .read_with(cx, |pane, _| pane.terminals().len() == 2)
     });
 
-    // It is listed, and the user's terminal is still the one shown and focused.
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.terminals()),
         [t1.clone(), t2.clone()]
@@ -771,7 +699,6 @@ fn a_terminal_attached_in_a_workspace_that_shows_one_takes_no_slot_from_it(
     );
     assert_eq!(panes.focused_terminal(&mut cx), Some(t1.clone()));
 
-    // And it is reached with Next Terminal.
     panes.press_in_the_app::<NextTerminal>(&mut cx);
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.shown()),

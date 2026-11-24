@@ -1,12 +1,6 @@
-//! Component tests: the sessions of the agents' side of the Keeper and what each is told of
-//! its review, through the surface a Window uses and the built hook program, with real
-//! repositories, a real database and real shells beneath.
-//!
-//! A session exists because the hook program reported it, as Claude Code's does; the
-//! Keeper is the library on a thread of the test. The Keeper runs git and the shells of
-//! its terminals with the environment of its process, so each test sets that environment
-//! as its first statement, and these tests are run by `cargo nextest`, which gives each
-//! test a process of its own.
+//! Component tests of the agents' side sessions, through the Window surface and the built hook
+//! program. Each test sets the process environment first, so nextest runs it in a process of its
+//! own.
 
 use std::io::Write as _;
 use std::os::unix::net::UnixStream;
@@ -29,7 +23,6 @@ use yaar_store::Store;
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -37,37 +30,28 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// The recording whose first session starts (line 0) and ends (line 13), and whose second
-/// session starts (line 14).
+/// The first session starts at line 0 and ends at 13; the second starts at 14.
 const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 
-/// The recording of a session with tools: it starts (line 1), its user types a prompt
-/// (2), it reads (4), edits (10) and writes (13), stops (32); the CLI starts a turn of its
-/// own (33), which stops (34); it ends (35).
+/// A session with tools: it starts (line 1), gets a prompt (2), reads (4), edits (10),
+/// writes (13) and stops (32); the CLI starts a turn of its own (33), which stops (34);
+/// it ends (35).
 const TOOLS: &str = "claude/turn-tools.jsonl";
 
-/// The recording of a session whose user types a prompt (line 2) after it starts (0).
+/// The user types a prompt (line 2) after the start (0).
 const TYPED: &str = "claude/review-file-read.jsonl";
 
-/// A session that starts (line 0) and nothing else of use here.
 const AT_MENTION: &str = "claude/at-mention.jsonl";
 
-/// The recording of pi's session with its four tools: its first session starts (line 1,
-/// `session_start`, its file `.../e7/2026-05-23T19-20-32-010Z_0000001f-....jsonl`) and
-/// ends (127); a second one starts after it (129).
+/// pi's first session starts at line 1 and ends at 127; a second starts at 129.
 const PI_TOOLS: &str = "pi/turn-tools.jsonl";
 
-/// What `a.txt` of every repository holds, a line each.
 const LINES: [&str; 3] = ["one", "two", "three"];
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the
-    /// shell of a terminal: no configuration of the user or of the system, a fixed
-    /// author, the shell `/bin/sh`, an empty home. It has to be the first statement of a
-    /// test.
+    /// Sets the process environment for git and the shell. Must be the first statement of a test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -90,17 +74,14 @@ impl Scratch {
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: this runs as the first statement of a test, and nextest gives each test
+        // a process of its own, so no other thread exists yet.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's lists of files go, and a program of a
-            // terminal's too: a folder that goes with the test.
+            // Where the Keeper's copies of git's file lists and a terminal's programs go.
             std::env::set_var("TMPDIR", root.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -118,9 +99,6 @@ impl Scratch {
         Scratch(root)
     }
 
-    /// [`Scratch::new`], and the user's shell a program of the test's own: it writes down
-    /// the arguments it is run with, as a launcher gives them, and runs no CLI, then reads
-    /// its terminal until the Keeper ends it. It has to be the first statement of a test.
     fn with_launcher_shell() -> Scratch {
         let scratch = Scratch::new();
         let shell = scratch.0.join("shell");
@@ -135,19 +113,15 @@ impl Scratch {
         let mut mode = std::fs::metadata(&shell).expect("the shell").permissions();
         std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
         std::fs::set_permissions(&shell, mode).expect("make it run");
-        // SAFETY: as in `Scratch::new`: this is the first statement of a test run by
-        // `cargo nextest`, in a process of its own that has started no thread.
+        // SAFETY: as in `Scratch::new`: the first statement of a test, in a process of its own.
         unsafe { std::env::set_var("SHELL", &shell) };
         scratch
     }
 
-    /// Where the shell of [`Scratch::with_launcher_shell`] writes its arguments.
     fn shell_log(&self) -> PathBuf {
         self.0.join("shell-arguments")
     }
 
-    /// The arguments the shell of the test was run with, once it was: a launcher gives
-    /// `-l`, `-i`, `-c` and the command.
     fn launched_with(&self) -> Vec<String> {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -172,11 +146,8 @@ impl Scratch {
         self.0.join("data").join(yaar_store::FILE_NAME)
     }
 
-    /// The folder of the test's own copy of the built hook program, made at the first
-    /// call. Every test process asks `program` to build, and cargo puts a program it built
-    /// in place again each time: where tests run side by side, the program is gone for a
-    /// moment, and one started from there fails. A copy is made at the first try that finds
-    /// the program, and is the test's own.
+    /// The folder of the test's own copy of the hook program: cargo puts a rebuilt program in
+    /// place again for every test process, so under parallel tests it is briefly missing.
     fn companions(&self) -> PathBuf {
         let folder = self.0.join("companions");
         let copy = folder.join(yaar_adapter_claude::HOOK_PROGRAM);
@@ -197,13 +168,10 @@ impl Scratch {
         }
     }
 
-    /// Starts the Keeper's library on a thread of this test, with the folder of the hook
-    /// program as where the pieces of the agents lie.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         self.keeper_told(Some(self.companions()))
     }
 
-    /// The same, told this folder for the pieces, or none.
     fn keeper_told(&self, companions: Option<PathBuf>) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -217,7 +185,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -239,8 +206,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main` and an identity of its
-    /// own, since git guesses none on every system.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -253,14 +218,10 @@ impl Scratch {
         folder
     }
 
-    /// The database the Keeper kept, read once the Keeper has stopped.
     fn store(&self) -> Store {
         Store::open(&self.database()).expect("open the Keeper's database")
     }
 
-    /// Runs the hook program with `payload` on its standard input, as Claude Code does,
-    /// in the terminal `terminal` of the app; none for a CLI outside the app. It must
-    /// succeed; what it prints is what the Keeper answered, which no test here reads.
     fn hook(&self, terminal: Option<&TerminalId>, payload: &[u8]) {
         let mut command = Command::new(self.companions().join(yaar_adapter_claude::HOOK_PROGRAM));
         command
@@ -285,9 +246,6 @@ impl Scratch {
 }
 
 impl Scratch {
-    /// Reports `payload` as the extension of pi would, on a connection of its own as the
-    /// reporting program's is, for the CLI process `pid` in no terminal of the app: the
-    /// folder of the payload says where it belongs. The Keeper answers it `Done`.
     fn pi_report(&self, pid: u32, payload: Vec<u8>) {
         let report = AgentReport {
             agent: yaar_adapter_pi::NAME.to_owned(),
@@ -302,8 +260,6 @@ impl Scratch {
     }
 }
 
-/// A process the test started, killed and collected when the test ends, whatever way it
-/// does.
 struct Process(std::process::Child);
 
 impl Drop for Process {
@@ -334,8 +290,6 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// One end of the Link, as a Window holds it. Everything it is sent is kept, so that a
-/// test reads it in order, and what it has looked at is not looked at again.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -364,8 +318,6 @@ impl Window {
         id
     }
 
-    /// Reads one frame and keeps it. Fails the test at the deadline, with the facts that
-    /// came.
     fn read(&mut self, waiting_for: &str) {
         match read_message(&mut self.stream) {
             Ok(Message::Fact(fact)) => self.facts.push(fact),
@@ -384,7 +336,6 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = self.send(request);
         loop {
@@ -395,7 +346,6 @@ impl Window {
         }
     }
 
-    /// The first fact from here on that `wanted` takes, passing over the ones before it.
     fn until<T>(&mut self, what: &str, mut wanted: impl FnMut(&Fact) -> Option<T>) -> T {
         loop {
             while self.looked_at < self.facts.len() {
@@ -408,7 +358,6 @@ impl Window {
         }
     }
 
-    /// The next `AgentsChanged` of `workspace` that `wanted` takes.
     fn agents_until(
         &mut self,
         workspace: &WorkspaceId,
@@ -423,7 +372,6 @@ impl Window {
         })
     }
 
-    /// Reads until `text` is in the output of `terminal`.
     fn output_until(&mut self, terminal: &TerminalId, text: &str) {
         loop {
             let heard = self.output.iter().find(|(from, _)| from == terminal);
@@ -444,7 +392,6 @@ impl Window {
         workspace
     }
 
-    /// Opens a terminal with a shell in it, and waits until the shell has started.
     fn open_terminal(&mut self, workspace: &WorkspaceId) -> TerminalId {
         let opened = self.ask(Request::OpenTerminal {
             workspace: workspace.clone(),
@@ -454,14 +401,11 @@ impl Window {
         let Ok(Reply::TerminalOpened { terminal }) = opened else {
             panic!("no terminal: {opened:?}");
         };
-        // A line the typed one does not hold: the shell is reading when it is seen.
         self.type_into(&terminal, b"printf 'ready-%s\\n' now\r");
         self.output_until(&terminal, "ready-now");
         terminal
     }
 
-    /// Opens a terminal that runs `program` and gives its id. It is not waited for: what
-    /// the test reads says when its program ran.
     fn open_program(&mut self, workspace: &WorkspaceId, program: Program) -> TerminalId {
         let opened = self.ask(Request::OpenTerminal {
             workspace: workspace.clone(),
@@ -499,7 +443,6 @@ impl Window {
 }
 
 impl Window {
-    /// The reviews of a workspace.
     fn reviews(&mut self, workspace: &WorkspaceId) -> WorkspaceReviews {
         match self.ask(Request::GetReviews {
             workspace: workspace.clone(),
@@ -509,7 +452,6 @@ impl Window {
         }
     }
 
-    /// Saves the first comment of a new thread on line `line` (from 1) of `a.txt`.
     fn draft(&mut self, review: &ReviewId, n: u32, line: u32, text: &str) -> (ThreadId, CommentId) {
         let (thread, comment) = ids(n);
         let saved = self.ask(Request::SaveDraft {
@@ -534,8 +476,6 @@ impl Window {
         (thread, comment)
     }
 
-    /// The facts that came after the first `mark` ones, ReviewsChanged of `workspace`
-    /// counted.
     fn reviews_changed_since(&self, mark: usize, workspace: &WorkspaceId) -> usize {
         self.facts[mark..]
             .iter()
@@ -544,7 +484,6 @@ impl Window {
     }
 }
 
-/// The id of the thread `n` and of its first comment, 32 hexadecimal digits each.
 fn ids(n: u32) -> (ThreadId, CommentId) {
     (
         ThreadId::new(format!("{:032x}", 0x1000 + n)),
@@ -552,7 +491,6 @@ fn ids(n: u32) -> (ThreadId, CommentId) {
     )
 }
 
-/// A Keeper with one repository open and a Window attached.
 struct Setup {
     scratch: Scratch,
     keeper: JoinHandle<std::io::Result<Exit>>,
@@ -562,7 +500,6 @@ struct Setup {
 }
 
 impl Setup {
-    /// Has to be the first statement of a test.
     fn new() -> Setup {
         let scratch = Scratch::new();
         let repo = scratch.repository("repo");
@@ -578,14 +515,11 @@ impl Setup {
         }
     }
 
-    /// Runs the hook of line `line` of `records`, moved into the repository, in `terminal`.
     fn hook_in(&self, terminal: &TerminalId, records: &[HookRecord], line: usize) {
         let record = records[line].in_project(&self.repo);
         self.scratch.hook(Some(terminal), &record.input_bytes());
     }
 
-    /// A session of Claude Code that runs in a shell of the app, and the review it holds:
-    /// the first session of the recording of dialogs, waiting for the user's message.
     fn session(&mut self) -> (yaar_link::SessionId, ReviewId, TerminalId) {
         let terminal = self.window.open_terminal(&self.workspace);
         let records = recorded::hook_events(DIALOGS);
@@ -608,7 +542,6 @@ impl Setup {
         })
     }
 
-    /// Reads until a `Step` of the workspace that `wanted` takes is told.
     fn step_told(&mut self, what: &str, wanted: impl Fn(&Step) -> bool) {
         let workspace = self.workspace.clone();
         self.window.until(what, |fact| match fact {
@@ -621,7 +554,6 @@ impl Setup {
         });
     }
 
-    /// The session list of the workspace, as a Window reads it.
     fn sessions(&mut self) -> Vec<yaar_link::Session> {
         self.window
             .agents()
@@ -640,7 +572,6 @@ impl Setup {
             .expect("the review is kept")
     }
 
-    /// Stops the Keeper and gives what it kept, once it has gone.
     fn finish(self) -> (Store, Scratch) {
         self.window.stop(self.keeper);
         let store = self.scratch.store();
@@ -652,7 +583,6 @@ fn is_state(state: SessionState) -> impl Fn(&WorkspaceAgents) -> bool {
     move |agents| agents.sessions.iter().any(|session| session.state == state)
 }
 
-/// The head commit of the repository in `folder`.
 fn head(folder: &Path) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -668,8 +598,6 @@ fn head(folder: &Path) -> String {
         .to_owned()
 }
 
-/// The path of the file the tool of line `line` of `records` names, relative to the
-/// project the recording was made in.
 fn path_of(records: &[HookRecord], line: usize) -> PathBuf {
     let file = records[line].input["tool_input"]["file_path"]
         .as_str()
@@ -696,7 +624,6 @@ fn a_turn_a_typed_prompt_starts_is_from_the_user_and_none_runs_after_it_stops() 
     assert!(working.sessions[0].turn_from_user);
     assert!(setup.sessions()[0].turn_from_user, "as ListAgents tells it");
 
-    // The turn stops: none runs, so none is from the user.
     setup.hook_in(&terminal, &records, 6);
     let stopped = setup.window.agents_until(
         &setup.workspace,
@@ -729,8 +656,6 @@ fn a_turn_the_cli_starts_itself_is_not_from_the_user_though_the_one_before_it_wa
         is_state(SessionState::Unreviewed),
     );
 
-    // A background task ended, and Claude Code starts a turn that no message of the user
-    // began.
     setup.hook_in(&terminal, &records, 33);
     let own = setup.window.agents_until(
         &setup.workspace,
@@ -767,7 +692,6 @@ fn what_is_attached_of_a_sessions_review_follows_attaching_and_detaching_each_to
     assert_eq!(told.sessions[0].attached, Some(Attachment::Review));
     assert_eq!(setup.sessions()[0].attached, Some(Attachment::Review));
 
-    // One thread alone replaces the review.
     assert!(setup.attach(&review, Some(&thread)).is_ok());
     let alone = setup.window.agents_until(
         &setup.workspace,
@@ -806,7 +730,6 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
     let mut window = scratch.window();
     let workspace = window.open(&repo);
     let records = recorded::hook_events(DIALOGS);
-    // In no terminal of the app: the folder says where it belongs.
     let record = records[0].in_project(&repo);
     scratch.hook(None, &record.input_bytes());
     let started = window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
@@ -814,7 +737,6 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
     let review = started.sessions[0].review.clone();
     assert!(!started.sessions[0].resumable, "it runs");
 
-    // What runs is not brought back, and nor is what the Keeper does not hold.
     for refused in [
         session.clone(),
         yaar_link::SessionId::new("no-such-session"),
@@ -827,8 +749,7 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
         assert!(matches!(asked, Err(Refusal::Failed { .. })), "{asked:?}");
     }
 
-    // A second session holds a review and ends by its CLI: not running, and not one the
-    // Keeper's stop cut off.
+    // A second session ends by its CLI: not running, and not one the Keeper's stop cut off.
     let tools = recorded::hook_events(TOOLS);
     scratch.hook(None, &tools[1].in_project(&repo).input_bytes());
     let second = window.agents_until(&workspace, "the second session", |agents| {
@@ -841,12 +762,11 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
         .expect("the second session")
         .id
         .clone();
-    // A third session starts in a terminal of the app, before the second one ends, so that it
-    // holds a review of its own.
     let at_mention = recorded::hook_events(AT_MENTION);
     let terminal = window.open_program(&workspace, Program::Shell);
-    // Its CLI is a process of its own, as it is when its terminal ends: the hook program
-    // names the test's process for every session it reports, and that would end the others.
+    // The third session's CLI is a process of its own, as it is when its terminal ends:
+    // the hook program names the test's process for every session it reports, and ending
+    // that would end the others.
     let cli = Process(
         Command::new("sleep")
             .arg("600")
@@ -860,7 +780,6 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
         pid: cli.0.id(),
         payload: at_mention[0].in_project(&repo).input_bytes(),
     };
-    // On a connection of its own, as the hook program's.
     let mut piece = scratch.window();
     assert_eq!(piece.ask(Request::Report { report }), Ok(Reply::Done));
     let third = window.agents_until(&workspace, "the third session", |agents| {
@@ -888,9 +807,6 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
     assert!(by_cli.review.is_some());
     assert!(!by_cli.resumable, "its CLI ended it: nothing cut it off");
 
-    // The user closes the third one's terminal (the end of the file on an empty line ends
-    // the shell, which only reads it): its process is gone, which is no cut-off of the
-    // Keeper's either.
     window.type_into(&terminal, b"\x04");
     let gone = window.agents_until(&workspace, "the third gone with its terminal", |agents| {
         agents
@@ -910,7 +826,6 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
     );
     window.stop(keeper);
 
-    // The Keeper starts again: the first session was cut off, the others were not.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let listed = window.agents();
@@ -954,7 +869,6 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
         format!("claude --resume '{}'", records[0].session())
     );
 
-    // Its CLI reports it again: it runs, and is resumable no more.
     scratch.hook(None, &record.input_bytes());
     let running = window.agents_until(&workspace, "the session runs", is_state(SessionState::Idle));
     let runs = running
@@ -967,8 +881,7 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
     window.stop(keeper);
 }
 
-/// A process of its own for a CLI to name as its process in a report: it runs until the test
-/// ends, so that the Keeper does not take the session for gone.
+/// Runs until the test ends, so the Keeper does not take the session for gone.
 fn a_cli_process() -> Process {
     Process(
         Command::new("sleep")
@@ -979,19 +892,12 @@ fn a_cli_process() -> Process {
     )
 }
 
-/// What pi's resume runs for a session whose last record of itself is the file
-/// `record_file`: the folder of the record, and the session's own id, each word in single
-/// quotes for the shell.
 fn pi_resume(record_file: &str, id: &str) -> String {
     let folder = Path::new(record_file).parent().expect("a file in a folder");
     format!("pi --session-dir '{}' --session '{id}'", folder.display())
 }
 
 impl Scratch {
-    /// Takes away the arguments the shell was last run with, so that what [`launched_with`]
-    /// reads next is what the next launch wrote.
-    ///
-    /// [`launched_with`]: Scratch::launched_with
     fn forget_the_launch(&self) {
         match std::fs::remove_file(self.shell_log()) {
             Ok(()) => {}
@@ -1012,7 +918,6 @@ fn a_pi_session_that_ran_when_its_keeper_stopped_is_resumable_after_each_restart
     let records = recorded::pi_events(PI_TOOLS);
     let pi = a_cli_process();
 
-    // The session starts (line 1): it runs, and is not offered.
     let first = records[1].in_project(&repo);
     scratch.pi_report(pi.0.id(), first.payload_bytes());
     let started = window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
@@ -1021,9 +926,8 @@ fn a_pi_session_that_ran_when_its_keeper_stopped_is_resumable_after_each_restart
     assert!(!started.sessions[0].resumable, "it runs");
     let session = started.sessions[0].id.clone();
 
-    // Its next report names another file as the session's record (line 3, the one field
-    // `sessionFile` changed: pi moves a session's file when it forks it), and a later one
-    // names none (line 16, the field taken out): the last one named is the one kept.
+    // A report naming another `sessionFile` replaces it (pi moves a session's file when it forks
+    // it); one naming none keeps the last named.
     let moved = "/moved/sessions/2026-05-23T19-21-00-000Z_0000001f.jsonl";
     let mut turn = records[3].in_project(&repo);
     turn.payload["sessionFile"] = serde_json::json!(moved);
@@ -1037,8 +941,6 @@ fn a_pi_session_that_ran_when_its_keeper_stopped_is_resumable_after_each_restart
     scratch.pi_report(pi.0.id(), read.payload_bytes());
     window.stop(keeper);
 
-    // After the restart the session is offered, and its resume is pi's own command for it:
-    // the folder of the record kept and the id pi gave it.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let listed = window.agents();
@@ -1059,8 +961,6 @@ fn a_pi_session_that_ran_when_its_keeper_stopped_is_resumable_after_each_restart
     assert_eq!(launched[3], pi_resume(moved, records[1].session()));
     window.stop(keeper);
 
-    // Offered again after a second restart in which nothing brought it back, and with the
-    // same command.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     assert!(window.agents()[0].sessions[0].resumable);
@@ -1106,7 +1006,6 @@ fn a_session_of_each_cli_cut_off_together_is_offered_the_resume_of_its_own_cli()
     let (claude, pi_session) = (of(yaar_adapter_claude::NAME), of(yaar_adapter_pi::NAME));
     window.stop(keeper);
 
-    // Both were cut off by the one stop: each is offered, and each resume is its own CLI's.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let listed = window.agents();
@@ -1169,8 +1068,6 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
     let Ok(Reply::TerminalOpened { terminal }) = resume(&mut window) else {
         panic!("the resume was refused");
     };
-    // The session was reported once, by its start (line 1), and the Keeper was stopped: the
-    // record its resume carries is the one that start named, in the folder pi kept it in.
     let kept_by_the_start = first.payload["sessionFile"]
         .as_str()
         .expect("the start names the session's file");
@@ -1179,9 +1076,6 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
         pi_resume(kept_by_the_start, records[1].session())
     );
 
-    // While its terminal runs the session is not brought back a second time. It is still
-    // offered, since nothing of it was reported. The list read after the refusal, on the
-    // same connection, holds the one terminal.
     let refused = resume(&mut window);
     assert!(
         matches!(refused, Err(Refusal::Failed { .. })),
@@ -1193,10 +1087,8 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
     assert_eq!(terminals.len(), 1, "{terminals:?}");
     assert!(window.agents()[0].sessions[0].resumable);
 
-    // The terminal ends with its program: the session may be brought back again. The Keeper
-    // queued that end for the agents' side before it told the Windows, so a report of another
-    // session of pi, on the same queue and answered once it is worked out, is the barrier:
-    // what the end changes is changed when it is answered.
+    // The terminal's end is queued for the agents' side before the Windows are told, so a report of
+    // another pi session on the same queue is answered after it: a barrier.
     let another = a_cli_process();
     window.type_into(&terminal, b"\x04");
     window.until("the end of the resume's terminal", |fact| match fact {
@@ -1219,11 +1111,8 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
         pi_resume(kept_by_the_start, records[1].session())
     );
 
-    // The session reports: its CLI has it, and it is offered no more, though the terminal
-    // of the resume still runs.
     scratch.pi_report(pi.0.id(), first.payload_bytes());
-    // Picked by its id: the other session's report that served as a barrier also lists one
-    // that runs and is not offered.
+    // Picked by id: the barrier session's report also lists one that runs and is not offered.
     window.agents_until(&workspace, "the session runs", |agents| {
         agents
             .sessions
@@ -1231,8 +1120,6 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
             .any(|s| s.id == session && s.state == SessionState::Idle && !s.resumable)
     });
 
-    // The resume's terminal ends, and with it the hold: only the report keeps the session
-    // from being brought back now. The report of the other session is the barrier again.
     window.type_into(&second, b"\x04");
     window.until(
         "the end of the second resume's terminal",
@@ -1288,7 +1175,6 @@ fn the_end_of_another_terminal_does_not_free_a_session_a_resume_terminal_is_open
         resume(&mut window),
         Ok(Reply::TerminalOpened { .. })
     ));
-    // Another terminal opens and ends while the resume's runs.
     let other = window.open_program(
         &workspace,
         Program::Agent {
@@ -1300,9 +1186,6 @@ fn the_end_of_another_terminal_does_not_free_a_session_a_resume_terminal_is_open
         Fact::TerminalEnded { terminal, .. } if *terminal == other => Some(()),
         _ => None,
     });
-    // The Keeper queued that end for the agents' side before it told the Windows. A report
-    // of another session of pi, on the same queue and answered once it is worked out, is
-    // the barrier: what the end changes is changed when it is answered.
     scratch.pi_report(pi.0.id(), records[129].in_project(&repo).payload_bytes());
 
     let refused = resume(&mut window);
@@ -1332,9 +1215,6 @@ fn a_session_still_offered_stays_listed_when_a_new_session_of_its_cli_starts_in_
     let session = started.sessions[0].id.clone();
     window.stop(keeper);
 
-    // After the restart another session of pi starts in the workspace and takes over the
-    // review the first held. The first is still offered, so the Window must still be told of
-    // it: its resume control is drawn from this list.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let another = a_cli_process();
@@ -1355,8 +1235,6 @@ fn a_session_still_offered_stays_listed_when_a_new_session_of_its_cli_starts_in_
         .expect("the session still offered is listed");
     assert_eq!(offered.state, SessionState::NotRunning);
     assert!(offered.resumable);
-    // The session that was cut off is listed only because it can be brought back: the
-    // state the workspace shows is its new session's.
     assert_eq!(both.shown, Some(SessionState::Idle));
     window.stop(keeper);
 }
@@ -1380,9 +1258,8 @@ fn a_session_listed_only_because_it_is_offered_decides_the_state_its_workspace_s
         .expect("a session holds a review");
     window.stop(keeper);
 
-    // The session holds no review and no other session is kept. The app makes that state
-    // nowhere today (a review only ever passes to a session that starts, which is then
-    // listed), but the Store allows it, so the Keeper's rule is held through the database.
+    // The session holds no review and no other session is kept: the app never makes that
+    // state, but the Store allows it, so the rule is held through the database.
     scratch
         .store()
         .set_review_agent(&yaar_store::ReviewId::new(review.as_str()), None)
@@ -1409,8 +1286,6 @@ fn a_session_that_ended_and_holds_a_review_decides_the_state_its_workspace_shows
     let workspace = window.open(&repo);
     let dialogs = recorded::hook_events(DIALOGS);
 
-    // A session of Claude Code starts and its CLI ends it: not running, and it keeps its
-    // review.
     scratch.hook(None, &dialogs[0].in_project(&repo).input_bytes());
     window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
     scratch.hook(None, &dialogs[13].in_project(&repo).input_bytes());
@@ -1421,7 +1296,6 @@ fn a_session_that_ended_and_holds_a_review_decides_the_state_its_workspace_shows
     );
     let ended_session = ended.sessions[0].id.clone();
 
-    // A session of pi starts in the same workspace and is idle.
     let records = recorded::pi_events(PI_TOOLS);
     let pi = a_cli_process();
     scratch.pi_report(pi.0.id(), records[1].in_project(&repo).payload_bytes());
@@ -1438,8 +1312,6 @@ fn a_session_that_ended_and_holds_a_review_decides_the_state_its_workspace_shows
         .expect("the session that ended is still listed");
     assert_eq!(kept.state, SessionState::NotRunning);
     assert!(kept.review.is_some(), "it holds its review");
-    // It is listed for its review, so it counts: the workspace shows not running, as it
-    // shows it when the session that ended is the only one.
     assert_eq!(both.shown, Some(SessionState::NotRunning));
     window.stop(keeper);
 }
@@ -1457,7 +1329,6 @@ fn a_pi_session_its_cli_ended_is_not_resumable_and_its_resume_is_refused_with_th
     scratch.pi_report(pi.0.id(), records[1].in_project(&repo).payload_bytes());
     let started = window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
     let session = started.sessions[0].id.clone();
-    // Its CLI ends it (line 127).
     scratch.pi_report(pi.0.id(), records[127].in_project(&repo).payload_bytes());
     let ended = window.agents_until(
         &workspace,
@@ -1478,8 +1349,6 @@ fn a_pi_session_its_cli_ended_is_not_resumable_and_its_resume_is_refused_with_th
             panic!("the resume was not refused with a reason: {asked:?}");
         };
         assert!(!reason.is_empty());
-        // The reply came after all the Keeper does for the request: no terminal is listed
-        // and the user's shell never ran.
         assert_eq!(
             window.ask(Request::ListTerminals),
             Ok(Reply::Terminals(vec![]))
@@ -1511,8 +1380,8 @@ fn the_first_session_that_starts_in_a_terminal_opened_for_a_review_takes_that_re
         scratch.hook(terminal, &line.in_project(&repo).input_bytes());
     };
 
-    // Two sessions ran at once, so each has a review; the first ended, then the second. The
-    // next session of that CLI would take the review of the one that ended last.
+    // Two sessions ran at once, each with a review, and the second ended last: left to
+    // itself, the next session of that CLI would take that review, not the one asked for.
     hook(&dialogs[0], None);
     let first = window.agents_until(&workspace, "the first", is_state(SessionState::Idle));
     let wanted = first.sessions[0].review.clone().expect("a review");
@@ -1545,7 +1414,6 @@ fn the_first_session_that_starts_in_a_terminal_opened_for_a_review_takes_that_re
         .expect("a review");
     assert_ne!(wanted, kept_by_second);
 
-    // The terminal is opened for the first one's review, and a session starts in it.
     let terminal = window.open_program(
         &workspace,
         Program::AgentFor {
@@ -1587,7 +1455,6 @@ fn a_terminal_opened_for_a_review_the_keeper_does_not_hold_is_refused_and_binds_
     let dialogs = recorded::hook_events(DIALOGS);
     let at_mention = recorded::hook_events(AT_MENTION);
 
-    // A session ran and ended: the next session of that CLI takes its review.
     scratch.hook(None, &dialogs[0].in_project(&repo).input_bytes());
     let first = window.agents_until(&workspace, "the first", is_state(SessionState::Idle));
     let kept = first.sessions[0].review.clone().expect("a review");
@@ -1612,8 +1479,6 @@ fn a_terminal_opened_for_a_review_the_keeper_does_not_hold_is_refused_and_binds_
         panic!("the terminal was not refused: {asked:?}");
     };
     assert!(reason.contains("no-such-review"), "{reason}");
-    // The reply came after the Keeper had done all it does for the request: no terminal
-    // is listed, and the launcher's shell was never run.
     assert_eq!(
         window.ask(Request::ListTerminals),
         Ok(Reply::Terminals(vec![]))
@@ -1623,8 +1488,6 @@ fn a_terminal_opened_for_a_review_the_keeper_does_not_hold_is_refused_and_binds_
         "a launcher ran for a review nobody holds"
     );
 
-    // A session that starts in a plain shell of the workspace takes the review the
-    // takeover rules give it, and the unheld one is bound to nothing.
     let terminal = window.open_program(&workspace, Program::Shell);
     scratch.hook(
         Some(&terminal),
@@ -1661,7 +1524,6 @@ fn a_session_whose_review_a_new_session_took_over_is_no_longer_unreviewed() {
         is_state(SessionState::Unreviewed),
     );
     let first = finished.sessions[0].id.clone();
-    // The turn's state is recorded by now, so that nothing of the turn is still to come.
     setup.window.until("the end of the turn", |fact| {
         matches!(fact, Fact::TurnEnded { .. }).then_some(())
     });
@@ -1672,7 +1534,6 @@ fn a_session_whose_review_a_new_session_took_over_is_no_longer_unreviewed() {
         is_state(SessionState::NotRunning),
     );
 
-    // A new session in the same terminal takes its review, as after a clear.
     setup.hook_in(&terminal, &dialogs, 14);
     setup
         .window
@@ -1683,7 +1544,6 @@ fn a_session_whose_review_a_new_session_took_over_is_no_longer_unreviewed() {
                 .any(|s| s.title == "Claude Code 2" && s.state == SessionState::Idle)
         });
 
-    // Its CLI resumes the first, which has no review of its turn to wait for.
     let elsewhere = setup.window.open_terminal(&setup.workspace);
     setup.hook_in(&elsewhere, &records, 1);
     let resumed = setup
@@ -1727,8 +1587,6 @@ fn an_edit_or_a_write_of_the_agent_after_a_round_marks_the_round_edited_once_and
     );
     assert!(!setup.review(&review).rounds[0].edited);
 
-    // A read is no edit. The step is told after the reviews of its item, so that when it is
-    // here nothing of the read is still to come.
     let mark = setup.window.facts.len();
     for line in [2, 3, 4] {
         setup.hook_in(&terminal, &records, line);
@@ -1740,7 +1598,6 @@ fn an_edit_or_a_write_of_the_agent_after_a_round_marks_the_round_edited_once_and
     );
     assert!(!setup.review(&review).rounds[0].edited);
 
-    // An edit is.
     let mark = setup.window.facts.len();
     for line in [9, 10] {
         setup.hook_in(&terminal, &records, line);
@@ -1771,8 +1628,6 @@ fn the_credits_kept_with_a_turns_state_name_the_session_for_the_file_its_edit_to
     let mut setup = Setup::new();
     let terminal = setup.window.open_terminal(&setup.workspace);
     let records = recorded::hook_events(TOOLS);
-    // Two files that differ from the commit checked out: one the agent's edit tool names,
-    // one nobody's tool does.
     let edited = path_of(&records, 10);
     let by_hand = PathBuf::from("by-hand.txt");
     for file in [&edited, &by_hand] {
@@ -1797,7 +1652,6 @@ fn the_credits_kept_with_a_turns_state_name_the_session_for_the_file_its_edit_to
     let review = setup.sessions()[0].review.clone().expect("a review");
     let (store, scratch) = setup.finish();
 
-    // Read once the Keeper has stopped, from what it kept.
     let reviews = Reviews::new(
         store,
         Git::find().expect("git"),
@@ -1825,14 +1679,12 @@ fn the_credits_kept_with_a_turns_state_name_the_session_for_the_file_its_edit_to
 #[test]
 fn a_session_that_takes_over_the_review_of_no_agent_tells_the_reviews_changed() {
     let mut setup = Setup::new();
-    // A Window that read the reviews holds the review of no agent.
     let held = setup.window.reviews(&setup.workspace).reviews;
     let [review] = &held[..] else {
         panic!("not exactly one review: {held:?}");
     };
     assert_eq!(review.agent, None);
     let review = review.id.clone();
-    // Nothing told before this point answers the wait below.
     setup.window.looked_at = setup.window.facts.len();
 
     let terminal = setup.window.open_terminal(&setup.workspace);
@@ -1843,7 +1695,6 @@ fn a_session_that_takes_over_the_review_of_no_agent_tells_the_reviews_changed() 
         matches!(fact, Fact::ReviewsChanged { workspace: told } if *told == workspace).then_some(())
     });
 
-    // A Window that reads them again, as the fact asks, finds the session its owner.
     let session = setup.sessions()[0].id.clone();
     assert_eq!(setup.review(&review).agent, Some(session));
     let _ = setup.finish();

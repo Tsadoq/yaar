@@ -1,21 +1,5 @@
-//! System tests of what the app does with the files of the user's agent CLIs: it leaves
-//! their settings as they are, and it never reads or stores what they sign in with.
-//!
-//! The home folder is the world's own. The settings and credential files of both CLIs are
-//! planted in it before the Keeper starts, so that a Keeper that touched them would find
-//! them there; a marker is planted in the credential files, and is looked for in
-//! everything the app stored. On Linux the Keeper also runs under `strace`, which sees
-//! every file it and the programs it started open.
-//!
-//! Each row runs for both CLIs: its body is a function of a [`Dialect`], run as Claude Code
-//! by the test that carries the row's name and as pi by the one with `_as_pi` after it. pi's
-//! settings are the one file of a CLI the app may change, by the one entry the user's yes
-//! asks for: a world as pi gives that yes first, and the home is looked at again after it,
-//! so that the turn is shown to change nothing.
-//!
-//! The reading of a trace is plain code that both systems compile; the tests of it run on
-//! a trace typed by hand. Only starting the Keeper under the tracer, and the row that
-//! does, run on Linux alone.
+//! System tests that the app leaves the agent CLIs' settings alone and never reads or stores their
+//! credentials; on Linux the Keeper also runs under `strace`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
@@ -34,9 +18,8 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 30,
 };
 
-/// The settings and credential files of the CLIs, relative to the home folder, in the
-/// order they are planted: what they hold apart from the marker is of no meaning to the
-/// app, which must not read them at all.
+/// The CLIs' settings files, relative to the home folder, as planted: what they hold means
+/// nothing to the app.
 const SETTINGS: [(&str, &str); 3] = [
     (".claude/settings.json", "{\"theme\": \"dark\"}\n"),
     (".claude.json", "{\"numStartups\": 3}\n"),
@@ -46,18 +29,14 @@ const SETTINGS: [(&str, &str); 3] = [
     ),
 ];
 
-/// The credential files of the CLIs, relative to the home folder.
 const CREDENTIALS: [&str; 2] = [".claude/.credentials.json", ".pi/agent/auth.json"];
 
-/// What a file held when it was recorded: its bytes and when it was last changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Held {
     bytes: Vec<u8>,
     modified: SystemTime,
 }
 
-/// Every regular file under `folder` but those under `apart`, each by its path relative
-/// to `folder`, with what it holds. A link, a socket or a folder holds nothing of its own.
 fn record(folder: &Path, apart: &Path) -> BTreeMap<PathBuf, Held> {
     let mut recorded = BTreeMap::new();
     walk(folder, &mut |path| {
@@ -81,8 +60,6 @@ fn record(folder: &Path, apart: &Path) -> BTreeMap<PathBuf, Held> {
     recorded
 }
 
-/// Calls `visit` with every path under `folder`, folders first; `visit` says whether to go
-/// into a folder. Links are not followed.
 fn walk(folder: &Path, visit: &mut dyn FnMut(&Path) -> bool) {
     let Ok(entries) = fs::read_dir(folder) else {
         return;
@@ -97,8 +74,6 @@ fn walk(folder: &Path, visit: &mut dyn FnMut(&Path) -> bool) {
     }
 }
 
-/// Whether `path`, relative to the home folder, is one of the places the CLIs keep their
-/// own: `.claude`, `.claude.json` and `.pi`, and what lies under them.
 fn is_kept_by_a_cli(path: &Path) -> bool {
     let first = path.components().next().expect("a path");
     [".claude", ".claude.json", ".pi"]
@@ -106,9 +81,6 @@ fn is_kept_by_a_cli(path: &Path) -> bool {
         .any(|own| first.as_os_str() == *own)
 }
 
-/// What differs between two recordings of a home folder: a file that was there and is
-/// gone or has other bytes or another time of change, and a file that was not there under
-/// the places the CLIs keep their own (`.claude`, `.claude.json`, `.pi`).
 fn differences(before: &BTreeMap<PathBuf, Held>, after: &BTreeMap<PathBuf, Held>) -> Vec<String> {
     let mut found = Vec::new();
     for (path, held) in before {
@@ -131,7 +103,6 @@ fn differences(before: &BTreeMap<PathBuf, Held>, after: &BTreeMap<PathBuf, Held>
     found
 }
 
-/// Whether `haystack` holds `needle`.
 fn holds(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty()
         && haystack
@@ -139,7 +110,6 @@ fn holds(haystack: &[u8], needle: &[u8]) -> bool {
             .any(|window| window == needle)
 }
 
-/// The files under `folder`, but those `except` names, whose bytes hold `marker`.
 fn files_holding(marker: &[u8], folder: &Path, except: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
     let mut found = Vec::new();
     walk(folder, &mut |path| {
@@ -154,7 +124,6 @@ fn files_holding(marker: &[u8], folder: &Path, except: &dyn Fn(&Path) -> bool) -
     found
 }
 
-/// The git stores under `folder`: the folders that hold both `objects` and `refs`.
 fn git_stores(folder: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     walk(folder, &mut |path| {
@@ -166,8 +135,6 @@ fn git_stores(folder: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// Whether any object of the git store `store`, its content as git gives it, holds
-/// `marker`.
 fn objects_hold(world: &World, store: &Path, marker: &[u8]) -> bool {
     let printed = world
         .command(Path::new("git"))
@@ -186,7 +153,6 @@ fn objects_hold(world: &World, store: &Path, marker: &[u8]) -> bool {
     holds(&printed.stdout, marker)
 }
 
-/// A marker no other run has: hexadecimal text of sixteen bytes the system gave.
 fn marker() -> String {
     let mut bytes = [0u8; 16];
     fs::File::open("/dev/urandom")
@@ -196,21 +162,13 @@ fn marker() -> String {
     format!("marker-{hex}")
 }
 
-/// A world made ready for a test of the files of the CLIs.
 struct Prepared {
     world: World,
-    /// A repository with a file `notes.txt` in it.
     repo: yaar_system_tests::Repo,
-    /// The marker the credential files hold.
     marker: String,
-    /// Every file of the home folder but the app's own, as it was before the Keeper
-    /// started.
     before: BTreeMap<PathBuf, Held>,
 }
 
-/// A world with the stand-in on its path, the settings and credential files of both CLIs
-/// planted in its home folder, and the home recorded, before its Keeper starts; the
-/// Keeper runs under the wrapper that `under` gives for the world, none for no wrapper.
 fn world_with_files(under: impl FnOnce(&World) -> Vec<OsString>) -> Prepared {
     let mut world = World::new();
     world.agents_on_path();
@@ -255,16 +213,12 @@ fn world_with_files(under: impl FnOnce(&World) -> Vec<OsString>) -> Prepared {
     }
 }
 
-/// Writes `content` in the file `relative` of the world's home, making its folders.
 fn plant(world: &World, relative: &str, content: &str) {
     let file = world.home().join(relative);
     fs::create_dir_all(file.parent().expect("a folder")).expect("make the folder");
     fs::write(&file, content).expect("plant the file");
 }
 
-/// A full turn of the stand-in of `dialect` in a shell of the app, as AGENT-01 has it: a
-/// read, an edit, a new file and a shell write, and then the session's exit, which the app
-/// has seen when this returns. Gives the client.
 fn full_turn(world: &World, repo: &yaar_system_tests::Repo, dialect: Dialect) -> Client {
     let mut client = world.client();
     let workspace = client.open_folder(repo.path()).expect("open the folder").1;
@@ -275,7 +229,6 @@ fn full_turn(world: &World, repo: &yaar_system_tests::Repo, dialect: Dialect) ->
     client.wait_for_agents(&workspace, DEADLINE, |agents| {
         agents.shown == Some(SessionState::Unreviewed)
     });
-    // Let the stand-in end with its own exit.
     client.wait_for_prompt(&terminal, prompt);
     client.type_line(&terminal, "");
     client.wait_for_agents(&workspace, DEADLINE, |agents| {
@@ -292,9 +245,7 @@ fn full_turn(world: &World, repo: &yaar_system_tests::Repo, dialect: Dialect) ->
     client
 }
 
-/// Asks the Keeper to stop everything, and waits until every process it started and it
-/// itself are gone, so that what it does as it ends is done. Its children go first: the
-/// world ends a tracer as soon as the Keeper's own process is gone.
+/// Its children go first: the world ends a tracer as soon as the Keeper's own process is gone.
 fn stop_the_keeper(world: &mut World, client: &mut Client) {
     let keeper = world.keeper_pid().expect("the Keeper runs");
     let started = descendants_of(keeper);
@@ -309,14 +260,12 @@ fn stop_the_keeper(world: &mut World, client: &mut Client) {
     );
 }
 
-// AGENT-12.
 #[test]
 fn the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_credentials_is_found_nowhere_the_app_stored()
  {
     settings_are_unchanged(Dialect::ClaudeCode);
 }
 
-// AGENT-12, as pi.
 #[test]
 fn the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_credentials_is_found_nowhere_the_app_stored_as_pi()
  {
@@ -332,17 +281,12 @@ fn settings_are_unchanged(dialect: Dialect) {
     } = world_with_files(|_| Vec::new());
     let home = world.home();
     let data = world.data_dir();
-    // The files are there to be looked at.
     assert_eq!(
         before.keys().filter(|path| is_kept_by_a_cli(path)).count(),
         SETTINGS.len() + CREDENTIALS.len()
     );
 
     if dialect == Dialect::Pi {
-        // pi is installed here, so the Keeper asks its question, at the first request of a
-        // Window, and asking writes nothing. The user's yes then changes pi's settings and
-        // nothing else of the home (what it writes there is CONSENT-01's), and it is the
-        // home after it that the turn must leave as it is: no yes is given by the turn.
         let asked = world.client().consents().expect("the list of questions");
         let pi = asked.iter().find(|consent| consent.agent == "pi");
         assert_eq!(
@@ -364,14 +308,11 @@ fn settings_are_unchanged(dialect: Dialect) {
     }
 
     let mut client = full_turn(&world, &repo, dialect);
-    // The Keeper ends before anything is looked at: what it does as it ends is part of
-    // what the app did.
+    // The Keeper ends before anything is looked at: what it does as it ends is part of what it did.
     stop_the_keeper(&mut world, &mut client);
 
-    // The settings files of both CLIs are unchanged, and nothing was added beside them.
     let after = record(&home, &data);
     assert_eq!(differences(&before, &after), Vec::<String>::new());
-    // The worktree holds nothing of either CLI.
     let status = repo.git(&["status", "--porcelain", "--ignored"]);
     for line in status.lines() {
         let path = line.get(3..).unwrap_or_default();
@@ -383,8 +324,6 @@ fn settings_are_unchanged(dialect: Dialect) {
     }
     assert!(!repo.path().join(".claude").exists() && !repo.path().join(".pi").exists());
 
-    // The marker is in no file of the world but the two planted and the test's own scripts
-    // and logs, and in no object of any git store of the app.
     let root = home.parent().expect("the world's folder").to_owned();
     let planted: Vec<PathBuf> = CREDENTIALS.iter().map(|file| home.join(file)).collect();
     let own = |path: &Path| {
@@ -399,7 +338,6 @@ fn settings_are_unchanged(dialect: Dialect) {
         Vec::<PathBuf>::new(),
         "the marker of the credential files is in what the app stored"
     );
-    // The check reads the planted files: they do hold it.
     assert_eq!(
         files_holding(marker.as_bytes(), &root, &|path| !planted
             .contains(&path.to_owned())),
@@ -420,12 +358,10 @@ fn settings_are_unchanged(dialect: Dialect) {
     }
 }
 
-// Not rows: what AGENT-12 looks with.
 #[test]
 fn a_recording_of_a_home_finds_a_changed_a_touched_a_removed_and_an_added_file_of_a_cli() {
     let world = World::new();
     let home = world.home();
-    // A folder of the home that is left out, as the app's own is.
     let data = home.join("apart");
     for (file, content) in SETTINGS {
         plant(&world, file, content);
@@ -441,7 +377,6 @@ fn a_recording_of_a_home_finds_a_changed_a_touched_a_removed_and_an_added_file_o
         "{\"theme\": \"light\"}\n",
     )
     .unwrap();
-    // The same bytes, written again at another time.
     fs::File::options()
         .write(true)
         .open(home.join(".claude.json"))
@@ -451,7 +386,6 @@ fn a_recording_of_a_home_finds_a_changed_a_touched_a_removed_and_an_added_file_o
     fs::remove_file(home.join(".pi/agent/removed.json")).unwrap();
     plant(&world, ".pi/agent/added.json", "{}\n");
     plant(&world, ".claude/settings.local.json", "{}\n");
-    // Elsewhere in the home, and in the app's own folder, a new file is no concern.
     plant(&world, ".sh_history", "ls\n");
     fs::write(data.join("db"), "two").unwrap();
 
@@ -478,8 +412,8 @@ fn the_search_for_a_marker_finds_it_in_a_file_and_in_a_git_object_and_nowhere_el
     let root = with.path().parent().expect("the repositories").to_owned();
     let nothing = |_: &Path| false;
 
-    // In the worktree, as a file; in the objects, git's own compression hides it from a
-    // search of the files.
+    // The marker is a plain file in the worktree. git compresses its objects, so a search of the
+    // files misses it there and `objects_hold` asks git.
     assert_eq!(
         files_holding(marker.as_bytes(), &root, &nothing),
         [with.path().join("secret.txt")]
@@ -503,31 +437,21 @@ fn the_search_for_a_marker_finds_it_in_a_file_and_in_a_git_object_and_nowhere_el
         &without.path().join(".git"),
         marker.as_bytes()
     ));
-    // Two markers are two.
     assert_ne!(marker, self::marker());
 }
 
-/// Whether a file of a CLI's credentials is named by `line` of a trace: by its name
-/// `.credentials.json`, or `auth.json` with `.pi/agent` in the line, in the path it was
-/// given or in the path `-y` gives a descriptor it was opened beside.
 fn names_a_credential_file(line: &str) -> bool {
     line.contains(".credentials.json") || (line.contains("auth.json") && line.contains(".pi/agent"))
 }
 
-/// One call of a trace, with the lines of its unfinished and resumed halves joined.
 #[derive(Debug, PartialEq, Eq)]
 struct Call {
-    /// The process that made it; 0 when the trace names none.
     pid: u32,
-    /// The system call.
     name: String,
-    /// Everything of the call after its name, the result included.
     rest: String,
 }
 
-/// The calls of a trace of `strace -f -y`, in the order they finished. The lines of a
-/// call that was unfinished when another process's call came, and the line that resumed
-/// it, are one call. Signals and exits are no calls.
+/// An unfinished call and the line that resumed it are one call.
 fn calls(trace: &str) -> Vec<Call> {
     let mut unfinished: HashMap<u32, (String, String)> = HashMap::new();
     let mut found = Vec::new();
@@ -537,7 +461,6 @@ fn calls(trace: &str) -> Vec<Call> {
             let Some((name, rest)) = resumed.split_once(" resumed>") else {
                 continue;
             };
-            // What the call began with, when the trace has it, and what it ended with.
             let (name, began) = match unfinished.remove(&pid) {
                 Some((began_name, began)) if began_name == name => (name, began),
                 _ => (name, format!("{name}(")),
@@ -565,8 +488,6 @@ fn calls(trace: &str) -> Vec<Call> {
     found
 }
 
-/// The process id a line of a trace starts with, as `1234 ` or `[pid  1234] `, and the
-/// rest of the line; 0 for a line with none.
 fn split_pid(line: &str) -> (u32, &str) {
     let line = line.trim_start();
     if let Some(inside) = line.strip_prefix("[pid")
@@ -583,8 +504,6 @@ fn split_pid(line: &str) -> (u32, &str) {
     (0, line)
 }
 
-/// The text of the first string a call's text holds, as strace writes it: in double
-/// quotes, a quote or a backslash inside it escaped with a backslash.
 fn first_string(text: &str) -> Option<String> {
     let mut chars = text.split_once('"')?.1.chars();
     let mut string = String::new();
@@ -598,8 +517,6 @@ fn first_string(text: &str) -> Option<String> {
     None
 }
 
-/// The program each process of a trace ran last, by its file name, from the calls of
-/// `execve` that did not fail.
 fn programs(trace: &str) -> HashMap<u32, String> {
     let mut run = HashMap::new();
     for call in calls(trace)
@@ -622,7 +539,6 @@ fn programs(trace: &str) -> HashMap<u32, String> {
     run
 }
 
-/// Every line of a trace that names a credential file of a CLI.
 fn credential_lines(trace: &str) -> Vec<&str> {
     trace
         .lines()
@@ -630,10 +546,8 @@ fn credential_lines(trace: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Whether a call of `trace` that succeeded renamed a file over pi's settings: how the app
-/// puts the entry of the user's yes into them, through a temporary file beside them. The
-/// settings are named by the path the call was given, `.pi/agent/settings.json`, as the
-/// app gives it, and as its last word: the temporary file has a longer name.
+/// Whether a successful rename put a file over pi's settings, the way the app writes them.
+/// The settings must be the call's last path: the temporary file's name only starts with theirs.
 fn replaces_the_settings_of_pi(trace: &str) -> bool {
     calls(trace).iter().any(|call| {
         let Some((arguments, result)) = call.rest.rsplit_once(" = ") else {
@@ -647,8 +561,6 @@ fn replaces_the_settings_of_pi(trace: &str) -> bool {
     })
 }
 
-/// Every string of a call's text, as strace writes them: in double quotes, a quote or a
-/// backslash inside one escaped with a backslash.
 fn strings(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut current: Option<String> = None;
@@ -680,9 +592,7 @@ fn the_programs_of_a_trace_are_read_from_the_execve_calls_that_succeeded() {
     let run = programs(trace);
     assert_eq!(run.get(&4001).map(String::as_str), Some("yaar-keeper"));
     assert_eq!(run.get(&4002).map(String::as_str), Some("sh"));
-    // Resumed after another process's call: one call, and it succeeded.
     assert_eq!(run.get(&4003).map(String::as_str), Some("yaar-claude-hook"));
-    // A failed call ran nothing.
     assert_eq!(run.get(&4004), None);
     assert_eq!(run.get(&4005).map(String::as_str), Some("standin-agent"));
     assert_eq!(run.len(), 4);
@@ -725,8 +635,6 @@ fn the_settings_of_pi_are_replaced_by_a_rename_that_succeeded_onto_their_path_an
 ";
     assert!(replaces_the_settings_of_pi(split));
 
-    // A rename that failed, one onto another file, a look at the settings and the lock
-    // beside them, and a rename onto the temporary name alone, replace nothing.
     for trace in [
         "9001  rename(\"/h/.pi/agent/settings.json.tmp1\", \"/h/.pi/agent/settings.json\") = -1 EACCES (Permission denied)\n",
         "9001  rename(\"/h/.pi/agent/a.tmp\", \"/h/.pi/agent/auth.json\") = 0\n",
@@ -770,8 +678,6 @@ fn a_credential_file_is_named_by_its_path_or_by_the_path_of_the_descriptor_it_wa
 7003  openat(AT_FDCWD, \"/home/u/.claude/.credentials.json\", O_RDONLY <unfinished ...>
 7003  <... openat resumed>) = -1 ENOENT (No such file or directory)
 ";
-    // Five lines name one; the line that resumed the last call names none, and its first
-    // half does.
     let found = credential_lines(trace);
     assert_eq!(found.len(), 5, "{found:#?}");
     assert!(found.iter().all(|line| !line.contains("resumed")));
@@ -790,10 +696,7 @@ fn a_file_that_is_no_credential_of_a_cli_is_named_by_no_line_of_a_trace() {
     assert_eq!(credential_lines(trace), Vec::<&str>::new());
 }
 
-/// What the Keeper of AGENT-13 runs under: `strace`, following every process it starts,
-/// writing to `trace` the `execve` calls, which name each process's program, and every
-/// call that takes a path, with the path of each descriptor. `%file` names the calls that
-/// take a path on every architecture, as arm64 has no `open`.
+/// `%file` names the calls that take a path on every architecture, as arm64 has no `open`.
 #[cfg(target_os = "linux")]
 fn strace_wrapper(trace: &Path) -> Vec<OsString> {
     [
@@ -811,23 +714,19 @@ fn strace_wrapper(trace: &Path) -> Vec<OsString> {
     .collect()
 }
 
-// AGENT-13.
 #[cfg(target_os = "linux")]
 #[test]
 fn neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_traced_turn() {
     nothing_opens_a_credential_file(Dialect::ClaudeCode);
 }
 
-// AGENT-13, as pi. Written on macOS, where it does not run (it compiles there): the Linux run is the first.
 #[cfg(target_os = "linux")]
 #[test]
 fn neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_traced_turn_as_pi() {
     nothing_opens_a_credential_file(Dialect::Pi);
 }
 
-/// The program of the app that reports for `dialect`'s CLI: Claude Code's hook program, and
-/// for pi the reporting program its extension runs. The extension itself is TypeScript, run
-/// by pi, and no process of the trace names it.
+/// No process of the trace names the extension: it is TypeScript run by pi.
 #[cfg(target_os = "linux")]
 fn companion_program(dialect: Dialect) -> &'static str {
     match dialect {
@@ -841,27 +740,23 @@ fn nothing_opens_a_credential_file(dialect: Dialect) {
     let found = std::process::Command::new("strace").arg("-V").output();
     assert!(
         found.is_ok_and(|output| output.status.success()),
-        "AGENT-13 needs `strace` on the search path: install it (`apt-get install strace`)"
+        "the test that no search opens a credential file needs `strace` on the search path: install it (`apt-get install strace`)"
     );
-    // In the world's own folder, which the world removes.
     let trace_of = |world: &World| world.home().with_file_name("trace.txt");
     let Prepared {
         mut world, repo, ..
     } = world_with_files(|world| strace_wrapper(&trace_of(world)));
     if dialect == Dialect::Pi {
-        // The user's yes, which makes the Keeper open pi's settings and write its one entry
-        // there, so that the trace shows the app beside the file where the credentials lie.
         world.allow_pi_extension();
     }
     let mut client = full_turn(&world, &repo, dialect);
 
-    // The Keeper ends of its own accord, and the tracer with it, so that everything it
-    // saw is written down.
+    // The Keeper ends of its own accord, and the tracer with it, so that everything it saw is
+    // written.
     stop_the_keeper(&mut world, &mut client);
     let trace = fs::read(trace_of(&world)).expect("the trace of the Keeper");
     let trace = String::from_utf8_lossy(&trace);
 
-    // The trace holds the Keeper and a companion, so that an empty one cannot pass.
     let run = programs(&trace);
     for program in ["yaar-keeper", companion_program(dialect)] {
         assert!(
@@ -869,15 +764,12 @@ fn nothing_opens_a_credential_file(dialect: Dialect) {
             "the trace holds no process of {program}: {run:?}"
         );
     }
-    // As pi it holds the Keeper's change of pi's settings too: the app did open the folder of
-    // pi's own files, and the credentials beside them were left alone.
     if dialect == Dialect::Pi {
         assert!(
             replaces_the_settings_of_pi(&trace),
             "the trace holds no change of pi's settings"
         );
     }
-    // None of them, nor any other process the Keeper started, names a credential file.
     let named = credential_lines(&trace);
     assert!(named.is_empty(), "{named:#?}");
     drop(client);
