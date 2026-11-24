@@ -142,6 +142,9 @@ for f in README.md packaging/README.md packaging/release-day.md; do
     }
     {
       line = $0
+      # A text saved with CR LF line ends keeps the CR at the end of its line: it is no part
+      # of an address, and an address that ends the line must still end there.
+      gsub(/\r/, " ", line)
       # A quote or a backquote that stands right before a "/" joins what is before it to
       # what follows: "https://host"/install.sh is the address https://host/install.sh. Any
       # other quote or backquote ends what it follows, so that ["https://x/install.sh","y"]
