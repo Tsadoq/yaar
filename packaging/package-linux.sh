@@ -39,8 +39,9 @@
 #                      runs on the same programs give the same bytes
 #
 # Exit codes: 0 both packages written; 1 a program is missing or not executable, the version is
-# not one, or the processor is not supported; 2 usage error (arguments, NOTICES, programs
-# folder). Every refusal comes before the out folder is made.
+# not one, the processor is not supported, or a step of the packing failed (one sentence says
+# which command); 2 usage error (arguments, NOTICES, programs folder). Every refusal comes
+# before the out folder is made.
 set -euo pipefail
 umask 022
 [ $# -eq 3 ] || { echo "usage: NOTICES=<file> package-linux.sh <programs-dir> <version> <out-dir>" >&2; exit 2; }
@@ -76,7 +77,13 @@ case $(uname -m) in
   x86_64) DEBARCH=amd64; ARCH=x86_64 ;;
   *) echo "package-linux.sh: unsupported processor: $(uname -m)" >&2; exit 1 ;;
 esac
-mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
+# From here a command that fails ends the script with one sentence naming it and exit 1: the
+# tools of the packing (dpkg-deb, tar, install, gzip) have exit codes of their own, and the
+# header names only 0, 1 and 2.
+set -E
+trap 'echo "package-linux.sh: line $LINENO of $0 failed: $BASH_COMMAND" >&2; exit 1' ERR
+mkdir -p "$OUT" || { echo "package-linux.sh: cannot make the out folder $OUT" >&2; exit 1; }
+OUT=$(cd "$OUT" && pwd)
 
 PKG=yaar-review
 ID=io.github.tsadoq.yaar
@@ -179,13 +186,15 @@ Description: Reviews what a coding agent changes, while it changes it
  yaar-claude-tools and yaar-pi-report.
 CONTROL
 find "$D" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
-dpkg-deb --root-owner-group -Zxz --build "$D" "$OUT/${PKG}_${VER}_${DEBARCH}.deb" > /dev/null
+dpkg-deb --root-owner-group -Zxz --build "$D" "$OUT/${PKG}_${VER}_${DEBARCH}.deb" > /dev/null \
+  || { echo "package-linux.sh: dpkg-deb could not build $OUT/${PKG}_${VER}_${DEBARCH}.deb" >&2; exit 1; }
 
 # --- archive: unpack anywhere, run yaar-review/bin/yaar-review
 T=$W/tar; stage "$T" "$PKG"
 install -m 644 "$HERE/../LICENSE" "$T/$PKG/share/doc/$PKG/LICENSE"
 install -m 644 "$NOTICES" "$T/$PKG/share/doc/$PKG/THIRD-PARTY-NOTICES.txt"
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH" -C "$T" -cf - "$PKG" \
-  | gzip -n -9 > "$OUT/${PKG}-${VER}-linux-${ARCH}.tar.gz"
+  | gzip -n -9 > "$OUT/${PKG}-${VER}-linux-${ARCH}.tar.gz" \
+  || { echo "package-linux.sh: tar or gzip could not write $OUT/${PKG}-${VER}-linux-${ARCH}.tar.gz" >&2; exit 1; }
 
 echo "package-linux.sh: wrote $OUT/${PKG}_${VER}_${DEBARCH}.deb and $OUT/${PKG}-${VER}-linux-${ARCH}.tar.gz"

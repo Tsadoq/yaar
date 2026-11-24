@@ -18,14 +18,19 @@
 #     start them): /usr/bin/yaar-review,
 #     /usr/libexec/yaar-review/yaar-keeper, /usr/libexec/yaar-review/yaar-claude-hook,
 #     /usr/libexec/yaar-review/yaar-claude-tools, /usr/libexec/yaar-review/yaar-pi-report;
-#     and no file named standin-lsp, standin-agent or yaar-script anywhere;
-#   - it holds the desktop entry /usr/share/applications/io.github.tsadoq.yaar.desktop, the
-#     icon, and usr/share/doc/yaar-review/{copyright,NOTICE,THIRD-PARTY-NOTICES.txt.gz},
-#     the last one gunzipping to the bytes of <notices>;
+#     no other file anywhere has an execute bit, every folder is 0755 (root's, in the .deb:
+#     a folder that others cannot enter makes the programs in it unrunnable for them), every
+#     other file is 0644, and no file named standin-lsp, standin-agent or yaar-script is
+#     anywhere;
+#   - it holds exactly these files besides the programs: the desktop entry
+#     /usr/share/applications/io.github.tsadoq.yaar.desktop and the icon
+#     /usr/share/icons/hicolor/256x256/apps/io.github.tsadoq.yaar.png (the bytes of
+#     packaging/linux/ in the repository), and usr/share/doc/yaar-review/{copyright,NOTICE,
+#     THIRD-PARTY-NOTICES.txt.gz}, the last one gunzipping to the bytes of <notices>;
 #   - the archive holds the same programs under yaar-review/bin and yaar-review/libexec/
 #     yaar-review, the same desktop entry and icon under yaar-review/share, LICENSE, NOTICE
 #     and THIRD-PARTY-NOTICES.txt (the bytes of <notices>) under yaar-review/share/doc/
-#     yaar-review;
+#     yaar-review, and nothing else;
 #   - in the container of the job: `apt-get install ./<the .deb>` installs it, each of the
 #     five installed programs' `ldd` lists no "not found", and `/usr/bin/yaar-review --version`
 #     prints "yaar-review <version>". Needs readelf (binutils) and dpkg in that container.
@@ -97,6 +102,27 @@ mode_in() {
   done < "$1"
   [ "$listed" -eq 1 ] || fail "$3: lists $listed entries named $2, not one"
 }
+# modes_ok <listing> <the package file> <what the listing puts before a path of the tree>
+# <the programs, as listed without that prefix> <owner as the listing writes it, or "">:
+# every folder is rwxr-xr-x, every program rwxr-xr-x, every other entry rw-r--r--, each of the
+# owner when one is given. A folder others cannot enter, or a file with an execute bit that is
+# not a program, is named.
+modes_ok() {
+  while read -r m o _size _date _time p _rest; do
+    [ -n "$p" ] || fail "$2: its listing has a line without a path"
+    rel=${p#"$3"}
+    if [ -n "$5" ] && [ "$o" != "$5" ]; then fail "$2: $p is owned by $o, not $5"; fi
+    case $m in
+      d*) [ "$m" = "drwxr-xr-x" ] || fail "$2: the folder $p has mode $m, not drwxr-xr-x" ;;
+      *)
+        if grep -qxF -- "$rel" "$4"; then
+          [ "$m" = "-rwxr-xr-x" ] || fail "$2: $p has mode $m, not -rwxr-xr-x"
+        else
+          [ "$m" = "-rw-r--r--" ] || fail "$2: $p has mode $m, not -rw-r--r--: only the five programs are executable"
+        fi ;;
+    esac
+  done < "$1"
+}
 mkdir "$W/deb"
 dpkg-deb -x "$DEB" "$W/deb" || fail "$DEB: dpkg-deb cannot unpack it"
 dpkg-deb -c "$DEB" > "$W/deb.list" || fail "$DEB: dpkg-deb cannot list it"
@@ -115,12 +141,25 @@ while read -r f; do
   [ "$MODE" = "-rwxr-xr-x" ] || fail "$DEB: /$f has mode $MODE, not -rwxr-xr-x"
   [ "$OWNER" = "root/root" ] || fail "$DEB: /$f is owned by $OWNER, not root/root"
 done < "$W/programs"
-( cd "$W/deb" && find usr/bin usr/libexec \( -type f -o -type l \) > "$W/found.unsorted" ) || fail "$DEB: find cannot list usr/bin and usr/libexec of its unpacked tree"
-sort "$W/found.unsorted" > "$W/found" || fail "$DEB: cannot sort the list of its programs"
-if ! cmp -s "$W/programs" "$W/found"; then
-  comm -13 "$W/programs" "$W/found" > "$W/extra" || fail "$DEB: cannot compare its programs with the five"
-  fail "$DEB: holds more than the five programs in usr/bin and usr/libexec: $(tr '\n' ' ' < "$W/extra")"
+# The whole tree: every file or link outside folders is one of these, so a sixth program
+# or a stray file anywhere (/usr/lib/yaar-review/yaar-keeper, say) is named.
+cp "$W/programs" "$W/files.deb" || fail "$W/files.deb: cannot write the list of the files the .deb should hold"
+cat >> "$W/files.deb" <<LIST
+usr/share/applications/$ID.desktop
+usr/share/doc/yaar-review/NOTICE
+usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz
+usr/share/doc/yaar-review/copyright
+usr/share/icons/hicolor/256x256/apps/$ID.png
+LIST
+sort "$W/files.deb" > "$W/expected" || fail "$DEB: cannot sort the list of the files it should hold"
+( cd "$W/deb" && find usr ! -type d > "$W/found.unsorted" ) || fail "$DEB: find cannot list its unpacked tree"
+sort "$W/found.unsorted" > "$W/found" || fail "$DEB: cannot sort the list of its files"
+if ! cmp -s "$W/expected" "$W/found"; then
+  comm -13 "$W/expected" "$W/found" > "$W/extra" || fail "$DEB: cannot compare its files with the expected ones"
+  comm -23 "$W/expected" "$W/found" > "$W/lacking" || fail "$DEB: cannot compare its files with the expected ones"
+  fail "$DEB: holds files it should not: $(tr '\n' ' ' < "$W/extra") and lacks: $(tr '\n' ' ' < "$W/lacking")"
 fi
+modes_ok "$W/deb.list" "$DEB" "./" "$W/programs" root/root
 ( cd "$W/deb" && find . \( -name standin-lsp -o -name standin-agent -o -name yaar-script \) > "$W/stray" ) || fail "$DEB: find cannot search its unpacked tree for test programs"
 [ ! -s "$W/stray" ] || fail "$DEB: holds a test program, which no package ships: $(tr '\n' ' ' < "$W/stray")"
 for f in "usr/share/applications/$ID.desktop" "usr/share/icons/hicolor/256x256/apps/$ID.png" \
@@ -128,6 +167,8 @@ for f in "usr/share/applications/$ID.desktop" "usr/share/icons/hicolor/256x256/a
     usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz; do
   [ -s "$W/deb/$f" ] || fail "$DEB: holds no /$f, or it is empty"
 done
+cmp -s "$W/deb/usr/share/applications/$ID.desktop" "$REPO/packaging/linux/$ID.desktop" || fail "$DEB: /usr/share/applications/$ID.desktop differs from $REPO/packaging/linux/$ID.desktop"
+cmp -s "$W/deb/usr/share/icons/hicolor/256x256/apps/$ID.png" "$REPO/packaging/linux/icon-256.png" || fail "$DEB: /usr/share/icons/hicolor/256x256/apps/$ID.png differs from $REPO/packaging/linux/icon-256.png"
 gzip -dc "$W/deb/usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz" > "$W/deb-notices" \
   || fail "$DEB: /usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz does not gunzip"
 cmp -s "$W/deb-notices" "$NOTICES" || fail "$DEB: /usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz does not gunzip to the bytes of $NOTICES"
@@ -146,13 +187,27 @@ while read -r f; do
   [ "$MODE" = "-rwxr-xr-x" ] || fail "$TAR: $a has mode $MODE, not -rwxr-xr-x"
   cmp -s "$W/tar/$a" "$W/deb/$f" || fail "$TAR: $a differs from /$f of $DEB"
 done < "$W/programs"
-( cd "$W/tar" && find yaar-review/bin yaar-review/libexec \( -type f -o -type l \) > "$W/found.unsorted" ) || fail "$TAR: find cannot list bin and libexec of its unpacked tree"
-sort "$W/found.unsorted" > "$W/found" || fail "$TAR: cannot sort the list of its programs"
 sed 's|^usr/|yaar-review/|' "$W/programs" > "$W/programs-tar" || fail "$W/programs-tar: cannot write the list of the archive's programs"
-if ! cmp -s "$W/programs-tar" "$W/found"; then
-  comm -13 "$W/programs-tar" "$W/found" > "$W/extra" || fail "$TAR: cannot compare its programs with the five"
-  fail "$TAR: holds more than the five programs in bin and libexec: $(tr '\n' ' ' < "$W/extra")"
+# The archive's whole tree: the programs, the same desktop entry and icon, and the four
+# documents (the notices not compressed, LICENSE added).
+cp "$W/programs-tar" "$W/files.tar" || fail "$W/files.tar: cannot write the list of the files the archive should hold"
+cat >> "$W/files.tar" <<LIST
+yaar-review/share/applications/$ID.desktop
+yaar-review/share/doc/yaar-review/LICENSE
+yaar-review/share/doc/yaar-review/NOTICE
+yaar-review/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt
+yaar-review/share/doc/yaar-review/copyright
+yaar-review/share/icons/hicolor/256x256/apps/$ID.png
+LIST
+sort "$W/files.tar" > "$W/expected" || fail "$TAR: cannot sort the list of the files it should hold"
+( cd "$W/tar" && find yaar-review ! -type d > "$W/found.unsorted" ) || fail "$TAR: find cannot list its unpacked tree"
+sort "$W/found.unsorted" > "$W/found" || fail "$TAR: cannot sort the list of its files"
+if ! cmp -s "$W/expected" "$W/found"; then
+  comm -13 "$W/expected" "$W/found" > "$W/extra" || fail "$TAR: cannot compare its files with the expected ones"
+  comm -23 "$W/expected" "$W/found" > "$W/lacking" || fail "$TAR: cannot compare its files with the expected ones"
+  fail "$TAR: holds files it should not: $(tr '\n' ' ' < "$W/extra") and lacks: $(tr '\n' ' ' < "$W/lacking")"
 fi
+modes_ok "$W/tar.list" "$TAR" "" "$W/programs-tar" ""
 ( cd "$W/tar" && find . \( -name standin-lsp -o -name standin-agent -o -name yaar-script \) > "$W/stray" ) || fail "$TAR: find cannot search its unpacked tree for test programs"
 [ ! -s "$W/stray" ] || fail "$TAR: holds a test program, which no package ships: $(tr '\n' ' ' < "$W/stray")"
 for f in "share/applications/$ID.desktop" "share/icons/hicolor/256x256/apps/$ID.png"; do
@@ -217,6 +272,11 @@ while read -r f; do
     needs_package "$f" "$so" "$W/ldd.out"
   done < "$W/needed"
 done < "$W/programs"
+# The folders that lead to the programs: the user who runs the app has to enter each of them.
+for d in /usr/libexec/yaar-review /usr/share/doc/yaar-review; do
+  got=$(stat -c '%a %U:%G' "$d") || fail "$d: stat cannot read it"
+  [ "$got" = "755 root:root" ] || fail "$d installed by $DEB has mode and owner '$got', not '755 root:root'"
+done
 got=$(/usr/bin/yaar-review --version 2>&1) || fail "/usr/bin/yaar-review --version failed: $got"
 [ "$got" = "yaar-review $VER" ] || fail "/usr/bin/yaar-review --version prints '$got', not 'yaar-review $VER'"
 echo "$ME: $DEB and $TAR hold what they should, and the .deb installs"
