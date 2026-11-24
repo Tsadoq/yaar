@@ -245,6 +245,7 @@ check_release_build() {
         if (w[i] == "-p" && i < n) { i++; pkgs = pkgs " " w[i]; continue }
         print "bad\t" w[i]; bad = 1
       }
+      if (pkgs == "") { print "bad\tno -p <package>"; bad = 1 }
       if (bad) next
       invocations++
       got[sorted(substr(pkgs, 2))]++
