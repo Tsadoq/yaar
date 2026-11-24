@@ -669,8 +669,8 @@ EOF
 }
 
 # The user's own processes whose program is one of the app's, matched by its full path and
-# never by a name alone: "<pid> keeper" or "<pid> window" per line. A Keeper of another
-# copy (a build folder's) has another path and is not listed.
+# never by a name alone: "<pid> keeper <path>" or "<pid> window <path>" per line. A Keeper of
+# another copy (a build folder's) has another path and is not listed.
 app_processes() {
   local programs pid exe kind
   programs=$(resolved_programs)
@@ -682,7 +682,7 @@ app_processes() {
         path = $0; sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+/, "", path)
         if (path in want) {
           k = (length(path) >= length(keeper) && substr(path, length(path) - length(keeper) + 1) == keeper) ? "keeper" : "window"
-          print $1, k
+          print $1, k, path
         }
       }' "$TMP/ps.out"
   else
@@ -697,7 +697,7 @@ $programs
 $exe
 "*)
             case "$exe" in */"$KEEPER") kind=keeper ;; *) kind=window ;; esac
-            printf '%s %s\n' "${pid#/proc/}" "$kind"
+            printf '%s %s %s\n' "${pid#/proc/}" "$kind" "$exe"
             ;;
         esac
       fi
@@ -705,7 +705,20 @@ $exe
   fi
 }
 
-# Waits up to <seconds> for the app to have no process, polling every 0.2 s.
+# Says which processes the list (the lines of app_processes) holds, on one line.
+say_running() { # <list>
+  local pid kind path out=""
+  while read -r pid kind path; do
+    [ -n "$pid" ] || continue
+    out="$out${out:+; }$pid $kind $path"
+  done <<EOF
+$1
+EOF
+  say "still running: $out"
+}
+
+# Waits up to <seconds> for the app to have no process, polling every 0.2 s. When the
+# deadline passes it says which processes it last saw and returns 1.
 # The list is read into a variable first: a failure of app_processes inside a test or a
 # here-document would end only its own subshell and read as "no process".
 wait_until_stopped() { # <seconds>
@@ -717,7 +730,9 @@ wait_until_stopped() { # <seconds>
     i=$((i + 1))
   done
   list=$(app_processes) || exit 1
-  [ -z "$list" ]
+  [ -n "$list" ] || return 0
+  say_running "$list"
+  return 1
 }
 
 signal_app() { # <TERM|KILL>
@@ -729,6 +744,17 @@ signal_app() { # <TERM|KILL>
   done <<EOF
 $list
 EOF
+}
+
+# Whether the list (the lines of app_processes) holds a Window.
+has_window() { # <list>
+  local pid kind path
+  while read -r pid kind path; do
+    if [ "$kind" = window ]; then return 0; fi
+  done <<EOF
+$1
+EOF
+  return 1
 }
 
 # Part 1 of the uninstall: the app must have stopped.
@@ -752,14 +778,13 @@ ensure_app_stopped() {
     say "the app has stopped"
     return 0
   fi
-  case "$running" in
-    *window*) ;;
-    *)
-      # Only a Keeper: it leaves by itself 5 s after its last Window when no agent runs.
-      say "only the Keeper runs: waiting up to 10 s for it to leave by itself"
-      if wait_until_stopped 10; then say "the app has stopped"; return 0; fi
-      ;;
-  esac
+  if has_window "$running"; then
+    say_running "$running"
+  else
+    # Only a Keeper: it leaves by itself 5 s after its last Window when no agent runs.
+    say "only the Keeper runs: waiting up to 10 s for it to leave by itself"
+    if wait_until_stopped 10; then say "the app has stopped"; return 0; fi
+  fi
   die "YAAR is running, and agents may be running in its terminals: quit YAAR (with the menu entry that also stops the agents, if you want them stopped) and run the uninstall again, or add --stop-agents. Nothing was changed."
 }
 
