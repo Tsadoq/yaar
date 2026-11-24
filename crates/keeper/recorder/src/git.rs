@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 /// The variables with which a process tells git which repository to use, whatever
@@ -26,13 +26,24 @@ const REPOSITORY_VARIABLES: [&str; 8] = [
 
 /// The git program of the user, as the app runs it to read.
 ///
-/// Cheap to clone: it holds only where the program is and the environment it runs in.
+/// Cheap to clone: it holds only where the program is, the environment it runs in and what
+/// is known of its version.
 #[derive(Debug, Clone)]
 pub struct Git {
     program: PathBuf,
     /// The environment every run gets: the process's own unless a take ended.
     environment: GitEnvironment,
+    /// Whether the program has the forms of [`NEWER`], read once from `git version` at the
+    /// first question and shared by every clone.
+    has_newer_forms: Arc<OnceLock<bool>>,
 }
+
+/// The oldest git known to have every form the reads ask for first: `-z` after `worktree
+/// list`, the atom `ahead-behind` of `for-each-ref` and `-Z` after `cat-file --batch`.
+/// Ubuntu 22.04 ships git 2.34 and Debian 12 git 2.39, and each lacks at least one of the
+/// three; such a git is asked in forms that git 2.34 has. Ubuntu 24.04 ships 2.43. The
+/// forms of a git between the two were not checked, so it is asked the older way too.
+const NEWER: (u32, u32) = (2, 43);
 
 /// Where a run of git looks for its repository.
 #[derive(Debug, Clone, Copy)]
@@ -240,7 +251,22 @@ impl Git {
         Git {
             program: program.into(),
             environment: GitEnvironment::own(),
+            has_newer_forms: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Whether this git has the newer forms of [`NEWER`], from its own answer to `git
+    /// version`, asked once. A version that cannot be read counts as new, as every git
+    /// did before this was asked: git then fails in its own words.
+    pub(crate) fn has_newer_forms(&self) -> bool {
+        *self.has_newer_forms.get_or_init(|| {
+            let mut command = self.command(Place::Folder(Path::new("/")), &[]);
+            command.arg("version");
+            let Ok(answer) = finish(command) else {
+                return true;
+            };
+            says_newer_forms(&String::from_utf8_lossy(&answer.stdout))
+        })
     }
 
     /// Where the program is.
@@ -344,6 +370,20 @@ impl Git {
         let mut command = self.command(place, hooks_off);
         command.args(args);
         finish(command)
+    }
+}
+
+/// Whether the git that printed `version` as its answer to `git version` has the forms of
+/// [`NEWER`]. An answer that is not understood counts as new.
+fn says_newer_forms(version: &str) -> bool {
+    let mut numbers = version
+        .strip_prefix("git version ")
+        .unwrap_or("")
+        .split(|c: char| !c.is_ascii_digit())
+        .map(|number| number.parse::<u32>());
+    match (numbers.next(), numbers.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= NEWER,
+        _ => true,
     }
 }
 
@@ -513,6 +553,35 @@ mod tests {
 
     fn value(set: &HashMap<OsString, Option<OsString>>, name: &str) -> Option<OsString> {
         set.get(OsStr::new(name)).cloned().flatten()
+    }
+
+    #[test]
+    fn a_git_has_the_newer_forms_from_2_43_on_and_one_that_says_nothing_clear_is_taken_to_have_them()
+     {
+        for old in [
+            "git version 2.34.1\n",
+            "git version 2.39.5\n",
+            "git version 2.39.5 (Apple Git-154)\n",
+            "git version 2.9.5\n",
+            "git version 1.8.3.1\n",
+        ] {
+            assert!(!says_newer_forms(old), "{old:?}");
+        }
+        for new in [
+            "git version 2.43.0\n",
+            "git version 2.47.3\n",
+            "git version 2.51.0\n",
+            "git version 2.54.0 (Apple Git-160)\n",
+            "git version 2.100.0\n",
+            "git version 3.0.0\n",
+            "git version 2.45.GIT\n",
+            "git version 2.43.0.windows.1\n",
+            "not git\n",
+            "git version \n",
+            "",
+        ] {
+            assert!(says_newer_forms(new), "{new:?}");
+        }
     }
 
     #[test]

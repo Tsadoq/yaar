@@ -69,7 +69,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::git::{GitError, finish};
-use crate::worktree::{Branch, CommitId, Worktree};
+use crate::worktree::{Branch, CommitId, Worktree, list_printed};
 
 /// Held from the first check to the end of git's run, so that two worktrees are never made
 /// at once by one process.
@@ -267,9 +267,7 @@ impl Worktree {
     /// Whether `git worktree list` has a worktree at `folder`, as git prints it or with
     /// every link resolved.
     fn lists(&self, folder: &Path) -> Result<bool, GitError> {
-        let answer = self
-            .run(["worktree", "list", "--porcelain", "-z"])?
-            .printed()?;
+        let answer = list_printed(&self.git, |args| self.run(args))?;
         let wanted = resolved(folder);
         Ok(answer
             .split(|byte| *byte == 0)

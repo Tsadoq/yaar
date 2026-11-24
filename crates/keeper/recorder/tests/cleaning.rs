@@ -1376,7 +1376,8 @@ fn reader_starts(list: &Path) -> Vec<String> {
     std::fs::read_to_string(list)
         .unwrap_or_default()
         .lines()
-        .filter(|line| line.contains("cat-file --batch -Z"))
+        // Of a git that has `-Z` and of one that has not; `--batch-check` is another process.
+        .filter(|line| line.ends_with("cat-file --batch -Z") || line.ends_with("cat-file --batch"))
         .map(|line| line.split(' ').next().expect("a process id").to_owned())
         .collect()
 }
