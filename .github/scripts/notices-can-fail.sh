@@ -214,7 +214,6 @@ unpack_archive "$ARCHIVE" "$TMP/orig"
 CRATE=$(first_crate "$TMP/orig/$ARCHIVE_MEMBER") \
   || fail "$(basename "$ARCHIVE"): PART 1 of its notices cannot be read"
 [ -n "$CRATE" ] || fail "$(basename "$ARCHIVE"): PART 1 of its notices names no crate to break"
-NAME_OF_CRATE=${CRATE%% *}
 
 break_archive one without_line
 must_fail "1. the line of $CRATE taken out of PART 1 of $(basename "$ARCHIVE")" "no entry for $CRATE"
