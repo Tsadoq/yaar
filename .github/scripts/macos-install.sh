@@ -48,7 +48,11 @@
 # uninstall's step 2 also asserts that $dest holds no `.YAAR.app.new.*` and no
 # `.yaar-review-old.*`; (6) the install line is run through `bash -s --`, which is `bash`
 # with no arguments; (7) a command that stops the script without a sentence of its own is
-# named in one, and the exit code is 1.
+# named in one, and the exit code is 1; (8) install 1 reads "downloads nothing" from two
+# places: the door's output (it ends on its refusal and names the address once) and a curl and
+# a wget of the step's own, first on the search path of the door's run, which record each call
+# in a file and fail like a machine with no network, so a door that fetches in silence leaves
+# its call there.
 set -euo pipefail
 # -E: the ERR trap below also runs inside functions and command substitutions.
 set -E
@@ -132,13 +136,16 @@ scratch=$(mktemp -d) || fail "no scratch folder could be made"
 # The install line, `curl -fsSL <base>/install.sh | bash -s -- <arguments>`, with the two
 # addresses of the served site and the test variable, as the header says. Its whole output is
 # written to the log named by $1 and shown; the exit code is left in $line_status.
-# $1: the log, $2: the download address, then the install script's arguments.
+# $1: the log, $2: the download address, then the install script's arguments. When
+# $line_path is set it goes first on the search path of the install script only (the step's
+# own curl of install.sh, on the left of the pipe, keeps the real one).
 line_status=0
+line_path=""
 install_line() {
     local log=$1 address=$2
     shift 2
     if curl -fsSL "$base/install.sh" \
-        | env YAAR_BASE_URL="$base" YAAR_DOWNLOAD_URL="$address" YAAR_ALLOW_UNNOTARIZED=1 \
+        | env PATH="${line_path:+$line_path:}$PATH" YAAR_BASE_URL="$base" YAAR_DOWNLOAD_URL="$address" YAAR_ALLOW_UNNOTARIZED=1 \
             bash -s -- "$@" > "$log" 2>&1; then
         line_status=0
     else
@@ -174,7 +181,21 @@ if [ "$action" = install ]; then
     # --- 1. The door stays shut away from a loopback address.
     [ ! -e "$app" ] || fail "$app is there before the install line ran: a step before this one left it"
     echo "install 1: the test variable with a download from a remote address"
+    # A curl and a wget that record each call and fail like a machine with no network, first
+    # on the search path of the door's run: a door that fetches silently before it refuses
+    # prints nothing, and leaves its call here.
+    mkdir "$scratch/door-bin" || fail "the folder $scratch/door-bin could not be made"
+    for fetcher in curl wget; do
+        printf '%s\n' '#!/bin/sh' "echo \"$fetcher \$*\" >> \"$scratch/door-fetches\"" 'exit 6' > "$scratch/door-bin/$fetcher" \
+            || fail "the stand-in $fetcher could not be written in $scratch/door-bin"
+        chmod 755 "$scratch/door-bin/$fetcher" || fail "the stand-in $fetcher could not be made executable"
+    done
+    line_path="$scratch/door-bin"
     install_line "$scratch/door.log" https://example.invalid/download
+    line_path=""
+    if [ -e "$scratch/door-fetches" ]; then
+        fail "the install line with a download from https://example.invalid tried to download before it refused: $(head -n 2 "$scratch/door-fetches" | tr '\n' ';')"
+    fi
     [ "$line_status" -eq 1 ] || fail "the install line with YAAR_ALLOW_UNNOTARIZED=1 and a download from https://example.invalid exited $line_status and not 1"
     grep -q '127\.0\.0\.1 or localhost' "$scratch/door.log" \
         || fail "the install line with a download from https://example.invalid does not say that YAAR_ALLOW_UNNOTARIZED is taken only from 127.0.0.1 or localhost: the door is open"
