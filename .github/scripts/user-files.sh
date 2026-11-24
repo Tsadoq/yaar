@@ -51,12 +51,15 @@
 #   each as "<kind> <path>" (kind: d, f, l, s for a socket, o other).
 # present, run after the steps that ran the app and before the uninstall: asserts that the
 #   data folder holds keeper.sock.lock (the Keeper ran as the user and took its lock),
-#   store.db (the Keeper opened its Store: the worktree step made a workspace) and
-#   agents/pi/extension/yaar.ts (the Keeper writes pi's extension when it starts). Fails
-#   naming each missing file. This is what makes "the Keeper's lock file included", "the
-#   reviews stay" and "pi's extension file stays" clauses that can fail. It also writes the
-#   record of what the uninstall must leave (see check 1 (d)) to the file YAAR_USER_FILES_RECORD
-#   names, else $RUNNER_TEMP/user-files-present; with neither set it fails.
+#   store.db (the Keeper opened its Store: the worktree step made a workspace),
+#   agents/pi/extension/yaar.ts (the Keeper writes pi's extension when it starts) and the
+#   folder states (the Keeper records the states a review refers to: the step of PKG-12 makes
+#   a worktree with an agent through the installed app, which leaves it). Fails naming each
+#   missing file. This is what makes "the Keeper's lock file included", "the reviews stay"
+#   (their states too) and "pi's extension file stays" clauses that can fail. It also writes
+#   the record of what the uninstall must leave (see check 1 (d)) to the file
+#   YAAR_USER_FILES_RECORD names, else $RUNNER_TEMP/user-files-present; with neither set it
+#   fails.
 # check, after the job's uninstall step (`--uninstall`, which keeps the reviews), with <file>
 #   the snapshot taken before the install:
 #   1. A snapshot. (a) Among the judged paths that <file> does not hold, only these may be
@@ -66,9 +69,8 @@
 #      must be there (the reviews stayed). (c) Every path of <file> must still be there, on
 #      Linux every one, on macOS every judged one: an uninstall that removed a file of the
 #      user's (the planted ones among them) fails, naming it. (d) Every path in the record
-#      that `present` wrote must still be there: pi's extension file and, when the app had
-#      made it before the uninstall, the folder states. A missing record fails (present did
-#      not run).
+#      that `present` wrote must still be there: pi's extension file and the folder states.
+#      A missing record fails (present did not run).
 #   2. Runs the install line once more, as the user, with `--uninstall --purge`
 #      (YAAR_BASE_URL=http://127.0.0.1:8000, as the job's other install steps).
 #   3. A snapshot: no judged path that <file> does not hold may be there, but on Linux these,
@@ -100,10 +102,9 @@
 # places are derived from it, so that a home behind a link (a scratch HOME under macOS's
 # $TMPDIR) is compared with the resolved paths of the walk; (7) a command that stops the
 # script without a sentence of its own is named in one, and the exit code is 1; (8) pi's
-# extension, agents/pi/extension/yaar.ts, is written by the Keeper at every start, so present
-# demands it and check (d) asserts it stays; the folder states is written only when a review
-# is taken, which no step of the job makes, so it is held to stay only when present found it
-# there (on the images where the app runs, no step of the job shows that clause for states).
+# extension, agents/pi/extension/yaar.ts, is written by the Keeper at every start, and the
+# folder states by the worktree with an agent that the step of PKG-12 makes through the
+# installed app, so present demands both and check (d) asserts both stay.
 set -euo pipefail
 
 NAME=user-files.sh
@@ -349,7 +350,7 @@ present() {
   }
   # The extension is what pi's own settings may name, so it is a file the app must have
   # written for "pi's extension file stays" to be a clause that can fail.
-  for f in keeper.sock.lock store.db agents/pi/extension/yaar.ts; do
+  for f in keeper.sock.lock store.db agents/pi/extension/yaar.ts states; do
     if [ ! -e "$DATA_DIR/$f" ]; then
       echo "$NAME: $DATA_DIR/$f is missing: the app did not run as $USER_NAME, or not far enough" >&2
       bad=1
@@ -359,11 +360,10 @@ present() {
   done
   [ "$bad" -eq 0 ] || fail "the files of the app named above are missing"
   # What no --uninstall may remove besides store.db, which check looks at by name: pi's
-  # extension, and states/ when the app made it (the job's steps need not).
-  if [ -d "$DATA_DIR/states" ]; then echo "$NAME: there: $DATA_DIR/states"; fi
+  # extension and states/.
   {
     printf '%s\n' "$DATA_DIR/agents/pi/extension/yaar.ts"
-    if [ -d "$DATA_DIR/states" ]; then printf '%s\n' "$DATA_DIR/states"; fi
+    printf '%s\n' "$DATA_DIR/states"
   } > "$record" || fail "cannot write $record"
 }
 
