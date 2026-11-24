@@ -29,7 +29,8 @@ generate() {
   # shellcheck disable=SC2086
   cargo about generate --locked --config "$ROOT/about.toml" \
     --manifest-path "$ROOT/$1" $TARGETS \
-    --output-file "$2" "$ROOT/packaging/notices.hbs"
+    --output-file "$2" "$ROOT/packaging/notices.hbs" \
+    || { echo "notices.sh: cargo about could not write the notices of $1: a dependency may be under a licence that about.toml does not accept" >&2; exit 1; }
 }
 # The Keeper links pi's reporting program's crate, yaar-adapter-pi (the Keeper's manifest
 # names it), so the Keeper's rendering holds what that program links too: it needs no

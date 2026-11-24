@@ -22,9 +22,12 @@
 # zip; the count reads only the notices file):
 #   5. must fail, naming gpui-pre-apple;
 #   6. the .zip unchanged: must pass.
+#   7. from the same archive, the licence text of the last block of the file (the last of
+#      PART 3) emptied: must fail, naming PART 3 and "no licence text" (a count that
+#      forgets the block that no rule closes passes this one).
 # Each check prints what it did and what the count said.
 #
-# Exit codes: 0 all six as above; 1 one of them not (a sentence says which); 2 usage error.
+# Exit codes: 0 all seven as above; 1 one of them not (a sentence says which); 2 usage error.
 #
 # Exit 99 with "not built yet": the contract of slice 10 fixed this interface; its
 # package fills the body.
@@ -66,7 +69,8 @@ for f in "$DIR"/yaar-review-*-macos-universal.zip; do [ -f "$f" ] && ZIP=$f; don
 (cd "$ROOT" && cargo metadata --locked --offline --no-deps --format-version 1) \
   > "$TMP/metadata.json" 2> "$TMP/metadata.err" \
   || { cat "$TMP/metadata.err" >&2; fail "cargo metadata of $ROOT failed"; }
-jq -r '.packages[].name' "$TMP/metadata.json" > "$TMP/workspace"
+jq -r '.packages[].name' "$TMP/metadata.json" > "$TMP/workspace" \
+  || fail "jq cannot read the packages of cargo metadata"
 
 # Unpacks the notices file of the archive $1 into the folder $2 (the whole archive).
 unpack_archive() {
@@ -95,7 +99,7 @@ first_crate() {
     /^PART [0-9]+ OF 3: / { part = $2; next }
     part == 1 && prev == "Used by:" { reading = 1 }
     part == 1 && reading { if ($0 ~ /^  [^ ]/) { print $1, $2; next } else reading = 0 }
-    { prev = $0 }' "$1" > "$TMP/part1.crates"
+    { prev = $0 }' "$1" > "$TMP/part1.crates" || return 1
   awk '
     FNR == 1 { file++ }
     file == 1 { ws[$1] = 1; next }
@@ -126,6 +130,17 @@ without_text() { # file crate-version
       print; next
     }
     { print }' "$1"
+}
+# The notices file with the text of its last licence block taken out: everything after the
+# "Used by:" lines of the last "Used by:" in the file, which no rule closes.
+without_last_text() { # file crate-version (unused)
+  awk '
+    NR == FNR {
+      if ($0 == "Used by:") { end = FNR; reading = 1; next }
+      if (reading) { if ($0 ~ /^  [^ ]/) end = FNR; else reading = 0 }
+      next
+    }
+    FNR <= end { print }' "$1" "$1"
 }
 # The notices file with a "Used by:" line for a crate the lock file does not hold added to
 # the first block of PART 1.
@@ -166,6 +181,18 @@ must_pass() { # description
   [ "$RC" = 0 ] || fail "the count exited $RC on a copy that was not broken: $1"
 }
 
+# Fails with the sentence $3 when the files $1 and $2 are the same; cmp says 0 for the same,
+# 1 for different and anything else when it could not read one of them.
+changed() { # file file sentence-when-the-same
+  same=0
+  cmp -s "$1" "$2" || same=$?
+  case "$same" in
+    0) fail "$3" ;;
+    1) return 0 ;;
+    *) fail "cmp cannot compare $1 with $2" ;;
+  esac
+}
+
 # One broken copy of the archive: its notices file made by the function $2 from the
 # original, the archive packed again under its own name in the folder $1, and counted.
 break_archive() { # folder transform
@@ -173,9 +200,10 @@ break_archive() { # folder transform
   mkdir -p "$folder.x"
   unpack_archive "$ARCHIVE" "$folder.x"
   mkdir -p "$folder"
-  "$transform" "$folder.x/$ARCHIVE_MEMBER" "$CRATE" > "$folder.x/notices.broken"
-  cmp -s "$folder.x/notices.broken" "$folder.x/$ARCHIVE_MEMBER" \
-    && fail "the break of $transform changed nothing in the notices of $(basename "$ARCHIVE")"
+  "$transform" "$folder.x/$ARCHIVE_MEMBER" "$CRATE" > "$folder.x/notices.broken" \
+    || fail "$transform cannot break the notices of $(basename "$ARCHIVE")"
+  changed "$folder.x/notices.broken" "$folder.x/$ARCHIVE_MEMBER" \
+    "the break of $transform changed nothing in the notices of $(basename "$ARCHIVE")"
   cp "$folder.x/notices.broken" "$folder.x/$ARCHIVE_MEMBER"
   rm "$folder.x/notices.broken"
   pack_archive "$folder/$(basename "$ARCHIVE")" "$folder.x"
@@ -183,18 +211,19 @@ break_archive() { # folder transform
 }
 
 unpack_archive "$ARCHIVE" "$TMP/orig"
-CRATE=$(first_crate "$TMP/orig/$ARCHIVE_MEMBER")
+CRATE=$(first_crate "$TMP/orig/$ARCHIVE_MEMBER") \
+  || fail "$(basename "$ARCHIVE"): PART 1 of its notices cannot be read"
 [ -n "$CRATE" ] || fail "$(basename "$ARCHIVE"): PART 1 of its notices names no crate to break"
 NAME_OF_CRATE=${CRATE%% *}
 
 break_archive one without_line
-must_fail "1. the line of $CRATE taken out of PART 1 of $(basename "$ARCHIVE")" "$NAME_OF_CRATE"
+must_fail "1. the line of $CRATE taken out of PART 1 of $(basename "$ARCHIVE")" "no entry for $CRATE"
 
 break_archive two without_text
 must_fail "2. the licence text of the block that names $CRATE emptied in $(basename "$ARCHIVE")" "no licence text"
 
 break_archive three with_planted
-must_fail "3. a line for planted-crate 9.9.9 added to PART 1 of $(basename "$ARCHIVE")" "planted-crate"
+must_fail "3. a line for planted-crate 9.9.9 added to PART 1 of $(basename "$ARCHIVE")" "an entry for planted-crate 9.9.9, which is not linked"
 
 mkdir "$TMP/four"
 cp "$ARCHIVE" "$TMP/four/"
@@ -203,18 +232,22 @@ must_pass "4. $(basename "$ARCHIVE") unchanged"
 
 # The .zip: every line that names gpui-pre-apple taken out.
 unpack_zip "$ZIP" "$TMP/zip.x"
-without_toolkit_apple "$TMP/zip.x/$ZIP_MEMBER" > "$TMP/zip.broken"
-cmp -s "$TMP/zip.broken" "$TMP/zip.x/$ZIP_MEMBER" \
-  && fail "$(basename "$ZIP"): its notices have no \"Used by:\" line that names gpui-pre-apple, so nothing was broken"
+without_toolkit_apple "$TMP/zip.x/$ZIP_MEMBER" > "$TMP/zip.broken" \
+  || fail "$(basename "$ZIP"): its notices cannot be read"
+changed "$TMP/zip.broken" "$TMP/zip.x/$ZIP_MEMBER" \
+  "$(basename "$ZIP"): its notices have no \"Used by:\" line that names gpui-pre-apple, so nothing was broken"
 cp "$TMP/zip.broken" "$TMP/zip.x/$ZIP_MEMBER"
 mkdir "$TMP/five"
 pack_zip "$TMP/five/$(basename "$ZIP")" "$TMP/zip.x"
 count "$TMP/five"
-must_fail "5. every line that names gpui-pre-apple taken out of $(basename "$ZIP")" "gpui-pre-apple"
+must_fail "5. every line that names gpui-pre-apple taken out of $(basename "$ZIP")" "no entry for gpui-pre-apple"
 
 mkdir "$TMP/six"
 cp "$ZIP" "$TMP/six/"
 count "$TMP/six"
 must_pass "6. $(basename "$ZIP") unchanged"
 
-echo "$NAME: the count fails when a crate has no entry, when a block has no text, when an entry is for a crate that is not linked and when the toolkit's Apple crate is missing, and passes on both packages as built"
+break_archive seven without_last_text
+must_fail "7. the licence text of the last block of the file emptied in $(basename "$ARCHIVE")" "PART 3" "no licence text"
+
+echo "$NAME: the count fails when a crate has no entry, when a block has no text, when the last block of the file has no text, when an entry is for a crate that is not linked and when the toolkit's Apple crate is missing, and passes on both packages as built"

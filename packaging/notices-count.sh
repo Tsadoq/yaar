@@ -139,18 +139,20 @@ wanted() {
 # What the notices file at $1 says, as tagged lines in $2:
 #   P <n>                        a part opens
 #   C <n> <name> <version>       a "Used by:" line of part n
-#   B <n> <lines of text> <licence>|<first crate>   a licence block of part n that names crates
+#   B<TAB><n><TAB><lines of text><TAB><licence><TAB><first crate>
+#                                a licence block of part n that names crates; the last block
+#                                of the file is closed by the end of the file, as no rule follows it
 parse_notices() {
   awk '
     function finish() {
-      if (inb) { printf "B %s %d %s|%s\n", part, text, licence, first }
+      if (inb) { printf "B\t%s\t%d\t%s\t%s\n", part, text, licence, first }
       inb = 0
     }
     $0 ~ /^PART [0-9]+ OF 3: / { finish(); part = $2; print "P " part; next }
     (length($0) == 80) && ($0 ~ /^-+$/ || $0 ~ /^=+$/) { finish(); lastnb = ""; next }
     $0 == "Used by:" && part != "" {
       finish(); inb = 1; reading = 1; first = ""; text = 0
-      licence = lastnb; gsub(/ /, "_", licence)
+      licence = lastnb
       next
     }
     inb && reading {
@@ -163,7 +165,8 @@ parse_notices() {
       if ($0 ~ /^[ \t]*$/) next
     }
     inb { if ($0 !~ /^[ \t]*$/) text++; next }
-    $0 !~ /^[ \t]*$/ { lastnb = $0 }' "$1" > "$2"
+    $0 !~ /^[ \t]*$/ { lastnb = $0 }
+    END { finish() }' "$1" > "$2"
 }
 
 # The member of an archive listing $1 (one name a line) that is the path $2, with or
@@ -204,6 +207,7 @@ take_notices() {
   [ -s "$out" ] || { echo "$NAME: $base: its notices file is empty" >&2; return 1; }
 }
 
+TAB=$(printf '\t')
 STATUS=0
 COUNTED=0
 IDX=0
@@ -230,16 +234,22 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
   KEY=${TARGETS%% *}
   case "$TARGETS" in *" "*) KEY=universal ;; esac
   if [ -f "$TMP/first.$KEY" ]; then
-    if ! cmp -s "$TMP/first.$KEY" "$NOTICES"; then
-      echo "$NAME: $base: its notices differ from those of $(cat "$TMP/first.$KEY.name"), which are for the same system and processor" >&2
-      STATUS=1
-    fi
+    same=0
+    cmp -s "$TMP/first.$KEY" "$NOTICES" || same=$?
+    case "$same" in
+      0) ;;
+      1)
+        echo "$NAME: $base: its notices differ from those of $(cat "$TMP/first.$KEY.name"), which are for the same system and processor" >&2
+        STATUS=1
+        ;;
+      *) fail "$base: cmp cannot compare its notices with those of $(cat "$TMP/first.$KEY.name")" ;;
+    esac
   else
     cp "$NOTICES" "$TMP/first.$KEY"
     echo "$base" > "$TMP/first.$KEY.name"
   fi
 
-  parse_notices "$NOTICES" "$TMP/parsed.$IDX"
+  parse_notices "$NOTICES" "$TMP/parsed.$IDX" || fail "$base: its notices cannot be read"
   OK=1
   CRATES=0
   LICENCES=0
@@ -251,9 +261,11 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
       continue
     fi
     # What the part says it holds, without the workspace's own crates.
-    awk -v part="$part" '$1 == "C" && $2 == part { print $3, $4 }' "$TMP/parsed.$IDX" > "$TMP/found.raw"
+    awk -v part="$part" '$1 == "C" && $2 == part { print $3, $4 }' "$TMP/parsed.$IDX" > "$TMP/found.raw" \
+      || fail "$base: its notices cannot be read for PART $part"
     LC_ALL=C sort -u "$TMP/found.raw" > "$TMP/found.all"
-    awk 'NR == FNR { ws[$1] = 1; next } !($1 in ws)' "$TMP/workspace" "$TMP/found.all" > "$TMP/found"
+    awk 'NR == FNR { ws[$1] = 1; next } !($1 in ws)' "$TMP/workspace" "$TMP/found.all" > "$TMP/found" \
+      || fail "$base: the crates of PART $part cannot be read"
     # What cargo links into it, for every target of the package.
     : > "$TMP/want.all"
     for triple in $TARGETS; do
@@ -261,7 +273,8 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
       cat "$TMP/wanted.$part.$triple" >> "$TMP/want.all"
     done
     LC_ALL=C sort -u "$TMP/want.all" > "$TMP/want.sorted"
-    awk 'NR == FNR { ws[$1] = 1; next } !($1 in ws)' "$TMP/workspace" "$TMP/want.sorted" > "$TMP/want"
+    awk 'NR == FNR { ws[$1] = 1; next } !($1 in ws)' "$TMP/workspace" "$TMP/want.sorted" > "$TMP/want" \
+      || fail "$base: the crates cargo links into PART $part cannot be read"
 
     LC_ALL=C comm -13 "$TMP/found" "$TMP/want" > "$TMP/missing"
     LC_ALL=C comm -23 "$TMP/found" "$TMP/want" > "$TMP/extra"
@@ -278,15 +291,19 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
       OK=0
     fi
     # Every licence block that names a crate carries its text.
-    awk -v part="$part" '$1 == "B" && $2 == part && $3 == 0 { $1 = $2 = $3 = ""; print substr($0, 4) }' "$TMP/parsed.$IDX" > "$TMP/notext"
+    awk -F '\t' -v part="$part" '$1 == "B" && $2 == part && $3 == 0 { print $5 "\t" $4 }' "$TMP/parsed.$IDX" > "$TMP/notext" \
+      || fail "$base: the licence blocks of PART $part cannot be read"
     if [ -s "$TMP/notext" ]; then
-      while IFS= read -r block; do
-        echo "$NAME: $base: PART $part ($title): no licence text for the licence block of ${block#*|} ($(printf '%s' "${block%%|*}" | tr _ ' '))" >&2
+      while IFS=$TAB read -r crate licence; do
+        echo "$NAME: $base: PART $part ($title): no licence text for the licence block of $crate ($licence)" >&2
       done < "$TMP/notext"
       OK=0
     fi
+    awk -F '\t' -v part="$part" '$1 == "B" && $2 == part { n++ } END { print n + 0 }' "$TMP/parsed.$IDX" > "$TMP/blocks" \
+      || fail "$base: the licence blocks of PART $part cannot be counted"
+    read -r blocks < "$TMP/blocks"
     CRATES=$((CRATES + $(wc -l < "$TMP/found")))
-    LICENCES=$((LICENCES + $(awk -v part="$part" '$1 == "B" && $2 == part' "$TMP/parsed.$IDX" | wc -l)))
+    LICENCES=$((LICENCES + blocks))
   done
   if [ "$OK" = 1 ]; then
     echo "$base: $CRATES crates in $LICENCES licences, each with its text"
