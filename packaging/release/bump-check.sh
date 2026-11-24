@@ -169,6 +169,8 @@ TOML
   cp "$COPY/packaging/version.sh" "$1/packaging/version.sh"
   mkdir -p "$1/packaging/release"
   cp "$BUMP" "$1/packaging/release/bump.sh"
+  # Outside the repository rustup has no toolchain to choose unless the pin comes along.
+  cp "$COPY/rust-toolchain.toml" "$1/rust-toolchain.toml"
   (cd "$1" && cargo generate-lockfile --offline > /dev/null 2> "$TMP/err" \
     && git init -q . && git symbolic-ref HEAD refs/heads/main && git add -A && git commit -q -m 'chore: the workspace') \
     || fail "the scratch workspace could not be made: $(head -n 3 "$TMP/err")"
