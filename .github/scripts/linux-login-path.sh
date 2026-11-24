@@ -23,8 +23,9 @@
 #      ~/.profile; another shell fails the step with its name. Its bytes (or its absence) are
 #      first copied to $RUNNER_TEMP. The folder is on no other path: the step first asserts
 #      that the PATH above and `sudo -u <user> env -i HOME=<home> sh -c 'echo $PATH'` do not
-#      hold it, and that `sudo -u <user> env -i HOME=<home> <shell> -l -c 'command -v
-#      yaar-hook-witness'` finds it (the line works).
+#      hold it, and that `sudo -u <user> env -i HOME=<home> <shell> -l -i -c 'command -v
+#      yaar-hook-witness'` with standard input from /dev/null, as the Keeper asks its login
+#      shell, finds it (the line works, and no file read after it sets PATH again).
 #   2. A repository <home>/yaar-login-repo made with git as <user> (GIT_CONFIG_GLOBAL=/dev/null,
 #      GIT_CONFIG_NOSYSTEM=1), one commit on main, an identity of its own in .git/config, and
 #      .git/hooks/post-checkout: `#!/bin/sh` then `exec yaar-hook-witness`.
@@ -336,8 +337,12 @@ fi
 as_user sh -c 'printf "\nexport PATH=\"\$HOME/yaar-login-only/bin:\$PATH\"\n" >> "$1"' sh "$startup" \
     || fail "the line that puts $only/bin on the login path could not be appended to $startup, which stays as it was"
 startup_changed=yes
-found=$(as_user "$shell" -l -c 'command -v yaar-hook-witness' 2> /dev/null || true)
-[ "$found" = "$only/bin/yaar-hook-witness" ] || fail "the login shell of $user, $shell, finds yaar-hook-witness at '$found' and not at $only/bin/yaar-hook-witness: the line in $startup does not work"
+# Asked as the Keeper asks its login shell (crates/shared/link/src/login.rs): -l -i -c, with
+# standard input from /dev/null. -i makes a shell read what an interactive one reads after the
+# login file (for bash, the ~/.bashrc that ~/.profile may source), which a login shell without
+# it does not, and a start-up file that sets PATH there would hide the line from the Keeper.
+found=$(as_user "$shell" -l -i -c 'command -v yaar-hook-witness' < /dev/null 2> /dev/null || true)
+[ "$found" = "$only/bin/yaar-hook-witness" ] || fail "the login shell of $user, $shell, asked as the Keeper asks it (-l -i -c), finds yaar-hook-witness at '$found' and not at $only/bin/yaar-hook-witness: the line in $startup does not work, or a start-up file the shell reads after it sets PATH again"
 echo "step 1: $only/bin holds yaar-hook-witness and claude; only the login shell $shell of $user finds it, through $startup"
 
 # --- 2. The repository whose hook needs the login path.
