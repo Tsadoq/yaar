@@ -77,6 +77,10 @@ case ${APT_SIGNING_KEY:-} in
   *[![:space:]]*) ;;
   *) fail "APT_SIGNING_KEY is empty: the secret of the environment release holding the project's key is not set" ;;
 esac
+# Held in a variable of this shell only: the gpg agent that gpg starts inherits the
+# environment of the process that starts it, and must not carry the secret.
+KEY_TEXT=$APT_SIGNING_KEY
+unset APT_SIGNING_KEY
 [ -n "${GITHUB_ENV:-}" ] || fail "GITHUB_ENV is not set: this step hands the key's folder to the later steps through it"
 [ -f "$FPR_FILE" ] || fail "$FPR_FILE is missing: the project's key has no fingerprint on record"
 command -v gpg > /dev/null 2>&1 || fail "gpg is not installed"
@@ -105,7 +109,7 @@ refuse() {
 }
 LOG=$KEYDIR/gpg.log
 # From standard input: the secret never reaches a command line.
-if ! printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --no-tty --import > "$LOG" 2>&1; then
+if ! printf '%s\n' "$KEY_TEXT" | gpg --batch --no-tty --import > "$LOG" 2>&1; then
   refuse "APT_SIGNING_KEY is not an OpenPGP key gpg can import (gpg says: $(head -n 1 "$LOG"))"
 fi
 LISTING=$(gpg --batch --no-tty --with-colons --list-secret-keys 2> /dev/null) || refuse "gpg cannot list the key it imported"
