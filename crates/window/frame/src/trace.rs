@@ -52,7 +52,10 @@ mod tests {
     fn a_new_name_is_first_and_then_it_is_not() {
         assert!(first_of("first-then-not"));
         assert!(!first_of("first-then-not"));
-        assert!(!first_of("first-then-not"));
+        // The same text at another address is the same name: the literal above may be
+        // merged with any other of the crate, and a copy is not.
+        let copy: &'static str = Box::leak(String::from("first-then-not").into_boxed_str());
+        assert!(!first_of(copy));
     }
 
     #[test]

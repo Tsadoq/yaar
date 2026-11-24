@@ -22,11 +22,12 @@ fn deliver_next_frame(cx: &mut VisualTestContext) -> usize {
     cx.update(|window, cx| window.simulate_next_frame(cx))
 }
 
-/// Draws the window again, lets what the draw started finish, and delivers the frame.
-fn draw_again(cx: &mut VisualTestContext) {
+/// Draws the window again, lets what the draw started finish, and delivers the frame. It
+/// says how many callbacks asked for that frame were run.
+fn draw_again(cx: &mut VisualTestContext) -> usize {
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
-    deliver_next_frame(cx);
+    deliver_next_frame(cx)
 }
 
 #[gpui_kit::test]
@@ -41,9 +42,16 @@ fn a_pane_that_drew_a_diff_took_the_mark_of_the_first_diff(cx: &mut TestAppConte
         .show(&changes, |_| texts("one\ntwo\n", "one\n2\n"), &mut cx);
     wait_for_files(&stage.pane, &mut cx);
     cx.run_until_parked();
-    // The frame after the draw is delivered; a second draw does not take the mark again.
-    deliver_next_frame(&mut cx);
-    draw_again(&mut cx);
+    // The frame after the draw is delivered; a second draw does not ask for the mark again.
+    assert!(
+        deliver_next_frame(&mut cx) > 0,
+        "the pane asked for no callback on the next frame"
+    );
+    assert_eq!(
+        draw_again(&mut cx),
+        0,
+        "the pane asked for the mark of the first diff again on a later draw"
+    );
 
     assert!(
         !yaar_frame::trace::first_of("first_diff"),
