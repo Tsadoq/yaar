@@ -54,12 +54,13 @@
 #   store.db (the Keeper opened its Store: the worktree step made a workspace),
 #   agents/pi/extension/yaar.ts (the Keeper writes pi's extension when it starts) and the
 #   folder states (the Keeper records the states a review refers to: the step of PKG-12 makes
-#   a worktree with an agent through the installed app, which leaves it). Fails naming each
-#   missing file. This is what makes "the Keeper's lock file included", "the reviews stay"
-#   (their states too) and "pi's extension file stays" clauses that can fail. It also writes
+#   a worktree with an agent through the installed app, which leaves it, holding at least
+#   one path: an empty states fails too). Fails naming each missing file. This is what makes
+#   "the Keeper's lock file included", "the reviews stay" (their states too) and "pi's
+#   extension file stays" clauses that can fail. It also writes
 #   the record of what the uninstall must leave (see check 1 (d)) to the file
-#   YAAR_USER_FILES_RECORD names, else $RUNNER_TEMP/user-files-present; with neither set it
-#   fails.
+#   YAAR_USER_FILES_RECORD names, else $RUNNER_TEMP/user-files-present, which holds pi's
+#   extension file, the folder states and every path under it; with neither set it fails.
 # check, after the job's uninstall step (`--uninstall`, which keeps the reviews), with <file>
 #   the snapshot taken before the install:
 #   1. A snapshot. (a) Among the judged paths that <file> does not hold, only these may be
@@ -69,7 +70,8 @@
 #      must be there (the reviews stayed). (c) Every path of <file> must still be there, on
 #      Linux every one, on macOS every judged one: an uninstall that removed a file of the
 #      user's (the planted ones among them) fails, naming it. (d) Every path in the record
-#      that `present` wrote must still be there: pi's extension file and the folder states.
+#      that `present` wrote must still be there: pi's extension file, the folder states and
+#      every path under it.
 #      A missing record fails (present did not run).
 #   2. Runs the install line once more, as the user, with `--uninstall --purge`
 #      (YAAR_BASE_URL=http://127.0.0.1:8000, as the job's other install steps).
@@ -104,7 +106,8 @@
 # script without a sentence of its own is named in one, and the exit code is 1; (8) pi's
 # extension, agents/pi/extension/yaar.ts, is written by the Keeper at every start, and the
 # folder states by the worktree with an agent that the step of PKG-12 makes through the
-# installed app, so present demands both and check (d) asserts both stay.
+# installed app, so present demands both, and the folder holding at least one path, and
+# check (d) asserts the extension, the folder and every path under it stay.
 set -euo pipefail
 
 NAME=user-files.sh
@@ -343,7 +346,7 @@ record_file() {
 }
 
 present() {
-  local bad=0 f record
+  local bad=0 f record under
   record=$(record_file) || {
     SAID=1
     exit 1
@@ -359,11 +362,16 @@ present() {
     fi
   done
   [ "$bad" -eq 0 ] || fail "the files of the app named above are missing"
+  # The folder states must hold a state store, or an uninstall that empties it and keeps the
+  # folder would pass: what the folder holds is what the reviews refer to.
+  under=$(find "$DATA_DIR/states" -mindepth 1 -print) || fail "the folder $DATA_DIR/states could not be read"
+  [ -n "$under" ] || fail "the folder $DATA_DIR/states holds no state store: the step of PKG-12 recorded no state"
   # What no --uninstall may remove besides store.db, which check looks at by name: pi's
-  # extension and states/.
+  # extension, states/ and every path under it.
   {
     printf '%s\n' "$DATA_DIR/agents/pi/extension/yaar.ts"
     printf '%s\n' "$DATA_DIR/states"
+    printf '%s\n' "$under"
   } > "$record" || fail "cannot write $record"
 }
 
