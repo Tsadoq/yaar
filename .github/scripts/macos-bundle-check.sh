@@ -170,7 +170,7 @@ fi
 
 # "<mode> <path>" of every file of a tree, sorted: diff -r does not read modes.
 modes_in() { (cd "$1" && find . -type f -exec stat -f '%Lp %N' {} + | LC_ALL=C sort); }
-APP_MODES=$(modes_in "$APP")
+APP_MODES=$(modes_in "$APP") || fail "the modes of the files of $APP could not be read"
 
 # A file users download holds this very app, byte for byte, with the modes the app has.
 same_app() { # <the file's name> <the app in it>
@@ -182,10 +182,13 @@ same_app() { # <the file's name> <the app in it>
     rel=${entry%%|*}
     [ -x "$2/Contents/$rel" ] || fail "$rel is not executable in the app of $1 (mode $(stat -f %Lp "$2/Contents/$rel")): the app would not start"
   done
-  got=$(modes_in "$2")
+  # The ERR trap above is not inherited by a function, so each failing read says so itself.
+  got=$(modes_in "$2") || fail "the modes of the files of the app in $1 could not be read"
   if [ "$got" != "$APP_MODES" ]; then
-    only_app=$(comm -23 <(printf '%s\n' "$APP_MODES") <(printf '%s\n' "$got") | sed -n '1,3p' | tr '\n' ';')
-    only_copy=$(comm -13 <(printf '%s\n' "$APP_MODES") <(printf '%s\n' "$got") | sed -n '1,3p' | tr '\n' ';')
+    only_app=$(comm -23 <(printf '%s\n' "$APP_MODES") <(printf '%s\n' "$got") | sed -n '1,3p' | tr '\n' ';') ||
+      fail "the modes of the app in $1 differ from the app checked above, and the difference could not be listed"
+    only_copy=$(comm -13 <(printf '%s\n' "$APP_MODES") <(printf '%s\n' "$got") | sed -n '1,3p' | tr '\n' ';') ||
+      fail "the modes of the app in $1 differ from the app checked above, and the difference could not be listed"
     fail "the app in $1 has other file modes than the app checked above: the app has \"$only_app\" where the copy has \"$only_copy\""
   fi
 }
