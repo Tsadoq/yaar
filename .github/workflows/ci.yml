@@ -20,11 +20,11 @@ permissions:
   contents: read
 
 # A pull request's run gives way to a newer one. Other runs of one branch or tag wait for each
-# other, so that the runs on main go one by one. All runs that publish share one group, whatever
-# their tag: none is cancelled while it runs, but a publishing run that waits is replaced by a
-# newer one that queues, and never starts.
+# other, so that the runs on main go one by one. All runs that publish, a dispatch with publish on a
+# tag, share one group, whatever their tag: none is cancelled while it runs, but a publishing run that
+# waits is replaced by a newer one that queues, and never starts.
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'ci-publish' || format('ci-{0}-{1}-check', github.workflow, github.ref) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref_type == 'tag' && 'ci-publish' || format('ci-{0}-{1}-check', github.workflow, github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
@@ -66,8 +66,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      # The commits between the head and the tip of the base branch have to be there: the script counts
-      # from their merge base.
+      # The commits between the head and the tip of the base branch have to be there: the script lists
+      # base..head.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

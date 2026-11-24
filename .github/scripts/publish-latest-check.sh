@@ -31,12 +31,16 @@ esac
 GH
 cat > "$TMP/bin/curl" << 'CURL'
 #!/bin/sh
-echo curl >> "$GH_LOG"
 out=
-while [ $# -gt 0 ]; do
-  if [ "$1" = -o ]; then out=$2; fi
-  shift
+for url; do
+  if [ "$prev" = -o ]; then out=$url; fi
+  prev=$url
 done
+echo "curl $url" >> "$GH_LOG"
+if [ -n "${CURL_CODE:-}" ]; then
+  printf '%s' "$CURL_CODE"
+  exit 0
+fi
 cp "$BODY" "$out"
 printf 200
 CURL
@@ -114,12 +118,22 @@ run publish 0.3.0 YAAR_LATEST=true
 [ "$STATUS" -eq 0 ] || fail "publish with the answer true exited $STATUS: $SAID"
 grep -qxF 'release edit v0.3.0 --repo example/yaar --draft=false --latest' "$TMP/gh.log" \
   || fail "publish with the answer true did not publish the release as the latest: $(cat "$TMP/gh.log")"
-grep -qxF curl "$TMP/gh.log" || fail "publish with the answer true did not wait for releases/latest/download"
+grep -qxF 'curl https://github.com/example/yaar/releases/latest/download/SHA256SUMS' "$TMP/gh.log" \
+  || fail "publish with the answer true did not wait for releases/latest/download: $(cat "$TMP/gh.log")"
 
 run publish 0.3.0 YAAR_LATEST=false
 [ "$STATUS" -eq 0 ] || fail "publish with the answer false exited $STATUS: $SAID"
-[ "$(cat "$TMP/gh.log")" = 'release edit v0.3.0 --repo example/yaar --draft=false --latest=false' ] \
-  || fail "publish with the answer false did not publish the release as not the latest: $(cat "$TMP/gh.log")"
+[ "$(cat "$TMP/gh.log")" = 'release edit v0.3.0 --repo example/yaar --draft=false --latest=false
+curl https://github.com/example/yaar/releases/download/v0.3.0/SHA256SUMS' ] \
+  || fail "publish with the answer false did not publish the release as not the latest, and wait for its own SHA256SUMS: $(cat "$TMP/gh.log")"
+
+# A release that is not the latest, whose file never answers: the wait ends at its deadline, with a sentence.
+run publish 0.3.0 YAAR_LATEST=false YAAR_PUBLISH_WAIT=1 CURL_CODE=404
+[ "$STATUS" -ne 0 ] || fail "publish of a release that is not the latest passed though its SHA256SUMS never answered"
+case $SAID in
+  *'releases/download/v0.3.0/SHA256SUMS did not answer'*'HTTP 404'*) ;;
+  *) fail "the file of a release that is not the latest never answers, and the sentence does not say so: $SAID" ;;
+esac
 
 for answer in '' maybe TRUE; do
   run publish 0.3.0 YAAR_LATEST="$answer"

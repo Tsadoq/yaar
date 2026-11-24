@@ -226,6 +226,25 @@ bump 0.3.13
 [ "$STATUS" -eq 1 ] || fail "a member with no name: bump.sh exited $STATUS and not 1: $SAID"
 case $SAID in *"crates/one/Cargo.toml holds no name"*) ;; *) fail "a member with no name is refused without saying which: $SAID" ;; esac
 untouched "a member with no name"
+git reset -q --hard HEAD~1
+
+# A root package beside [workspace] is a member the script does not count, and a member path in single
+# quotes would be left out: each is refused, and nothing is written.
+printf '\n[package]\nname = "root"\nversion.workspace = true\n' >> Cargo.toml
+git commit -q -a -m 'chore: a root package beside the workspace'
+bump 0.3.13
+[ "$STATUS" -eq 1 ] || fail "a root [package] beside [workspace]: bump.sh exited $STATUS and not 1: $SAID"
+case $SAID in *"[package] beside [workspace]"*) ;; *) fail "a root [package] beside [workspace] is refused without saying why: $SAID" ;; esac
+untouched "a root [package] beside [workspace]"
+git reset -q --hard HEAD~1
+sed "s|\"tools/solo\",|'tools/solo',|" Cargo.toml > Cargo.toml.new
+mv Cargo.toml.new Cargo.toml
+git commit -q -a -m 'chore: a member path in single quotes'
+bump 0.3.13
+[ "$STATUS" -eq 1 ] || fail "a member path in single quotes: bump.sh exited $STATUS and not 1: $SAID"
+case $SAID in *"single quotes"*) ;; *) fail "a member path in single quotes is refused without saying why: $SAID" ;; esac
+untouched "a member path in single quotes"
+git reset -q --hard HEAD~1
 cd "$COPY"
 BUMP=$COPY/packaging/release/bump.sh
 

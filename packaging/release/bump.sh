@@ -46,8 +46,13 @@ awk -v new="$NEW" '
   END { if (!done) exit 1 }' "$ROOT/Cargo.toml" > "$TMP/Cargo.toml" \
   || fail "Cargo.toml has no version under [workspace.package]"
 
+# A root package is a member the member list does not show, and it is not counted.
+grep -Eq '^\[package[].]' "$ROOT/Cargo.toml" \
+  && fail "Cargo.toml has a [package] beside [workspace]: its crate is a member this script does not count. Nothing was written"
+
 # The members of the workspace, by name and without cargo: the job that bumps has no toolchain. A
 # crate under vendor/ has no source in the lock file either, and can stand at the same version.
+# A path dependency inside the workspace folder is a member too, which only cargo can see.
 workspace_list() { # <key>: the strings of the array `key` under [workspace] in Cargo.toml
   awk -v key="$1" '
     /^\[/ { inside = ($0 == "[workspace]"); collecting = 0 }
@@ -59,6 +64,10 @@ workspace_list() { # <key>: the strings of the array `key` under [workspace] in 
         sub(/^[^\[]*\[/, "", line)
       }
       if (collecting) {
+        if (index(line, "\047")) {
+          print "bump.sh: Cargo.toml writes a path of " key " in single quotes, which this script does not read: write it in double quotes. Nothing was written" > "/dev/stderr"
+          exit 3
+        }
         closed = (line ~ /\]/)
         sub(/\].*$/, "", line)
         while (match(line, /"[^"]*"/)) {
@@ -71,8 +80,8 @@ workspace_list() { # <key>: the strings of the array `key` under [workspace] in 
 }
 is_glob() { case $1 in *'*'* | *'?'* | *'['*) return 0 ;; *) return 1 ;; esac; }
 
-workspace_list members > "$TMP/patterns" || fail "Cargo.toml cannot be read"
-workspace_list exclude > "$TMP/excluded" || fail "Cargo.toml cannot be read"
+workspace_list members > "$TMP/patterns" || exit 1
+workspace_list exclude > "$TMP/excluded" || exit 1
 : > "$TMP/dirs"
 while IFS= read -r pattern; do
   pattern=${pattern%/}

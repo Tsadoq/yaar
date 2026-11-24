@@ -271,7 +271,8 @@ case $ACTION in
       echo "$NAME: $TAG is published as the latest release, and releases/latest/download/ answers with its SHA256SUMS"
     else
       gh release edit "$TAG" --repo "$REPO" --draft=false --latest=false || fail "gh could not publish the release $TAG"
-      echo "$NAME: $TAG is published, not as the latest: a greater version is published"
+      wait_same "${YAAR_PUBLISH_WAIT:-60}" "https://github.com/$REPO/releases/download/$TAG/SHA256SUMS" "$RELDIR/SHA256SUMS"
+      echo "$NAME: $TAG is published, not as the latest: a greater version is published, and releases/download/$TAG/ answers with its SHA256SUMS"
     fi
     ;;
   check)

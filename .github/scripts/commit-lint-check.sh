@@ -105,8 +105,8 @@ for subject in 'Update the readme' 'feat add a thing' 'Feat: capital type' 'feat
   BASE=$(git rev-parse HEAD)
 done
 
-# The commits of the head are counted from the merge base: a base that moved on holds commits of its
-# own, and the head does not answer for them.
+# The commits are those of <base>..<head>: a base that moved on holds commits of its own, and the
+# head does not answer for them.
 BASE=$(git rev-parse HEAD)
 git checkout -q -b pr
 say 'feat: the work of the pull request'
@@ -116,7 +116,7 @@ lint main pr
 [ "$STATUS" -eq 0 ] || fail "a base that moved on with a commit of its own was held against the head (status $STATUS): $SAID"
 case $SAID in
   *"the 1 commits"*) ;;
-  *) fail "the head holds one commit past the merge base, and the script does not say 1: $SAID" ;;
+  *) fail "the head holds one commit past the base, and the script does not say 1: $SAID" ;;
 esac
 git checkout -q pr
 git merge -q --no-ff -m 'Merge branch main into pr' main
@@ -130,6 +130,30 @@ esac
 git checkout -q main
 git merge -q --no-ff -m 'Merge pull request #3 from someone/pr' pr
 git branch -q -D pr
+
+# A criss-cross history: main merged part of the branch, and the branch merged main from before that.
+# A bad commit pushed straight to main is not the pull request's: main..pr holds one commit.
+CROSS=$TMP/cross
+git init -q "$CROSS"
+cd "$CROSS"
+git symbolic-ref HEAD refs/heads/main
+say 'chore: the root of the criss-cross history'
+git checkout -q -b pr
+say 'feat: the first part of the pull request'
+git checkout -q main
+say 'Update the readme straight on main'
+git merge -q --no-ff -m 'Merge pull request #4 from someone/pr' pr
+git checkout -q pr
+git merge -q --no-ff -m 'Merge branch main into pr' main~1
+say 'fix: the own work of the pull request'
+[ "$(git merge-base --all main pr | wc -l | tr -d ' ')" -eq 2 ] || fail "the scratch history is not a criss-cross: main and pr have not two merge bases"
+lint main pr
+[ "$STATUS" -eq 0 ] || fail "in a criss-cross history, a bad commit already on main was held against the head (status $STATUS): $SAID"
+case $SAID in
+  *"the 1 commits"*) ;;
+  *) fail "in a criss-cross history, main..pr holds one commit that is not a merge, and the script does not say 1: $SAID" ;;
+esac
+cd "$REPO"
 
 # A base and a head with no history in common: a sentence, not a pass.
 git checkout -q --orphan alone
