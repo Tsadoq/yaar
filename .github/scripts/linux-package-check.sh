@@ -22,8 +22,9 @@
 #     a folder that others cannot enter makes the programs in it unrunnable for them), every
 #     other file is 0644, and no file named standin-lsp, standin-agent or yaar-script is
 #     anywhere;
-#   - it holds exactly these files besides the programs: the desktop entry
-#     /usr/share/applications/io.github.tsadoq.yaar.desktop and the icon
+#   - it holds exactly these files besides the programs, anywhere in its tree and not only
+#     under /usr (a file in /etc/xdg/autostart would start the app at every login): the
+#     desktop entry /usr/share/applications/io.github.tsadoq.yaar.desktop and the icon
 #     /usr/share/icons/hicolor/256x256/apps/io.github.tsadoq.yaar.png (the bytes of
 #     packaging/linux/ in the repository), and usr/share/doc/yaar-review/{copyright,NOTICE,
 #     THIRD-PARTY-NOTICES.txt.gz}, the last one gunzipping to the bytes of <notices>;
@@ -141,8 +142,9 @@ while read -r f; do
   [ "$MODE" = "-rwxr-xr-x" ] || fail "$DEB: /$f has mode $MODE, not -rwxr-xr-x"
   [ "$OWNER" = "root/root" ] || fail "$DEB: /$f is owned by $OWNER, not root/root"
 done < "$W/programs"
-# The whole tree: every file or link outside folders is one of these, so a sixth program
-# or a stray file anywhere (/usr/lib/yaar-review/yaar-keeper, say) is named.
+# The whole unpacked tree, not only usr/: every file or link outside folders is one of these,
+# so a sixth program or a stray file anywhere (/usr/lib/yaar-review/yaar-keeper, or a 0644
+# file in /etc/xdg/autostart) is named.
 cp "$W/programs" "$W/files.deb" || fail "$W/files.deb: cannot write the list of the files the .deb should hold"
 cat >> "$W/files.deb" <<LIST
 usr/share/applications/$ID.desktop
@@ -152,7 +154,8 @@ usr/share/doc/yaar-review/copyright
 usr/share/icons/hicolor/256x256/apps/$ID.png
 LIST
 sort "$W/files.deb" > "$W/expected" || fail "$DEB: cannot sort the list of the files it should hold"
-( cd "$W/deb" && find usr ! -type d > "$W/found.unsorted" ) || fail "$DEB: find cannot list its unpacked tree"
+( cd "$W/deb" && find . ! -type d > "$W/found.dotted" ) || fail "$DEB: find cannot list its unpacked tree"
+sed 's|^\./||' "$W/found.dotted" > "$W/found.unsorted" || fail "$DEB: cannot read the list of its files"
 sort "$W/found.unsorted" > "$W/found" || fail "$DEB: cannot sort the list of its files"
 if ! cmp -s "$W/expected" "$W/found"; then
   comm -13 "$W/expected" "$W/found" > "$W/extra" || fail "$DEB: cannot compare its files with the expected ones"
