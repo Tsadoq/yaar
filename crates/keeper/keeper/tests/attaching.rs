@@ -606,7 +606,9 @@ fn a_terminal_is_given_the_size_of_the_window_that_attaches_and_asked_to_draw_it
         second.attach(&terminal, SIZE),
         Ok(Reply::Attached { cut: false })
     );
-    second.output_until(&terminal, |heard| contains(heard, "drawn-22"));
+    // The whole line: its line end may come in a frame of its own after the digits, and
+    // would then stand in front of the reply to the next request.
+    second.output_until(&terminal, |heard| contains(heard, "drawn-22\r\n"));
 
     // A size of its own: the terminal has it afterwards.
     let wide = TerminalSize {
@@ -617,7 +619,7 @@ fn a_terminal_is_given_the_size_of_the_window_that_attaches_and_asked_to_draw_it
         second.attach(&terminal, wide),
         Ok(Reply::Attached { cut: false })
     );
-    second.output_until(&terminal, |heard| contains(heard, "drawn-22"));
+    second.output_until(&terminal, |heard| contains(heard, "drawn-22\r\n"));
     opener.type_into(&terminal, b"\x03");
     opener.type_into(&terminal, b"echo size-$(stty size)\r");
     opener.output_until(&terminal, |heard| contains(heard, "size-30 100\r\n"));
