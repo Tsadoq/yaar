@@ -60,13 +60,19 @@
 # - Before the app is started the step waits (20 s) until no Keeper of the bundle runs: one
 #   that an earlier step left would answer with the environment it took then.
 # - The folders are removed by the trap only when this run made them.
-# - The environment of the started Keeper is not read: `ps -E` shows none on a recent macOS,
-#   so what shows that no shell started the app is the Window's parent, launchd (step 3).
+# - The environment of the started Window and Keeper is not read: `ps -E` shows none on a
+#   recent macOS. What shows that no shell started the app is the Window's parent, launchd,
+#   and that neither program of the bundle is a script: a bundle executable that was a shell
+#   script could exec the Window through the login shell and keep its pid and its parent, and
+#   a script begins with `#!` (step 3). A compiled wrapper that did the same is not caught;
+#   only a run that reads the started program's environment would.
 # - The stand-in is found as the process named claude among the descendants of the Keeper
 #   of step 3, since the program the shell starts for that name is a link.
 # - The login shell of step 1 is also asked, with nothing else in its environment, to find
 #   yaar-hook-witness, as the Linux step does: the line in the start-up file works.
 set -euo pipefail
+# -E: the ERR trap below also runs inside functions and command substitutions.
+set -E
 
 PROGRAM=macos-login-path.sh
 APP=/Applications/YAAR.app
@@ -74,8 +80,24 @@ WINDOW="$APP/Contents/MacOS/yaar-review"
 KEEPER="$APP/Contents/Helpers/yaar-keeper"
 BRANCH=from-the-dock
 
+# Set to the scratch folder once it is made; fail() leaves a marker file in it.
+scratch=""
+# What the step was doing when a command that nobody guarded failed: set -e ends the step
+# with that command's own status and words, and the trap below puts one sentence of the
+# step's own in front of them. Inside a function the line is the one of the outermost call,
+# which is a line of the step and not of a helper.
+last_command=""
+last_line=""
+trap 'last_command=$BASH_COMMAND
+    if [ "${#BASH_LINENO[@]}" -gt 1 ]; then last_line=${BASH_LINENO[${#BASH_LINENO[@]}-2]}; else last_line=$LINENO; fi' ERR
+
+# One sentence on standard error, and exit 1. The marker file tells cleanup that a sentence
+# was said, also when fail ran in a subshell and could set no variable of the step's.
 fail() {
     echo "$PROGRAM: $*" >&2
+    if [ -n "$scratch" ]; then
+        : > "$scratch/said"
+    fi
     exit 1
 }
 
@@ -110,7 +132,7 @@ shell=$(dscl . -read "/Users/$user" UserShell | sed -n 's/^UserShell: //p')
 only="$home/yaar-login-only"
 repository="$home/yaar-login-repo"
 worktrees="$home/yaar-login-repo.worktrees"
-scratch=$(mktemp -d "$RUNNER_TEMP/login-path.XXXXXX")
+scratch=$(mktemp -d "$RUNNER_TEMP/login-path.XXXXXX") || fail "no scratch folder could be made under $RUNNER_TEMP"
 
 # The processes the step made, which the trap ends by their pids; the start-up file and
 # whether the step changed it.
@@ -204,9 +226,20 @@ diagnose() {
 # Puts every file and process of the step back, on success and on failure alike.
 cleanup() {
     local status=$? pid
-    trap - EXIT
+    trap - EXIT ERR
     set +e
     if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+        # A step that fails without a sentence of its own (a command nobody guarded, a
+        # signal) exits with that command's status, which the header does not name: say what
+        # failed, and exit 1.
+        if [ ! -e "$scratch/said" ]; then
+            failed_text=""
+            if [ -n "$last_line" ]; then
+                failed_text=$(sed -n "${last_line}s/^[[:space:]]*//p" "$0" 2> /dev/null)
+            fi
+            echo "$PROGRAM: ${failed_text:-${last_command:-the step}} failed with status $status${last_line:+ (line $last_line)}" >&2
+            status=1
+        fi
         diagnose
     fi
     end_process "$window_pid"
@@ -214,9 +247,10 @@ cleanup() {
     for pid in $standin_pids; do end_process "$pid"; done
     if [ "$startup_changed" = yes ]; then
         if [ "$startup_existed" = yes ]; then
-            cat "$scratch/startup.original" > "$startup"
+            cat "$scratch/startup.original" > "$startup" \
+                || echo "$PROGRAM: $startup could not be put back as it was" >&2
         else
-            rm -f "$startup"
+            rm -f "$startup" || echo "$PROGRAM: $startup could not be removed" >&2
         fi
     fi
     [ "$made_only" = no ] || rm -rf "$only"
@@ -244,7 +278,7 @@ EOF
 chmod +x "$only/bin/yaar-hook-witness"
 ln -s "$programs/standin-agent" "$only/bin/claude"
 
-launchd_path=$(launchctl getenv PATH || true)
+launchd_path=$(launchctl getenv PATH) || fail "launchctl getenv PATH failed, so launchd's search path cannot be looked at"
 for path in "$launchd_path" "$PATH"; do
     case ":$path:" in
         *":$only/bin:"*) fail "a search path of the runner holds $only/bin: $path" ;;
@@ -292,7 +326,7 @@ no_keeper_runs() {
 }
 keepers=""
 wait_until 20 "a Keeper of an earlier step did not leave before the app was started" no_keeper_runs
-open -a "$APP"
+open -a "$APP" || fail "open -a $APP failed: the system did not start the app"
 windows=""
 both_run() {
     local listed
@@ -310,7 +344,11 @@ window_pid=$(processes_of "$WINDOW" | cut -d' ' -f1)
 window_parent=$(processes_of "$WINDOW" | cut -d' ' -f2)
 keeper_pid=$(processes_of "$KEEPER" | cut -d' ' -f1)
 [ "$window_parent" = 1 ] || fail "the Window $window_pid was started by process $window_parent and not by launchd (1)"
-echo "step 3: the Window $window_pid (parent launchd) and the Keeper $keeper_pid run, started by open -a $APP"
+for program in "$WINDOW" "$KEEPER"; do
+    magic=$(head -c 2 "$program" | od -An -tx1 | tr -d ' \n') || fail "the first bytes of $program could not be read"
+    [ "$magic" != 2321 ] || fail "$program is a script and not a program: it could start the app through the login shell, and the hook would find its program without the Keeper's take"
+done
+echo "step 3: the Window $window_pid (parent launchd) and the Keeper $keeper_pid run, started by open -a $APP; neither program of the bundle is a script"
 
 # --- 4. A worktree with an agent, asked of that Keeper.
 "$programs/yaar-script" worktree-with-agent --repository "$repository" \
@@ -359,7 +397,7 @@ done <<< "$listed"
 echo "step 5: the Keeper is still $keeper_pid; the hook ran once in $witness_folder with the login path; git lists the worktree on $BRANCH"
 
 # --- 6. The end: the Window, then the Keeper and its agent.
-kill -TERM "$window_pid"
+kill -TERM "$window_pid" || fail "the Window $window_pid was gone before the step ended it"
 "$programs/yaar-script" stop --deadline 20 > "$scratch/script.log" 2>&1 \
     || fail "yaar-script stop failed: $(cat "$scratch/script.log")"
 all_gone() {

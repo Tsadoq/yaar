@@ -73,6 +73,8 @@
 # The scripts handed to `sh -c` are single-quoted on purpose: the user's shell expands them.
 # shellcheck disable=SC2016
 set -euo pipefail
+# -E: the ERR trap below also runs inside functions and command substitutions.
+set -E
 
 PROGRAM=linux-login-path.sh
 SYSTEM_PATH=/usr/local/bin:/usr/bin:/bin
@@ -82,8 +84,24 @@ KEEPER=/usr/libexec/yaar-review/yaar-keeper
 DISPLAY_NAME=:99
 BRANCH=from-the-menu
 
+# Set to the scratch folder once it is made; fail() leaves a marker file in it.
+scratch=""
+# What the step was doing when a command that nobody guarded failed: set -e ends the step
+# with that command's own status and words, and the trap below puts one sentence of the
+# step's own in front of them. Inside a function the line is the one of the outermost call,
+# which is a line of the step and not of a helper.
+last_command=""
+last_line=""
+trap 'last_command=$BASH_COMMAND
+    if [ "${#BASH_LINENO[@]}" -gt 1 ]; then last_line=${BASH_LINENO[${#BASH_LINENO[@]}-2]}; else last_line=$LINENO; fi' ERR
+
+# One sentence on standard error, and exit 1. The marker file tells cleanup that a sentence
+# was said, also when fail ran in a subshell and could set no variable of the step's.
 fail() {
     echo "$PROGRAM: $*" >&2
+    if [ -n "$scratch" ]; then
+        : > "$scratch/said"
+    fi
     exit 1
 }
 
@@ -116,7 +134,7 @@ shell=$(printf '%s\n' "$entry" | cut -d: -f7)
 only="$home/yaar-login-only"
 repository="$home/yaar-login-repo"
 worktrees="$home/yaar-login-repo.worktrees"
-scratch=$(mktemp -d "$RUNNER_TEMP/login-path.XXXXXX")
+scratch=$(mktemp -d "$RUNNER_TEMP/login-path.XXXXXX") || fail "no scratch folder could be made under $RUNNER_TEMP"
 
 # The processes the step made, which the trap ends by their pids; the start-up file and
 # whether the step changed it.
@@ -209,9 +227,20 @@ diagnose() {
 # Puts every file and process of the step back, on success and on failure alike.
 cleanup() {
     local status=$? pid
-    trap - EXIT
+    trap - EXIT ERR
     set +e
     if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+        # A step that fails without a sentence of its own (a command nobody guarded, a
+        # signal) exits with that command's status, which the header does not name: say what
+        # failed, and exit 1.
+        if [ ! -e "$scratch/said" ]; then
+            failed_text=""
+            if [ -n "$last_line" ]; then
+                failed_text=$(sed -n "${last_line}s/^[[:space:]]*//p" "$0" 2> /dev/null)
+            fi
+            echo "$PROGRAM: ${failed_text:-${last_command:-the step}} failed with status $status${last_line:+ (line $last_line)}" >&2
+            status=1
+        fi
         diagnose
     fi
     end_process "$window_pid"
@@ -220,9 +249,10 @@ cleanup() {
     end_process "$xvfb_pid"
     if [ "$startup_changed" = yes ]; then
         if [ "$startup_existed" = yes ]; then
-            as_user sh -c 'cat > "$1"' sh "$startup" < "$scratch/startup.original"
+            as_user sh -c 'cat > "$1"' sh "$startup" < "$scratch/startup.original" \
+                || echo "$PROGRAM: $startup could not be put back as it was" >&2
         else
-            as_user rm -f "$startup"
+            as_user rm -f "$startup" || echo "$PROGRAM: $startup could not be removed" >&2
         fi
     fi
     [ "$made_only" = no ] || rm -rf "$only"
@@ -422,7 +452,7 @@ done <<< "$listed"
 echo "step 5: the Keeper is still $keeper_pid; the hook ran once in $witness_folder with the login path; git lists the worktree on $BRANCH"
 
 # --- 6. The end: the Window, then the Keeper and its agent, then the screen.
-kill "$window_pid"
+kill "$window_pid" || fail "the Window $window_pid was gone before the step ended it"
 as_user "$programs/yaar-script" stop --deadline 20 > "$scratch/script.log" 2>&1 \
     || fail "yaar-script stop failed: $(cat "$scratch/script.log")"
 all_gone() {
