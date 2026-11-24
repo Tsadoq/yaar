@@ -46,7 +46,9 @@
 # names, which the control uses) must build the programs the same way. The file is read once,
 # before any package, and read closed: every line that is not a comment and holds `cargo` as
 # a word (a word of the shell: `X=1 cargo`, `command cargo`, `cd d; cargo` and `exec cargo`
-# hold it, `$HOME/.cargo` does not) must be exactly `cargo build` followed by --release,
+# hold it; so does a path or a variable that ends in cargo: `/usr/bin/cargo`,
+# `$HOME/.cargo/bin/cargo`, `$CARGO`, `${CARGO:-cargo}`; `$HOME/.cargo` and `--prefix=/cargo`
+# do not) must be exactly `cargo build` followed by --release,
 # --locked, -p <package> and "$@", and nothing else; any other such line is unreadable and
 # fails, named whole, since it may build what the notices do not hold. `exec` is refused with
 # the rest. The packages of the readable lines must be exactly the three sets above, one line
@@ -239,13 +241,15 @@ check_release_build() {
       sub(/^[ \t]+/, "", line)
       # Does the line hold cargo as a word? Quotes and the separators and assignments of the
       # shell are blanks for this: `X=1 cargo`, `command cargo`, `cd d; cargo`, `(cargo` and
-      # `if a; then cargo` all do, while `$HOME/.cargo` and `--prefix=/cargo` do not.
+      # `if a; then cargo` all do. So does a word that ends in cargo after a slash, a `$`, a
+      # `:` or a `-` (`/usr/bin/cargo`, `$HOME/.cargo/bin/cargo`, `$CARGO`, `${CARGO:-cargo}`),
+      # in any case, while `$HOME/.cargo` and `--prefix=/cargo` do not.
       t = line
       gsub(/[;&|(){}`"=!\\<>]/, " ", t)
       gsub(q, " ", t)
       nt = split(t, tok, /[ \t]+/)
       holds = 0
-      for (i = 1; i <= nt; i++) if (tok[i] == "cargo") holds = 1
+      for (i = 1; i <= nt; i++) if (tolower(tok[i]) ~ /(^|[^.]\/|[$:-])cargo$/) holds = 1
       if (!holds) next
       # Only a line that is exactly `cargo build` and allowed words is read; any other line
       # that runs cargo (an env assignment, `command`, `exec`, a second command, a flag
