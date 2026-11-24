@@ -288,19 +288,25 @@ case $ACTION in
     # git gets a deadline of its own, 60 s or what is left of the check's if that is less,
     # but never under 10 s so that it looks once whatever is left: a connection that stalls
     # would otherwise hold the step until the job's timeout, saying nothing of what it waited
-    # for. It runs in the background as a pid this script started.
+    # for. It runs in the background in a session of its own (setsid, standard input from
+    # /dev/null, output to files), so that its pid is the id of its whole process group: at
+    # the deadline the group is ended, and git's own helper (git remote-http) goes with it.
+    command -v setsid > /dev/null || fail "setsid is missing: it detaches the git that asks GitHub for the tag, so that the deadline can end it with its helper"
     git_limit=60
     [ "$(left)" -ge "$git_limit" ] || git_limit=$(left)
     [ "$git_limit" -ge 10 ] || git_limit=10
     GIT_TERMINAL_PROMPT=0 GIT_HTTP_LOW_SPEED_LIMIT=1 GIT_HTTP_LOW_SPEED_TIME=30 \
-      git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG" "refs/tags/$TAG^{}" \
+      setsid git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG" "refs/tags/$TAG^{}" \
       > "$SCRATCH/refs" 2> "$SCRATCH/git.err" < /dev/null &
     git_pid=$!
     git_start=$SECONDS
     while kill -0 "$git_pid" 2> /dev/null; do
       if [ $((SECONDS - git_start)) -ge "$git_limit" ]; then
-        if kill "$git_pid" 2> /dev/null; then wait "$git_pid" 2> /dev/null || :; fi
-        fail "git did not answer within $git_limit s when asked https://github.com/$REPO.git for the tag $TAG"
+        if kill -KILL -- "-$git_pid" 2> /dev/null; then
+          wait "$git_pid" 2> /dev/null || :
+          git_said=$(tail -n 1 "$SCRATCH/git.err") || git_said=
+          fail "git did not answer within $git_limit s when asked https://github.com/$REPO.git for the tag $TAG; the last it printed: ${git_said:-nothing}"
+        fi
       fi
       sleep 0.2
     done
