@@ -628,18 +628,22 @@ fn a_shell_that_fails_still_lets_the_creation_answer_runs_no_witness_and_is_said
         !scratch.witness_log().exists(),
         "the witness ran with the environment of a shell that failed"
     );
-    // One line on the Keeper's standard error, naming the shell and why.
+    // The line on the Keeper's standard error, naming the shell and why, is there.
     let expected = format!(
         "yaar-keeper: the login shell {} gave no environment: it ended with status 3",
         scratch.shell().display()
     );
-    let errors = scratch.wait_for_text(&scratch.errors(), &expected);
+    scratch.wait_for_text(&scratch.errors(), &expected);
+    // And it is one line: counted once the Keeper has ended and its standard error is
+    // complete, so that a line written again as it leaves is seen. A count made while the
+    // Keeper runs would be a clause about what has not happened yet.
+    scratch.stop(window);
+    let errors = std::fs::read_to_string(scratch.errors()).expect("the Keeper's errors");
     assert_eq!(
         errors.lines().filter(|line| *line == expected).count(),
         1,
         "{errors}"
     );
-    scratch.stop(window);
 }
 
 #[test]
