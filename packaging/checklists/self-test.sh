@@ -745,17 +745,33 @@ elif [ "$(uname -s)" = Linux ] && [ "$(id -u)" -eq 0 ] && command -v setpriv > /
   runs_as_nobody() {
     local d
     for d in /proc/[0-9]*; do
-      if [ "$(readlink "$d/exe" 2> /dev/null)" = "$S/o/yaar-review" ] && [ "$(stat -c %u "$d")" -eq 65534 ]; then
+      if [ "$(tr '\0' ' ' < "$d/cmdline" 2> /dev/null)" = "$S/o/yaar-review 60 " ] && [ "$(stat -c %u "$d")" -eq 65534 ]; then
         return 0
       fi
     done
     return 1
   }
   wait_for runs_as_nobody || fail "the copy of $S/o/yaar-review did not start as the user nobody"
-  [ -z "$(pids_of "$S/o/yaar-review")" ] || fail "ck_pids_of found a process of the user nobody as a process of root"
+  # Root may read another user's /proc/<pid>/exe only with the capability to trace it (a
+  # container does not give it by default: podman run --cap-add=SYS_PTRACE). Without it the
+  # link cannot be read and this check would pass whatever ck_pids_of did.
+  reads_exe() {
+    local d
+    for d in /proc/[0-9]*; do
+      if [ "$(readlink "$d/exe" 2> /dev/null)" = "$S/o/yaar-review" ]; then
+        return 0
+      fi
+    done
+    return 1
+  }
+  if reads_exe; then
+    [ -z "$(pids_of "$S/o/yaar-review")" ] || fail "ck_pids_of found a process of the user nobody as a process of root"
+    pass "a program another user runs is not found (a copy run as nobody, by root)"
+  else
+    printf '%s: not shown here: root cannot read the program of a process of another user (needs CAP_SYS_PTRACE)\n' "$CK_NAME"
+  fi
   kill "$PID_O"
   if wait "$PID_O" 2> /dev/null; then :; fi
-  pass "a program another user runs is not found (a copy run as nobody, by root)"
 else
   printf '%s: not shown here: a process of another user needs the Mac as a user, or Linux as root with setpriv\n' "$CK_NAME"
 fi
