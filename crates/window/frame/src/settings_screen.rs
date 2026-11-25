@@ -4,13 +4,16 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
-use gpui_kit::component::theme::ActiveTheme;
+use gpui_kit::component::input::{Escape, InputEvent, InputState};
 use gpui_kit::*;
 use yaar_link::{
     Changes, Comparison, ConsentAnswer, OptionKey, RepositoryId, RequestKind, Setting,
     TerminalPlace, ThemeChoice, TurnEndSelects,
 };
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_6, SPACE_8};
+use yaar_ui::pieces::{Banner, Button, ButtonKind, Card, Divider, Field, Pane as UiPane, Tone};
+use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::controls::{
     Asks, CleanUpStates, CloseSettings, Control, NextSetting, NextValue, OpenSetting, Place,
@@ -327,7 +330,7 @@ impl SettingsScreen {
             )
         }));
         // A name no theme has is the system's, as `Looks` applies it.
-        let theme_chosen = match settings.theme() {
+        let theme_chosen = match settings.theme_choice() {
             ThemeChoice::Named(name) => themes
                 .all()
                 .iter()
@@ -764,17 +767,7 @@ impl Render for SettingsScreen {
         let cursor = self.clamped_cursor(rows.len());
         let sizes = self.size_lines(cx);
         let problem = self.models.states.read(cx).problem().map(str::to_owned);
-        let theme = cx.theme();
-        let (background, foreground, muted, border) = (
-            theme.background,
-            theme.foreground,
-            theme.muted_foreground,
-            theme.border,
-        );
-        let (danger, hover) = (theme.danger, theme.list_hover);
-        let (primary, primary_text) = (theme.primary, theme.primary_foreground);
-        let (secondary, secondary_text) = (theme.secondary, theme.secondary_foreground);
-        let (accent, accent_text) = (theme.accent, theme.accent_foreground);
+        let palette = palette(cx);
         let words = |selector: String, text: String| {
             let inner = format!("{selector}:{text}");
             div()
@@ -784,33 +777,24 @@ impl Render for SettingsScreen {
 
         let mut drawn_rows = Vec::new();
         for (i, row) in rows.iter().enumerate() {
-            let mut values = div().flex().flex_row().flex_wrap().gap_1();
+            let mut values = div().flex().flex_row().flex_wrap().gap(SPACE_2);
             for (j, label) in row.shown.values.iter().enumerate() {
                 let chosen = row.shown.chosen == Some(j);
                 let selector = format!("settings-value-{i}-{j}:{label}");
                 let id = SharedString::from(selector.clone());
-                let control = div()
-                    .id(id)
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_sm()
+                let mut control = Button::new(id, label.clone())
+                    .kind(if chosen {
+                        ButtonKind::Primary
+                    } else {
+                        ButtonKind::Secondary
+                    })
+                    .small()
                     .on_click(cx.listener(move |screen, _: &ClickEvent, window, cx| {
                         screen.choose(i, j, window, cx);
-                    }))
-                    .child(label.clone());
-                let control = if chosen {
-                    control
-                        .debug_selector(move || format!("settings-chosen-{i}"))
-                        .bg(primary)
-                        .text_color(primary_text)
-                } else {
-                    control
-                        .bg(secondary)
-                        .text_color(secondary_text)
-                        .hover(|style| style.bg(accent).text_color(accent_text))
-                };
+                    }));
+                if chosen {
+                    control = control.selector(format!("settings-chosen-{i}"));
+                }
                 // One selector to an element: the control has the chosen mark, so the value's own
                 // is on an element around it.
                 values = values.child(
@@ -819,30 +803,8 @@ impl Render for SettingsScreen {
                         .child(control),
                 );
             }
-            let block = div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p_2()
-                .rounded_md()
-                .text_color(foreground)
-                .child(
-                    div()
-                        .debug_selector({
-                            let title = format!("settings-title-{i}:{}", row.shown.title);
-                            move || title.clone()
-                        })
-                        .child(row.shown.title.clone()),
-                )
-                .child(values);
-            let block = if i == cursor {
-                block
-                    .debug_selector(|| "settings-cursor".to_owned())
-                    .bg(hover)
-            } else {
-                block
-            };
-            let mut notes = div().flex().flex_col().gap_0p5().px_2();
+
+            let mut note_items: Vec<AnyElement> = Vec::new();
             match &row.shown.row {
                 SettingRow::Extension(agent) => {
                     if let Some(consent) = self
@@ -853,16 +815,18 @@ impl Render for SettingsScreen {
                         .iter()
                         .find(|consent| consent.agent == *agent)
                     {
-                        notes = notes.child(
+                        note_items.push(
                             words(format!("settings-question-{i}"), consent.question.clone())
-                                .text_sm()
-                                .text_color(muted),
+                                .typed(TypeRole::Meta)
+                                .text_color(palette.text_muted)
+                                .into_any_element(),
                         );
                         if let Some(problem) = &consent.problem {
-                            notes = notes.child(
+                            note_items.push(
                                 words(format!("settings-problem-{i}"), problem.clone())
-                                    .text_sm()
-                                    .text_color(danger),
+                                    .typed(TypeRole::Meta)
+                                    .text_color(palette.danger)
+                                    .into_any_element(),
                             );
                         }
                     }
@@ -873,71 +837,116 @@ impl Render for SettingsScreen {
                         .as_ref()
                         .filter(|field| field.repository == *repository)
                     {
-                        notes = notes.child(
+                        note_items.push(
                             div()
                                 .debug_selector(|| "settings-folder-field".to_owned())
                                 .on_action(cx.listener(|screen, _: &Escape, window, cx| {
                                     screen.close_field(window, cx);
                                 }))
-                                .child(Input::new(&field.input)),
+                                .child(Field::input(&field.input))
+                                .into_any_element(),
                         );
                         if let Some(reason) = &field.refused {
-                            notes = notes.child(
+                            note_items.push(
                                 words("settings-folder-refused".to_owned(), reason.clone())
-                                    .text_sm()
-                                    .text_color(danger),
+                                    .typed(TypeRole::Meta)
+                                    .text_color(palette.danger)
+                                    .into_any_element(),
                             );
                         }
                     }
                 }
                 SettingRow::States => {
                     for (selector, text) in &sizes {
-                        notes = notes.child(
+                        note_items.push(
                             words(selector.clone(), text.clone())
-                                .text_sm()
-                                .text_color(muted),
+                                .typed(TypeRole::Meta)
+                                .text_color(palette.text_muted)
+                                .into_any_element(),
                         );
                     }
                     if let Some(problem) = &problem {
-                        notes = notes.child(
+                        note_items.push(
                             words("settings-size-problem".to_owned(), problem.clone())
-                                .text_sm()
-                                .text_color(danger),
+                                .typed(TypeRole::Meta)
+                                .text_color(palette.danger)
+                                .into_any_element(),
                         );
                     }
                 }
                 _ => {}
             }
+
+            let mut block = Card::new()
+                .selected(i == cursor)
+                .p(SPACE_5)
+                .gap(SPACE_3)
+                .child(
+                    div()
+                        .debug_selector({
+                            let title = format!("settings-title-{i}:{}", row.shown.title);
+                            move || title.clone()
+                        })
+                        .typed(TypeRole::Strong)
+                        .text_color(palette.text)
+                        .child(row.shown.title.clone()),
+                )
+                .child(values);
+            if !note_items.is_empty() {
+                block = block.child(div().flex().flex_col().gap(SPACE_1).children(note_items));
+            }
+            if i == cursor {
+                block = block.selector("settings-cursor");
+            }
             drawn_rows.push(
                 div()
                     .debug_selector(move || format!("settings-row-{i}"))
+                    .flex_none()
                     .flex()
                     .flex_col()
-                    .px_3()
-                    .py_1()
-                    .child(block)
-                    .child(notes),
+                    .px(SPACE_8)
+                    .py(SPACE_2)
+                    .child(block),
             );
         }
 
+        let header = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(SPACE_8)
+            .py(SPACE_6)
+            .child(
+                div()
+                    .typed(TypeRole::Title)
+                    .text_color(palette.text)
+                    .child("Settings"),
+            )
+            .child(
+                Button::new("settings-close", "Close")
+                    .kind(ButtonKind::Ghost)
+                    .small()
+                    .selector("settings-close")
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(CloseSettings), cx);
+                    }),
+            );
+
         let notice = self.notice.clone().map(|notice| {
-            words("settings-notice".to_owned(), notice)
-                .px_4()
-                .py_1()
-                .text_sm()
-                .text_color(danger)
-                .border_b_1()
-                .border_color(border)
+            let selector = format!("settings-notice:{notice}");
+            div()
+                .debug_selector(|| "settings-notice".to_owned())
+                .flex_none()
+                .child(Banner::new(notice).tone(Tone::Danger).selector(selector))
         });
+
         let root = div()
-            .debug_selector(|| "settings-screen".to_owned())
             .track_focus(&self.focus)
             .w_full()
             .h_full()
             .flex()
             .flex_col()
-            .bg(background)
-            .text_color(foreground)
             .on_action(cx.listener(Self::next_setting))
             .on_action(cx.listener(Self::previous_setting))
             .on_action(cx.listener(Self::next_value))
@@ -951,16 +960,26 @@ impl Render for SettingsScreen {
         } else {
             root
         };
-        root.children(notice).child(
-            div()
-                .id("settings-rows")
+        root.child(
+            UiPane::new()
+                .selector("settings-screen")
                 .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .overflow_y_scroll()
-                .track_scroll(&self.scroll)
-                .children(drawn_rows),
+                .size_full()
+                .child(header)
+                .child(Divider::horizontal())
+                .children(notice)
+                .child(
+                    div()
+                        .id("settings-rows")
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .py(SPACE_4)
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll)
+                        .children(drawn_rows),
+                ),
         )
     }
 }
