@@ -9,6 +9,16 @@ use crate::metrics::{RADIUS_CARD, SPACE_3, SPACE_5, SPACE_6};
 use crate::themes::palette;
 use crate::typography::{TypeRole, Typed};
 
+/// Which part of a multi-row card this element draws, so adjacent list items join cleanly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CardPart {
+    #[default]
+    Whole,
+    Top,
+    Middle,
+    Bottom,
+}
+
 /// A bordered box on the window ground: a thread, a Flow step, a comment box. The dashed one is
 /// an outline for a closing note, with its children in a wrapping row.
 #[derive(IntoElement)]
@@ -17,6 +27,7 @@ pub struct Card {
     children: Vec<AnyElement>,
     dashed: bool,
     selected: bool,
+    part: CardPart,
     style: StyleRefinement,
     selector: Option<SharedString>,
 }
@@ -28,6 +39,7 @@ impl Card {
             children: Vec::new(),
             dashed: false,
             selected: false,
+            part: CardPart::Whole,
             style: StyleRefinement::default(),
             selector: None,
         }
@@ -46,6 +58,11 @@ impl Card {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub fn part(mut self, part: CardPart) -> Self {
+        self.part = part;
         self
     }
 
@@ -91,18 +108,31 @@ impl RenderOnce for Card {
         });
         let dashed = self.dashed;
         let selected = self.selected;
+        let border_colour = if selected {
+            palette.focus
+        } else {
+            palette.edge
+        };
         let mut card = div()
             .flex()
             .overflow_hidden()
-            .border_1()
-            .border_color(if selected {
-                palette.focus
-            } else {
-                palette.edge
-            })
-            .rounded(RADIUS_CARD)
+            .border_color(border_colour)
             .typed(TypeRole::Body)
             .text_color(palette.text)
+            .map(|el| match self.part {
+                CardPart::Whole => el.border_1().rounded(RADIUS_CARD),
+                CardPart::Top => el
+                    .border_t_1()
+                    .border_l_1()
+                    .border_r_1()
+                    .rounded_t(RADIUS_CARD),
+                CardPart::Middle => el.border_l_1().border_r_1(),
+                CardPart::Bottom => el
+                    .border_b_1()
+                    .border_l_1()
+                    .border_r_1()
+                    .rounded_b(RADIUS_CARD),
+            })
             .when(dashed, |card| {
                 card.border_dashed()
                     .flex_row()

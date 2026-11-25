@@ -73,16 +73,16 @@ fn open_on_two_files_of(
         &mut cx,
     );
     wait_for_files(&stage.pane, &mut cx);
-    let first_line = bounds_of_row(2, &mut cx).center();
+    let first_line = bounds_of_row(1, &mut cx).center();
     cx.simulate_click(first_line, Modifiers::none());
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     (stage, changes, cx)
 }
 
-/// A review with a sent comment lists its round in a line of its own above the files: the window
-/// grows by that line so the rows these tests read stay in view.
+/// A review with inline thread cards needs a taller viewport so the threads and comments these
+/// tests inspect stay in view.
 fn room_for_the_rounds_line(cx: &mut VisualTestContext) {
-    cx.simulate_resize(size(WINDOW.width, WINDOW.height + px(20.)));
+    cx.simulate_resize(size(WINDOW.width, px(760.)));
 }
 
 fn position(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Position {
@@ -528,7 +528,7 @@ fn a_keeper_that_refuses_the_reviews_leaves_the_pane_with_no_review_and_no_notic
         .keeper
         .show(&changes, |_| texts(LIB_OLD, LIB_NEW), &mut cx);
     wait_for_files(&stage.pane, &mut cx);
-    let first_line = bounds_of_row(2, &mut cx).center();
+    let first_line = bounds_of_row(1, &mut cx).center();
     cx.simulate_click(first_line, Modifiers::none());
     wait_until(&mut cx, "the refusal", |_| {
         stage.keeper.reviews_asked() == 1
@@ -1017,7 +1017,7 @@ fn a_comment_on_a_renamed_file_names_the_old_side_by_the_old_path_in_the_version
     );
     wait_for_files(&stage.pane, &mut cx);
     let pane = stage.pane.clone();
-    let first_line = bounds_of_row(2, &mut cx).center();
+    let first_line = bounds_of_row(1, &mut cx).center();
     cx.simulate_click(first_line, Modifiers::none());
     let renamed = PathBuf::from("src/new_name.rs");
     let at = |side, line| Position {
@@ -1407,6 +1407,7 @@ fn the_copy_control_puts_the_review_as_text_on_the_clipboard_and_the_copied_comm
     cx: &mut TestAppContext,
 ) {
     let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    room_for_the_rounds_line(&mut cx);
     let pane = stage.pane.clone();
     // Something of the test's own is on the clipboard: only the copy may replace it.
     cx.write_to_clipboard(ClipboardItem::new_string("before".to_owned()));
@@ -1517,7 +1518,7 @@ fn copying_closes_the_box_whose_draft_the_copy_sends(cx: &mut TestAppContext) {
     cx.simulate_input("a");
     let asked = stage.keeper.expect(new_thread_save(&opened, "a"), &mut cx);
     stage.keeper.reply(asked, Ok(Reply::Done));
-    let row = bounds_of_row(2, &mut cx).center();
+    let row = bounds_of_row(1, &mut cx).center();
     cx.simulate_click(row, Modifiers::none());
     assert!(comment_box(&pane, &mut cx).is_some());
 
@@ -1661,7 +1662,7 @@ fn shift_r_marks_the_change_reviewed_and_the_comparison_row_shows_it_once_the_ke
     );
     let first = bounds_of_row(0, &mut cx);
     let mark = drawn("review-reviewed", &mut cx).expect("drawn");
-    assert!(first.contains(&mark.center()));
+    assert!(mark.bottom() <= first.top());
 }
 
 #[gpui_kit::test]
@@ -1903,7 +1904,7 @@ fn open_on_two_files_of_one_diff(cx: &mut TestAppContext) -> (Stage, VisualTestC
         .keeper
         .show(&changes, |_| texts(LIB_OLD, LIB_NEW), &mut cx);
     wait_for_files(&stage.pane, &mut cx);
-    let first_line = bounds_of_row(2, &mut cx).center();
+    let first_line = bounds_of_row(1, &mut cx).center();
     cx.simulate_click(first_line, Modifiers::none());
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     (stage, cx)

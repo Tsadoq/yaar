@@ -4,9 +4,12 @@
 
 use std::collections::BTreeSet;
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_link::{Notice, Thread, ThreadId};
+use yaar_ui::metrics::{SPACE_2, SPACE_3, SPACE_5};
+use yaar_ui::pieces::{Button, ButtonKind, Chip, Tone};
+use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::threads::{Place, place_of};
 use crate::{PaneRow, ReviewPane, ShowOriginal, View};
@@ -61,75 +64,80 @@ impl ReviewPane {
         let Some(notice) = self.notice_of(held) else {
             return Vec::new();
         };
-        let theme = cx.theme();
         let id = held.id.clone();
         let (kind, words) = match notice {
             Notice::Changed => ("changed", "The code changed"),
             Notice::Deleted => ("deleted", "The code was deleted"),
         };
-        let shown = self.original_text(thread);
-        let mut marks = vec![
-            div()
-                .debug_selector({
-                    let id = id.clone();
-                    move || format!("review-thread-notice-{id}:{kind}")
-                })
-                .flex_none()
-                .ml_2()
-                .text_color(theme.warning)
-                .child(words)
+        let shown = self.original_text(thread).is_some();
+        vec![
+            Chip::new(words)
+                .tone(Tone::Warn)
+                .selector(format!("review-thread-notice-{id}:{kind}"))
                 .into_any_element(),
-            div()
-                .debug_selector({
-                    let id = id.clone();
-                    move || format!("review-thread-original-{id}")
-                })
-                .flex_none()
-                .ml_2()
-                .px_2()
-                .bg(theme.secondary)
-                .text_color(theme.secondary_foreground)
-                .child(if shown.is_some() {
+            Button::new(
+                SharedString::from(format!("review-thread-original-{id}")),
+                if shown {
                     "Hide original"
                 } else {
                     "Show original"
-                })
-                .on_mouse_down(MouseButton::Left, {
-                    let id = id.clone();
-                    cx.listener(move |pane, _: &MouseDownEvent, _, cx| {
-                        pane.acted(cx);
-                        pane.toggle_original(&id, cx);
-                    })
-                })
+                },
+            )
+            .kind(ButtonKind::Ghost)
+            .small()
+            .selector(format!("review-thread-original-{id}"))
+            .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
+                pane.acted(cx);
+                pane.toggle_original(&id, cx);
+            }))
+            .into_any_element(),
+        ]
+    }
+
+    pub(crate) fn thread_original_block(
+        &self,
+        thread: &ThreadId,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let text = self.original_text(thread)?;
+        let palette = palette(cx);
+        let id = thread.clone();
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(SPACE_3)
+                .px(SPACE_5)
+                .py(SPACE_2)
+                .bg(palette.del_ground)
+                .border_b_1()
+                .border_color(palette.separator)
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex_none()
+                        .typed(TypeRole::Meta)
+                        .text_color(palette.text_muted)
+                        .child("Written as:"),
+                )
+                .child(
+                    div()
+                        .debug_selector(move || format!("review-thread-original-text-{id}"))
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .typed(TypeRole::CodeSmall)
+                        .text_color(palette.text)
+                        .child(text),
+                )
                 .into_any_element(),
-        ];
-        if let Some(text) = shown {
-            marks.push(
-                div()
-                    .flex_none()
-                    .ml_2()
-                    .text_color(theme.muted_foreground)
-                    .child("Written as:")
-                    .into_any_element(),
-            );
-            marks.push(
-                div()
-                    .debug_selector(move || format!("review-thread-original-text-{id}"))
-                    .min_w_0()
-                    .ml_1()
-                    .truncate()
-                    .text_color(theme.foreground)
-                    .child(text)
-                    .into_any_element(),
-            );
-        }
-        marks
+        )
     }
 
     fn toggle_original(&mut self, thread: &ThreadId, cx: &mut Context<Self>) {
         if !self.moved.shown.remove(thread) {
             self.moved.shown.insert(thread.clone());
         }
+        self.list.remeasure();
         cx.notify();
     }
 

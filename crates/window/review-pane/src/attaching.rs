@@ -1,14 +1,13 @@
-use gpui_kit::component::theme::ActiveTheme;
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use yaar_frame::{AskError, Wanted};
 use yaar_link::{
     AgentCli, Attachment, Refusal, Reply, Request, ReviewId, SessionState, ThreadId, WorkspaceId,
     WorkspaceReviews,
 };
+use yaar_ui::metrics::SPACE_3;
+use yaar_ui::pieces::{Banner, Button, ButtonKind, Tone};
 
 use crate::actions::words;
-use crate::draw::ROW_HEIGHT;
 use crate::{AttachReview, AttachThread, DetachReview, NextOfferedAgent, ReviewPane, StartAgent};
 
 struct Offer {
@@ -78,83 +77,64 @@ impl ReviewPane {
         if attached.is_none() && offered.is_empty() {
             return None;
         }
-        let theme = cx.theme();
-        let mut line = div()
-            .flex_none()
-            .h(ROW_HEIGHT)
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_2()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .border_b_1()
-            .border_color(theme.border);
-        line = match attached {
-            Some(Attachment::Review) => line.child(
+        let mut banner = Banner::custom().tone(Tone::Warn);
+        banner = match attached {
+            Some(Attachment::Review) => banner.child(
                 div()
                     .debug_selector(|| "review-attached:review".to_owned())
-                    .text_color(theme.warning)
                     .child("Attached to your next message: the review"),
             ),
-            Some(Attachment::Thread(_)) => line.child(
+            Some(Attachment::Thread(_)) => banner.child(
                 div()
                     .debug_selector(|| "review-attached:thread".to_owned())
-                    .text_color(theme.warning)
                     .child("Attached to your next message: one thread"),
             ),
-            None => line,
+            None => banner,
         };
         if !offered.is_empty() {
             let mut offer = div()
                 .debug_selector(|| "review-offer-start".to_owned())
                 .flex()
-                .gap_2()
+                .items_center()
+                .gap(SPACE_3)
                 .child("The agent is not running:");
             let chosen = self.offer_chosen();
             for cli in offered {
                 let agent = cli.agent.clone();
                 let mark = chosen.as_ref() == Some(&cli);
-                offer = offer.child(
-                    div()
-                        .debug_selector({
-                            let agent = agent.clone();
-                            move || format!("review-offer-start-{agent}")
-                        })
-                        .relative()
-                        .px_2()
-                        .bg(theme.secondary)
-                        .text_color(theme.secondary_foreground)
-                        .child(format!("Start {}", cli.title))
-                        .when(mark, |control| {
-                            let agent = agent.clone();
-                            control.child(
-                                div()
-                                    .debug_selector(move || format!("review-offer-chosen-{agent}"))
-                                    .absolute()
-                                    .bottom_0()
-                                    .left_0()
-                                    .w_full()
-                                    .h(px(2.))
-                                    .bg(theme.primary),
-                            )
-                        })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |pane, _: &MouseDownEvent, _, cx| {
-                                pane.acted(cx);
-                                pane.start(&agent, cx);
-                            }),
-                        ),
-                );
+                let mut button = Button::new(
+                    SharedString::from(format!("review-offer-start-{agent}")),
+                    format!("Start {}", cli.title),
+                )
+                .small()
+                .selected(mark)
+                .selector(format!("review-offer-start-{agent}"))
+                .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
+                    pane.acted(cx);
+                    pane.start(&agent, cx);
+                }));
+                if mark {
+                    button =
+                        button.indicator_selector(format!("review-offer-chosen-{}", cli.agent));
+                }
+                offer = offer.child(button);
             }
-            line = line.child(offer);
+            banner = banner.child(offer);
         }
-        Some(line.into_any_element())
+        if attached.is_some() {
+            banner = banner.child(div().flex_1()).action(
+                Button::new("review-detach", "Detach")
+                    .kind(ButtonKind::Ghost)
+                    .small()
+                    .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                        pane.detach_review(&DetachReview, window, cx);
+                    })),
+            );
+        }
+        Some(banner.into_any_element())
     }
 
-    fn attach(&mut self, thread: Option<ThreadId>, cx: &mut Context<Self>) {
+    pub(crate) fn attach(&mut self, thread: Option<ThreadId>, cx: &mut Context<Self>) {
         let (Some(workspace), Some(review)) = (
             self.reviews_of.clone(),
             self.review().map(|review| review.id.clone()),

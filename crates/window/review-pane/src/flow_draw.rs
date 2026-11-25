@@ -1,126 +1,363 @@
-//! Drawing Flow, and the bar at the top that names both views. The bar lies outside the element
-//! whose listeners pause follow, and its controls call `steered`, never `acted`.
+//! Drawing Flow, and the two-row header at the top of the review pane. The header lies outside
+//! the element whose listeners pause follow, and the view/form/follow controls call `steered`,
+//! never `acted`.
 
 use std::ops::Range;
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use yaar_link::{FlowForm, Step, TurnEnd};
+use yaar_frame::SetBase;
+use yaar_link::{Comparison, FlowForm, SessionState, Step, TurnEnd};
+use yaar_ui::diff::DiffStats;
+use yaar_ui::metrics::{SPACE_3, SPACE_4, SPACE_5, SPACE_6};
+use yaar_ui::pieces::{Button, ButtonKind, Chip, EmptyState, Segmented, State, Tabs, Toggle, Tone};
+use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
-use crate::draw::{InView, ROW_HEIGHT};
-use crate::{Following, ReviewPane, TimelineEntry, ToggleFollow, View};
+use crate::draw::{InView, comparison_sentence, short};
+use crate::{
+    AttachReview, ChangeShown, Commit, DetachReview, FileContent, Following, Layout, MarkReviewed,
+    ReviewPane, TimelineEntry, ToggleFollow, ToggleLayout, View,
+};
+
+const TIMELINE_ROW_HEIGHT: Pixels = px(28.);
 
 impl ReviewPane {
-    pub(crate) fn render_bar(&mut self, cx: &mut Context<Self>) -> Option<Div> {
-        let theme = cx.theme();
-        // Runs `then` on mouse down and never calls `acted`: the bar chooses what Flow shows, it
-        // does not read it.
-        let control =
-            |label: &str,
-             selector: &'static str,
-             marked: bool,
-             then: fn(&mut ReviewPane, &mut Window, &mut Context<ReviewPane>)| {
-                div()
-                    .debug_selector(|| selector.to_owned())
-                    .flex_none()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .when(marked, |name| {
-                        name.bg(theme.secondary)
-                            .text_color(theme.secondary_foreground)
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |pane, _: &MouseDownEvent, window, cx| {
-                            pane.steered(cx);
-                            then(pane, window, cx);
-                        }),
-                    )
-                    .child(label.to_owned())
-            };
+    pub(crate) fn render_bar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let palette = palette(cx);
         let in_flow = self.view == View::Flow;
-        let follow = match self.following {
-            Following::On => "Follow: on",
-            Following::Paused { .. } => "Follow: paused",
-            Following::Off => "Follow: off",
-        };
-        let forms = in_flow.then(|| {
+
+        let workspace_info = self
+            .models
+            .changes
+            .read(cx)
+            .workspace()
+            .and_then(|id| self.models.workspaces.read(cx).workspace(id))
+            .map(|workspace| {
+                let name = workspace
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| workspace.path.display().to_string());
+                (name, workspace.head.clone())
+            });
+
+        let comparison_chip =
+            if let (Some(changes), ChangeShown::Comparison) = (&self.changes, &self.tree.shown) {
+                let offers_base = matches!(changes.comparison, Comparison::NothingToCompare { .. });
+                let label = match (&workspace_info, &changes.comparison) {
+                    (
+                        Some((_, Some(yaar_link::Head::Branch(branch)))),
+                        Comparison::SinceBase { base },
+                    ) => {
+                        format!("{branch} ← {}", base.name)
+                    }
+                    _ => comparison_sentence(&changes.comparison),
+                };
+                Some((label, offers_base))
+            } else {
+                None
+            };
+
+        let reviewed_chip = self
+            .review()
+            .and_then(|review| review.reviewed.as_deref())
+            .map(|state| {
+                Chip::new(format!("Reviewed at {}", short(state)))
+                    .tone(Tone::Ok)
+                    .selector("review-reviewed")
+            });
+
+        let sessions = self.session_chips(cx);
+        let server_chip = self.render_server_chip(cx);
+
+        let (total_added, total_removed) = self.total_diff_stats();
+        let file_stats = (!self.files.is_empty()).then(|| {
+            let count = self.files.len();
+            let word = if count == 1 { "file" } else { "files" };
             div()
                 .flex_none()
-                .flex()
-                .gap_1()
-                .child(control(
-                    "Timeline",
-                    "flow-form-timeline",
-                    self.form == FlowForm::Timeline,
-                    |pane, _, cx| pane.choose_form(FlowForm::Timeline, cx),
-                ))
-                .child(control(
-                    "Live diff",
-                    "flow-form-live",
-                    self.form == FlowForm::LiveDiff,
-                    |pane, _, cx| pane.choose_form(FlowForm::LiveDiff, cx),
-                ))
-        });
-        Some(
-            div()
-                .debug_selector(|| "review-bar".to_owned())
-                .flex_none()
-                .h(ROW_HEIGHT)
-                .w_full()
                 .flex()
                 .items_center()
-                .gap_1()
-                .px_2()
-                .overflow_hidden()
-                .whitespace_nowrap()
+                .gap(SPACE_3)
+                .child(
+                    div()
+                        .typed(TypeRole::Small)
+                        .text_color(palette.text_muted)
+                        .whitespace_nowrap()
+                        .child(format!("{count} {word}")),
+                )
+                .child(DiffStats::new(total_added, total_removed).small())
+        });
+
+        let unsent = self.unsent_comment_count();
+        let attached = self
+            .review()
+            .and_then(|review| review.attached.as_ref())
+            .is_some();
+        let has_workspace = self.models.changes.read(cx).workspace().is_some();
+        let has_review = self.review().is_some();
+
+        let top_row = has_workspace.then(|| {
+            let mut row = div()
+                .flex_none()
+                .w_full()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(SPACE_3)
+                .px(SPACE_5)
+                .py(SPACE_3)
                 .border_b_1()
-                .border_color(theme.border)
-                // The focus goes to the rows, where the keys of the pane work.
+                .border_color(palette.separator)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|pane, _: &MouseDownEvent, window, cx| {
                         pane.focus.focus(window, cx);
                     }),
-                )
-                .child(control(
-                    "Changes",
-                    "review-view-changes",
-                    !in_flow,
-                    |pane, _, cx| pane.show_view(View::Changes, cx),
-                ))
-                .child(control(
-                    "Flow",
-                    "review-view-flow",
-                    in_flow,
-                    |pane, _, cx| pane.show_view(View::Flow, cx),
-                ))
-                // Keeps the middle of the bar free of controls: what is right of it is Flow's own.
-                .child(div().flex_1())
-                .children(forms)
-                .child(
+                );
+
+            if let Some((name, _)) = &workspace_info {
+                row = row.child(
                     div()
-                        .debug_selector(|| "flow-follow".to_owned())
                         .flex_none()
-                        .px_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_color(theme.muted_foreground)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|pane, _: &MouseDownEvent, window, cx| {
-                                pane.toggle_follow(&ToggleFollow, window, cx);
+                        .typed(TypeRole::Strong)
+                        .text_color(palette.text)
+                        .child(name.clone()),
+                );
+            }
+
+            if let Some((label, offers_base)) = comparison_chip {
+                if offers_base {
+                    row = row.child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .typed(TypeRole::Small)
+                            .text_color(palette.text_muted)
+                            .child(label),
+                    );
+                    row = row.child(
+                        Button::new("review-offer-base", "Set a base…")
+                            .kind(ButtonKind::Primary)
+                            .small()
+                            .selector("review-offer-base")
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(SetBase), cx)
                             }),
-                        )
-                        .child(follow),
-                ),
+                    );
+                } else {
+                    row = row.child(
+                        Chip::new(label)
+                            .mono()
+                            .max_width(px(210.))
+                            .on_click("review-base-chip", |_, window, cx| {
+                                window.dispatch_action(Box::new(SetBase), cx)
+                            }),
+                    );
+                }
+            }
+
+            let mut attach = Button::new(
+                "review-attach-review",
+                if attached {
+                    "Attached"
+                } else {
+                    "Attach review"
+                },
+            )
+            .kind(ButtonKind::Primary)
+            .small()
+            .disabled(!has_review)
+            .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
+                if attached {
+                    pane.detach_review(&DetachReview, window, cx);
+                } else {
+                    pane.attach_review(&AttachReview, window, cx);
+                }
+            }));
+            if unsent > 0 {
+                attach = attach.count(unsent);
+            }
+
+            let actions = div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(SPACE_3)
+                .child(
+                    Button::new("review-mark-reviewed", "Mark reviewed")
+                        .small()
+                        .disabled(!has_review)
+                        .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                            pane.mark_reviewed(&MarkReviewed, window, cx);
+                        })),
+                )
+                .child(attach)
+                .child(
+                    Button::new("review-commit", "Commit…")
+                        .small()
+                        .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                            pane.commit(&Commit, window, cx);
+                        })),
+                );
+
+            row = row
+                .children(reviewed_chip)
+                .children(sessions)
+                .children(server_chip)
+                .children(file_stats)
+                .child(div().flex_1())
+                .child(actions);
+            row
+        });
+
+        let working = self
+            .sessions
+            .iter()
+            .any(|session| session.state == SessionState::Works);
+        let file_count = (!self.files.is_empty()).then_some(self.files.len());
+        let entity = cx.entity();
+        let tabs = Tabs::new("review-views")
+            .selector("review-view")
+            .tab("changes", "Changes", file_count, None)
+            .tab("flow", "Flow", None, working.then_some(State::Working))
+            .selected(if in_flow { 1 } else { 0 })
+            .on_select({
+                let entity = entity.clone();
+                move |index, _, cx| {
+                    entity.update(cx, |pane, cx| {
+                        pane.steered(cx);
+                        let view = if index == 0 {
+                            View::Changes
+                        } else {
+                            View::Flow
+                        };
+                        pane.show_view(view, cx);
+                    });
+                }
+            });
+
+        let follow_label = match self.following {
+            Following::On => "Follow",
+            Following::Paused { .. } => "Follow: paused",
+            Following::Off => "Follow",
+        };
+        let follow = Toggle::new("flow-follow", follow_label)
+            .on(self.following == Following::On)
+            .paused(matches!(self.following, Following::Paused { .. }))
+            .selector("flow-follow")
+            .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                pane.toggle_follow(&ToggleFollow, window, cx);
+            }));
+
+        let form_switch = if in_flow {
+            Segmented::new("flow-form")
+                .selector("flow-form")
+                .segment("timeline", "Timeline")
+                .segment("live", "Live diff")
+                .selected(if self.form == FlowForm::Timeline {
+                    0
+                } else {
+                    1
+                })
+                .on_select(move |index, _, cx| {
+                    entity.update(cx, |pane, cx| {
+                        pane.steered(cx);
+                        let form = if index == 0 {
+                            FlowForm::Timeline
+                        } else {
+                            FlowForm::LiveDiff
+                        };
+                        pane.choose_form(form, cx);
+                    });
+                })
+        } else {
+            Segmented::new("review-layout")
+                .selector("review-layout")
+                .segment("unified", "Unified")
+                .segment("split", "Split")
+                .selected(if self.layout == Layout::Unified { 0 } else { 1 })
+                .on_select(move |index, window, cx| {
+                    entity.update(cx, |pane, cx| {
+                        let wanted = if index == 0 {
+                            Layout::Unified
+                        } else {
+                            Layout::Split
+                        };
+                        if pane.layout != wanted {
+                            pane.toggle_layout(&ToggleLayout, window, cx);
+                        }
+                    });
+                })
+        };
+
+        let tools_row = div()
+            .debug_selector(|| "review-bar".to_owned())
+            .flex_none()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(SPACE_4)
+            .px(SPACE_5)
+            .py(SPACE_3)
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .border_b_1()
+            .border_color(palette.separator)
+            // The focus goes to the rows, where the keys of the pane work.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|pane, _: &MouseDownEvent, window, cx| {
+                    pane.focus.focus(window, cx);
+                }),
+            )
+            .child(tabs)
+            .child(div().flex_1())
+            .child(follow)
+            .child(form_switch);
+
+        Some(
+            div()
+                .flex_none()
+                .w_full()
+                .flex()
+                .flex_col()
+                .children(top_row)
+                .child(tools_row)
+                .into_any_element(),
         )
     }
 
+    fn total_diff_stats(&self) -> (usize, usize) {
+        let mut added = 0;
+        let mut removed = 0;
+        for held in &self.files {
+            if let FileContent::Diff(shown) = &held.content {
+                for hunk in shown.diff.hunks() {
+                    added += hunk.new.len();
+                    removed += hunk.old.len();
+                }
+            }
+        }
+        (added, removed)
+    }
+
+    fn unsent_comment_count(&self) -> usize {
+        self.review().map_or(0, |review| {
+            review
+                .threads
+                .iter()
+                .filter(|thread| !thread.resolved)
+                .flat_map(|thread| &thread.comments)
+                .filter(|comment| comment.round.is_none())
+                .count()
+        })
+    }
+
     pub(crate) fn render_flow(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let lines = self.follow_lines(cx);
+        let paused = self.follow_paused_pill(cx);
+        let offer = self.follow_offer_card(cx);
         let list = match self.form {
             FlowForm::Timeline => self.render_timeline(cx),
             FlowForm::LiveDiff => div()
@@ -130,25 +367,30 @@ impl ReviewPane {
                 .into_any_element(),
         };
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
-            .children(lines)
             .child(div().flex_1().min_h_0().child(list))
+            .children(offer)
+            .children(paused)
             .into_any_element()
     }
 
     fn render_timeline(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if self.flow.entries().is_empty() {
-            let theme = cx.theme();
             return div()
-                .debug_selector(|| "flow-empty".to_owned())
-                .h(ROW_HEIGHT)
-                .px_2()
+                .size_full()
                 .flex()
                 .items_center()
-                .text_color(theme.muted_foreground)
-                .child("No turn of the agent to show yet")
+                .justify_center()
+                .child(
+                    EmptyState::new("No turn of the agent to show yet")
+                        .line(
+                            "Flow shows every edit, file read, and command while the agent works.",
+                        )
+                        .selector("flow-empty"),
+                )
                 .into_any_element();
         }
         uniform_list(
@@ -176,35 +418,69 @@ impl ReviewPane {
         at: bool,
         cx: &Context<Self>,
     ) -> Div {
-        let theme = cx.theme();
-        let words = entry_words(&self.flow.entries()[index]);
-        let heading = matches!(self.flow.entries()[index], TimelineEntry::Turn { .. });
+        let palette = palette(cx);
+        let entry = &self.flow.entries()[index];
+        let words = entry_words(entry);
+        let (role, text_colour, dot_colour, heading) = match entry {
+            TimelineEntry::Turn { .. } => (TypeRole::Label, palette.text_dim, None, true),
+            TimelineEntry::Step { step, .. } => {
+                let dot = match step {
+                    Step::Read { .. } => palette.text_dim,
+                    Step::Edit { .. } | Step::Write { .. } => palette.ok,
+                    Step::Command { .. } => palette.info,
+                };
+                (
+                    TypeRole::CodeSmall,
+                    if at { palette.link } else { palette.text },
+                    Some(dot),
+                    false,
+                )
+            }
+            TimelineEntry::End { how, .. } => {
+                let colour = match how {
+                    Some(TurnEnd::Finished) => palette.ok,
+                    Some(TurnEnd::Interrupted) => palette.warn,
+                    None => palette.text_muted,
+                };
+                (TypeRole::Meta, colour, Some(colour), false)
+            }
+        };
+        let label = if heading {
+            words.to_uppercase()
+        } else {
+            words.clone()
+        };
         div()
             .debug_selector(|| format!("flow-entry-{index}"))
-            .h(ROW_HEIGHT)
+            .h(TIMELINE_ROW_HEIGHT)
             .w_full()
             .flex()
             .items_center()
-            .px_2()
+            .gap(SPACE_3)
+            .px(SPACE_6)
             .overflow_hidden()
             .whitespace_nowrap()
             .border_l_2()
             .border_color(if at {
-                theme.primary
+                palette.focus
             } else {
                 transparent_black()
             })
-            .when(heading, |row| {
-                row.bg(theme.secondary)
-                    .text_color(theme.secondary_foreground)
-            })
-            .when(reviewer && !heading, |row| row.bg(theme.muted))
+            .when(heading, |row| row.bg(palette.window))
+            .when(reviewer && !heading, |row| row.bg(palette.raised))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |pane, _: &MouseDownEvent, _, cx| {
                     pane.click_timeline_entry(index, cx)
                 }),
             )
+            .children(dot_colour.map(|colour| {
+                div()
+                    .flex_none()
+                    .typed(TypeRole::Meta)
+                    .text_color(colour)
+                    .child("●")
+            }))
             .child(
                 // The words are in the selector: a test reads what was handed to the text system.
                 div()
@@ -212,8 +488,11 @@ impl ReviewPane {
                         let words = words.clone();
                         move || format!("flow-entry-text-{index}:{words}")
                     })
+                    .min_w_0()
                     .truncate()
-                    .child(words),
+                    .typed(role)
+                    .text_color(text_colour)
+                    .child(label),
             )
     }
 }

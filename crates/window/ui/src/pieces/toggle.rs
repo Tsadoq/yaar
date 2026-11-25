@@ -17,6 +17,7 @@ pub struct Toggle {
     id: ElementId,
     label: SharedString,
     on: bool,
+    paused: bool,
     selector: Option<SharedString>,
     on_click: Option<OnClick>,
 }
@@ -27,6 +28,7 @@ impl Toggle {
             id: id.into(),
             label: label.into(),
             on: false,
+            paused: false,
             selector: None,
             on_click: None,
         }
@@ -34,6 +36,12 @@ impl Toggle {
 
     pub fn on(mut self, on: bool) -> Self {
         self.on = on;
+        self
+    }
+
+    /// Shows the lamp in the warning colour while follow is paused.
+    pub fn paused(mut self, paused: bool) -> Self {
+        self.paused = paused;
         self
     }
 
@@ -56,6 +64,8 @@ impl RenderOnce for Toggle {
         let palette = palette(cx);
         let (text, lamp) = if self.on {
             (palette.text, palette.ok)
+        } else if self.paused {
+            (palette.text_muted, palette.warn)
         } else {
             (palette.text_dim, palette.text_dim)
         };

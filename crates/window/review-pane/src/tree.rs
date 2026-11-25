@@ -3,22 +3,26 @@
 
 use std::ops::Range;
 
-use gpui_kit::component::theme::ActiveTheme;
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use yaar_link::{
     ChangedFile, CreditedFile, History, HistoryEntry, Reply, Request, ReviewId, WorkspaceId,
 };
+use yaar_ui::diff::DiffStats;
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4};
+use yaar_ui::pieces::{CountBadge, Divider, ListRow, SectionLabel};
+use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::actions::words;
-use crate::draw::ROW_HEIGHT;
 use crate::turns::Offer;
 use crate::{
-    ChangeShown, EXPIRED_TURN, FocusHistory, FocusRows, HISTORY_CONTEXT, HistoryDown, HistoryUp,
-    MarkChange, ReviewPane, ShowChange,
+    ChangeShown, EXPIRED_TURN, FileContent, FocusHistory, FocusRows, HISTORY_CONTEXT, HistoryDown,
+    HistoryUp, MarkChange, ReviewPane, ShowChange,
 };
 
 const ENTRIES_IN_VIEW: usize = 8;
+const HISTORY_ROW_HEIGHT: Pixels = px(28.);
+const LEFT_COLUMN_WIDTH: Pixels = px(236.);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Source {
@@ -616,6 +620,214 @@ impl ReviewPane {
         self.select(index, shift, cx);
     }
 
+    pub(crate) fn render_left_column(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let has_tree = self.has_tree();
+        if !has_tree && self.files.is_empty() {
+            if self.tree.focus.is_focused(window) {
+                cx.defer_in(window, |pane, window, cx| pane.focus.focus(window, cx));
+            }
+            return None;
+        }
+        let palette = palette(cx);
+        let all_selected = self.tree.shown == ChangeShown::Comparison;
+        let all_label = self
+            .changes
+            .as_ref()
+            .map(|changes| match &changes.comparison {
+                yaar_link::Comparison::SinceBase { base } => {
+                    format!("All changes since {}", base.name)
+                }
+                _ => "All changes".to_owned(),
+            })
+            .unwrap_or_else(|| "All changes".to_owned());
+        let all_row = ListRow::new("review-what-all")
+            .compact()
+            .accent_selected()
+            .selected(all_selected)
+            .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                pane.acted(cx);
+                pane.tree.marked.clear();
+                pane.back_to_comparison(cx);
+                pane.focus.focus(window, cx);
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .typed(TypeRole::Meta)
+                    .text_color(if all_selected {
+                        palette.accent_text
+                    } else {
+                        palette.text_dim
+                    })
+                    .child(if all_selected { "●" } else { "○" }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .typed(if all_selected {
+                        TypeRole::Strong
+                    } else {
+                        TypeRole::Body
+                    })
+                    .text_color(if all_selected {
+                        palette.text
+                    } else {
+                        palette.text_muted
+                    })
+                    .child(all_label),
+            );
+
+        let history_section = self.tree_view(window, cx);
+        let rounds_section = self.render_rounds_in_column(cx);
+        let files_section = (!self.files.is_empty()).then(|| self.render_file_list(cx));
+
+        let column = div()
+            .flex_none()
+            .w(LEFT_COLUMN_WIDTH)
+            .h_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .px(SPACE_3)
+            .py(SPACE_4)
+            .gap(SPACE_2)
+            .child(SectionLabel::new("Review what"))
+            .child(all_row)
+            .children(history_section.map(|list| {
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_1)
+                    .pt(SPACE_2)
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(SPACE_2)
+                            .child(SectionLabel::new("History"))
+                            .child(
+                                div()
+                                    .typed(TypeRole::Tiny)
+                                    .text_color(palette.text_dim)
+                                    .child("shift-click: range"),
+                            ),
+                    )
+                    .child(list)
+            }))
+            .children(rounds_section)
+            .children(files_section);
+
+        Some(
+            div()
+                .flex_none()
+                .h_full()
+                .flex()
+                .child(column)
+                .child(Divider::vertical())
+                .into_any_element(),
+        )
+    }
+
+    fn render_file_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = palette(cx);
+        let active_path = self.position.as_ref().map(|pos| pos.path.as_path());
+        let review = self.review();
+        let viewed_set = self.reviews().map(|reviews| &reviews.viewed);
+        let rows: Vec<AnyElement> = self
+            .files
+            .iter()
+            .enumerate()
+            .map(|(file_idx, held)| {
+                let path = held.file.path.clone();
+                let selected = active_path == Some(path.as_path());
+                let viewed = viewed_set.is_some_and(|set| set.contains(&path));
+                let threads = review.map_or(0, |review| {
+                    review
+                        .threads
+                        .iter()
+                        .filter(|thread| !thread.resolved && held.placed.contains(&thread.id))
+                        .count()
+                });
+                let stats = match &held.content {
+                    FileContent::Diff(shown) => {
+                        let added: usize =
+                            shown.diff.hunks().iter().map(|hunk| hunk.new.len()).sum();
+                        let removed: usize =
+                            shown.diff.hunks().iter().map(|hunk| hunk.old.len()).sum();
+                        Some((added, removed))
+                    }
+                    FileContent::Unshown(_) => None,
+                };
+                let target_row = held.rows.start;
+                let mut row = ListRow::new(("review-file-item", file_idx))
+                    .compact()
+                    .selected(selected)
+                    .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
+                        pane.acted(cx);
+                        pane.jump_to_file(target_row, window, cx);
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .typed(TypeRole::CodeSmall)
+                            .text_color(if viewed {
+                                palette.text_dim
+                            } else if selected {
+                                palette.text
+                            } else {
+                                palette.text_muted
+                            })
+                            .child(path.display().to_string()),
+                    );
+                if threads > 0 {
+                    row = row.child(CountBadge::new(threads));
+                }
+                if let Some((added, removed)) = stats {
+                    row = row.child(DiffStats::new(added, removed).small());
+                }
+                if viewed {
+                    row = row.child(
+                        div()
+                            .flex_none()
+                            .typed(TypeRole::Tiny)
+                            .text_color(palette.ok)
+                            .child("✓"),
+                    );
+                }
+                row.into_any_element()
+            })
+            .collect();
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap(SPACE_1)
+            .pt(SPACE_2)
+            .child(SectionLabel::new("Files"))
+            .child(
+                div()
+                    .id("review-file-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_1)
+                    .children(rows),
+            )
+            .into_any_element()
+    }
+
     pub(crate) fn tree_view(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
         if !self.has_tree() {
             if self.tree.focus.is_focused(window) {
@@ -623,7 +835,6 @@ impl ReviewPane {
             }
             return None;
         }
-        let theme = cx.theme();
         let shown = self.tree_len().min(ENTRIES_IN_VIEW);
         let list = uniform_list(
             "review-history",
@@ -640,9 +851,7 @@ impl ReviewPane {
             div()
                 .flex_none()
                 .w_full()
-                .h(ROW_HEIGHT * shown as f32)
-                .border_b_1()
-                .border_color(theme.border)
+                .h(HISTORY_ROW_HEIGHT * shown as f32)
                 .key_context(HISTORY_CONTEXT)
                 .track_focus(&self.tree.focus)
                 .on_action(cx.listener(Self::history_down))
@@ -695,8 +904,8 @@ impl ReviewPane {
         }
     }
 
-    fn draw_entry(&self, index: usize, window: &Window, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
+    fn draw_entry(&self, index: usize, window: &Window, cx: &Context<Self>) -> AnyElement {
+        let palette = palette(cx);
         let entries = self
             .tree
             .history
@@ -711,49 +920,70 @@ impl ReviewPane {
         let here = self.tree.cursor == Some(index) && self.tree.focus.is_focused(window);
         let marked = self.tree.marked.contains(&index);
         let (label, selectable) = self.entry_words(index, cx);
-        let words_selector = if uncommitted {
-            format!("review-history-uncommitted:{label}")
-        } else {
-            format!("review-history-{index}:{label}")
-        };
-        let row = div()
-            .h(ROW_HEIGHT)
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .border_l_2()
-            .border_color(if here {
-                theme.primary
-            } else {
-                transparent_black()
-            })
-            .when(selected, |row| row.bg(theme.secondary))
-            .when(!selectable, |row| row.text_color(theme.muted_foreground))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |pane, event: &MouseDownEvent, window, cx| {
-                    pane.click_entry(index, event.modifiers.shift, window, cx);
-                }),
+        let (row_selector, words_selector) = if uncommitted {
+            (
+                "review-history-uncommitted".to_owned(),
+                format!("review-history-uncommitted:{label}"),
             )
+        } else {
+            (
+                format!("review-history-{index}"),
+                format!("review-history-{index}:{label}"),
+            )
+        };
+        let dot_colour = if marked || selected {
+            palette.accent_text
+        } else if uncommitted {
+            palette.warn
+        } else if matches!(entries.get(index), Some(HistoryEntry::Turn { .. })) {
+            palette.link
+        } else {
+            palette.text_dim
+        };
+        let dot_glyph = if marked || matches!(entries.get(index), Some(HistoryEntry::Commit(_))) {
+            "●"
+        } else {
+            "○"
+        };
+        let row = ListRow::new(("review-history-row", index))
+            .compact()
+            .accent_selected()
+            .selected(selected)
+            .focused(here)
+            .selector(row_selector)
+            .on_click(cx.listener(move |pane, event: &ClickEvent, window, cx| {
+                pane.click_entry(index, event.modifiers().shift, window, cx);
+            }))
             .child(
                 div()
                     .flex_none()
-                    .w(px(10.))
-                    .child(if marked { "●" } else { "" }),
+                    .w(px(12.))
+                    .typed(TypeRole::Meta)
+                    .text_color(dot_colour)
+                    .child(dot_glyph),
             )
             .child(
                 div()
-                    .child(label)
-                    .debug_selector(move || words_selector.clone()),
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .typed(TypeRole::Meta)
+                    .text_color(if !selectable {
+                        palette.text_dim
+                    } else if selected {
+                        palette.text
+                    } else {
+                        palette.text_muted
+                    })
+                    .debug_selector(move || words_selector.clone())
+                    .child(label),
             );
-        if uncommitted {
-            row.debug_selector(|| "review-history-uncommitted".to_owned())
-        } else {
-            row.debug_selector(|| format!("review-history-{index}"))
-        }
+        div()
+            .h(HISTORY_ROW_HEIGHT)
+            .w_full()
+            .flex()
+            .items_center()
+            .child(row)
+            .into_any_element()
     }
 }

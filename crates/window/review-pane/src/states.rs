@@ -2,9 +2,9 @@
 //! threads on the reviewer's line, the first the action applies to is acted on; with none,
 //! the notice says why and nothing is sent.
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_link::{Request, ReviewId, Thread, ThreadId, ThreadState};
+use yaar_ui::pieces::{Chip, Tone};
 
 use crate::{PaneRow, ReopenThread, ResolveAddressed, ResolveThread, ReviewPane, View};
 
@@ -19,27 +19,23 @@ fn written(state: ThreadState) -> (&'static str, &'static str) {
 }
 
 impl ReviewPane {
-    pub(crate) fn thread_state_mark(&self, thread: &ThreadId, cx: &App) -> Option<AnyElement> {
+    pub(crate) fn thread_state_mark(&self, thread: &ThreadId, _cx: &App) -> Option<AnyElement> {
         let held = self
             .review()?
             .threads
             .iter()
             .find(|held| held.id == *thread)?;
         let (name, words) = written(held.state);
-        let theme = cx.theme();
-        let color = match held.state {
-            ThreadState::Draft | ThreadState::WaitsForReviewer => theme.warning,
-            ThreadState::Addressed | ThreadState::Resolved => theme.success,
-            ThreadState::Sent => theme.muted_foreground,
+        let tone = match held.state {
+            ThreadState::Draft | ThreadState::WaitsForReviewer => Tone::Warn,
+            ThreadState::Addressed | ThreadState::Resolved => Tone::Ok,
+            ThreadState::Sent => Tone::Plain,
         };
         let id = held.id.clone();
         Some(
-            div()
-                .debug_selector(move || format!("review-thread-state-{id}:{name}"))
-                .flex_none()
-                .ml_2()
-                .text_color(color)
-                .child(words)
+            Chip::new(words)
+                .tone(tone)
+                .selector(format!("review-thread-state-{id}:{name}"))
                 .into_any_element(),
         )
     }

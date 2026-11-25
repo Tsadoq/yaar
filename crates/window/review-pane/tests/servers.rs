@@ -265,6 +265,7 @@ fn a_removed_line_shows_the_new_sides_server_until_the_old_sides_state_is_told_a
     cx: &mut TestAppContext,
 ) {
     let (stage, navigator, mut cx) = open_on_code(cx);
+    cx.simulate_resize(gpui_kit::size(common::WINDOW.width, gpui_kit::px(600.)));
     navigator.tell(Told::Servers(vec![rust(missing_with_offer())]), &mut cx);
 
     go_to(&stage, "src/lib.rs", Line::Removed, &mut cx);

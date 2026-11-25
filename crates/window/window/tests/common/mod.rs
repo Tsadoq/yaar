@@ -586,9 +586,13 @@ impl Composed {
         let at = self.point_in("review-view-changes", cx);
         cx.simulate_click(at, Modifiers::none());
         wait_until(cx, "Changes on screen", |cx| {
-            self.review
-                .read_with(cx, |pane, _| pane.view() == yaar_review_pane::View::Changes)
-                && cx.debug_bounds("review-row-0").is_some()
+            let (in_changes, empty) = self.review.read_with(cx, |pane, _| {
+                (
+                    pane.view() == yaar_review_pane::View::Changes,
+                    pane.rows().is_empty(),
+                )
+            });
+            in_changes && (empty || cx.debug_bounds("review-row-0").is_some())
         });
     }
 
@@ -676,7 +680,10 @@ impl Composed {
             })
         });
         wait_until(cx, "the first row of the review pane", |cx| {
-            cx.debug_bounds("review-row-0").is_some()
+            let (loaded, empty) = self.review.read_with(cx, |pane, _| {
+                (pane.comparison().is_some(), pane.rows().is_empty())
+            });
+            loaded && (empty || cx.debug_bounds("review-row-0").is_some())
         });
     }
 

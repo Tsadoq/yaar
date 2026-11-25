@@ -2,11 +2,11 @@
 //! numbered as it or higher has been edited. A round with a turn is not counted until the
 //! history holds that turn with a state.
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_link::{HistoryEntry, TurnId};
+use yaar_ui::metrics::{SPACE_2, SPACE_3};
+use yaar_ui::pieces::{Banner, Button, Chip, Tone};
 
-use crate::draw::ROW_HEIGHT;
 use crate::tree::version_of;
 use crate::{ChangeShown, ReviewPane, SinceRound, View};
 
@@ -73,60 +73,81 @@ impl ReviewPane {
 
     pub(crate) fn render_rounds(&self, cx: &Context<Self>) -> Option<AnyElement> {
         self.review()?;
-        // Shown for every review so that a first thread or round does not move the diff down a row.
         let rounds = self.rounds_shown();
-        let theme = cx.theme();
-        let mut line = div()
-            .debug_selector(|| "review-rounds".to_owned())
-            .flex_none()
-            .h(ROW_HEIGHT)
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_2()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .border_b_1()
-            .border_color(theme.border);
         if rounds.is_empty() {
-            line = line.child(
-                div()
-                    .text_color(theme.muted_foreground)
-                    .child("No round sent yet"),
-            );
+            return None;
         }
+        let mut banner = Banner::custom().selector("review-rounds");
         for round in rounds {
             let number = round.number;
-            let (kind, color) = match round.sent {
-                true => ("sent", theme.warning),
-                false => ("answered", theme.success),
+            let (kind, tone) = match round.sent {
+                true => ("sent", Tone::Warn),
+                false => ("answered", Tone::Ok),
             };
-            let mut one = div().flex_none().flex().gap_2().child(
-                div()
-                    .debug_selector(|| format!("review-round-{number}:{kind}"))
-                    .text_color(color)
-                    .child(format!("Round {number}: {kind}")),
+            let mut one = div().flex_none().flex().items_center().gap(SPACE_2).child(
+                Chip::new(format!("Round {number}: {kind}"))
+                    .tone(tone)
+                    .selector(format!("review-round-{number}:{kind}")),
             );
             if round.state.is_some() {
                 one = one.child(
-                    div()
-                        .debug_selector(|| format!("review-round-{number}-since"))
-                        .px_2()
-                        .bg(theme.secondary)
-                        .child("Since")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |pane, _: &MouseDownEvent, _, cx| {
-                                pane.acted(cx);
-                                pane.show_since(number, cx);
-                            }),
-                        ),
+                    Button::new(("review-round-since", number), "Since")
+                        .small()
+                        .selector(format!("review-round-{number}-since"))
+                        .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
+                            pane.acted(cx);
+                            pane.show_since(number, cx);
+                        })),
                 );
             }
-            line = line.child(one);
+            banner = banner.child(one);
         }
-        Some(line.into_any_element())
+        Some(banner.into_any_element())
+    }
+
+    pub(crate) fn render_rounds_in_column(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        self.review()?;
+        let rounds = self.rounds_shown();
+        if rounds.is_empty() {
+            return None;
+        }
+        let mut group = div()
+            .debug_selector(|| "review-rounds".to_owned())
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(SPACE_2)
+            .px(SPACE_3);
+        for round in rounds {
+            let number = round.number;
+            let (kind, tone) = match round.sent {
+                true => ("sent", Tone::Warn),
+                false => ("answered", Tone::Ok),
+            };
+            let mut one = div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(SPACE_2)
+                .child(
+                    Chip::new(format!("Round {number}: {kind}"))
+                        .tone(tone)
+                        .selector(format!("review-round-{number}:{kind}")),
+                );
+            if round.state.is_some() {
+                one = one.child(
+                    Button::new(("review-round-since", number), "Since")
+                        .small()
+                        .selector(format!("review-round-{number}-since"))
+                        .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
+                            pane.acted(cx);
+                            pane.show_since(number, cx);
+                        })),
+                );
+            }
+            group = group.child(one);
+        }
+        Some(group.into_any_element())
     }
 
     fn counted_since(&self, state: &str, turn: Option<&TurnId>) -> Counted {

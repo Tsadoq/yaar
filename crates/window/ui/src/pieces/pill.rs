@@ -16,6 +16,7 @@ pub struct Pill {
     text: SharedString,
     actions: Vec<AnyElement>,
     selector: Option<SharedString>,
+    text_selector: Option<SharedString>,
 }
 
 impl Pill {
@@ -25,6 +26,7 @@ impl Pill {
             text: text.into(),
             actions: Vec::new(),
             selector: None,
+            text_selector: None,
         }
     }
 
@@ -38,11 +40,23 @@ impl Pill {
         self.selector = Some(selector.into());
         self
     }
+
+    pub fn text_selector(mut self, selector: impl Into<SharedString>) -> Self {
+        self.text_selector = Some(selector.into());
+        self
+    }
 }
 
 impl RenderOnce for Pill {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = palette(cx);
+        let text = match self.text_selector {
+            Some(selector) => div()
+                .debug_selector(move || selector.to_string())
+                .child(self.text)
+                .into_any_element(),
+            None => self.text.into_any_element(),
+        };
         let pill = div()
             .id(self.id)
             .flex()
@@ -60,7 +74,7 @@ impl RenderOnce for Pill {
             .typed(TypeRole::Body)
             .text_color(palette.text)
             .whitespace_nowrap()
-            .child(self.text)
+            .child(text)
             .children(self.actions);
         marked(pill, self.selector)
     }

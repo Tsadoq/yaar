@@ -626,7 +626,7 @@ fn the_list_of_a_long_timeline_scrolls_with_the_reviewer_and_keeps_its_place_acr
         stage.pane.read_with(&cx, |pane, _| pane.following()),
         Following::Paused { missed: 0 }
     );
-    assert_eq!(in_view(&stage, &mut cx), at_first.start..at_first.end - 1);
+    assert_eq!(in_view(&stage, &mut cx), at_first);
     assert!(drawn("flow-entry-0", &mut cx).is_some());
 }
 

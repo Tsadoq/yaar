@@ -7,14 +7,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_diff::Side;
 use yaar_frame::NavError;
 use yaar_link::WorkspaceId;
 use yaar_navigator::{Answered, FileKind, Location, Place, Tree as NavTree};
+use yaar_ui::metrics::{SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_6};
+use yaar_ui::pieces::{Banner, Button, ButtonKind, Chip, Divider, ListRow, Popover, Tone};
+use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
-use crate::draw::ROW_HEIGHT;
 use crate::names;
 use crate::threads::path_in;
 use crate::tree::Source;
@@ -74,6 +76,7 @@ struct Resting {
 /// A dropped ask that is still on its way tells the Navigator it is cancelled.
 struct Hovering {
     shown: HoverShown,
+    anchor: Option<Bounds<Pixels>>,
     _asking: Task<()>,
 }
 
@@ -398,10 +401,16 @@ impl ReviewPane {
         }
     }
 
-    pub(crate) fn hover_name(&mut self, _: &crate::Hover, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn hover_name(
+        &mut self,
+        _: &crate::Hover,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.acted(cx);
         if let Some(place) = self.place_to_ask(cx) {
-            self.ask_hover(place, cx);
+            let anchor = self.cursor_hover_anchor(window);
+            self.ask_hover(place, anchor, cx);
         }
     }
 
@@ -451,7 +460,7 @@ impl ReviewPane {
         cx.notify();
     }
 
-    fn ask_hover(&mut self, place: Place, cx: &mut Context<Self>) {
+    fn ask_hover(&mut self, place: Place, anchor: Option<Bounds<Pixels>>, cx: &mut Context<Self>) {
         let asking = self
             .models
             .navigation
@@ -468,9 +477,43 @@ impl ReviewPane {
                 guessed: false,
                 waiting: true,
             },
+            anchor,
             _asking: task,
         });
         cx.notify();
+    }
+
+    fn cursor_hover_anchor(&self, window: &Window) -> Option<Bounds<Pixels>> {
+        if let Some(row) = self.position_row
+            && let Some(bounds) = self.list.bounds_for_item(row)
+        {
+            return Some(bounds);
+        }
+        let pos = window.mouse_position();
+        Some(Bounds::new(point(pos.x, pos.y), size(px(8.), px(20.))))
+    }
+
+    fn spot_hover_anchor(&self, spot: &Spot, window: &Window) -> Option<Bounds<Pixels>> {
+        match spot {
+            Spot::Diff { index, .. } => {
+                if let Some(bounds) = self.list.bounds_for_item(*index) {
+                    let x = window
+                        .mouse_position()
+                        .x
+                        .clamp(bounds.left(), bounds.right());
+                    return Some(Bounds::new(
+                        point(x, bounds.top()),
+                        size(px(8.), bounds.size.height),
+                    ));
+                }
+            }
+            Spot::File(_) => {}
+        }
+        let pos = window.mouse_position();
+        Some(Bounds::new(
+            point(pos.x, pos.y - px(10.)),
+            size(px(8.), px(20.)),
+        ))
     }
 
     fn hover_answered(
@@ -794,82 +837,97 @@ impl ReviewPane {
         {
             return;
         }
+        let anchor = self.spot_hover_anchor(spot, window);
         match self.place_for(&cursor, &text, range, cx) {
-            Ok(place) => self.ask_hover(place, cx),
+            Ok(place) => self.ask_hover(place, anchor, cx),
             Err(why) => self.say(why, cx),
         }
     }
 
-    pub(crate) fn render_hover(&self, cx: &Context<Self>) -> Option<Div> {
+    pub(crate) fn render_hover(&self, window: &Window, cx: &Context<Self>) -> Option<AnyElement> {
         let hovering = self.navigate.hover.as_ref()?;
         let shown = &hovering.shown;
-        let theme = cx.theme();
+        let palette = palette(cx);
+        let anchor = hovering.anchor.unwrap_or_else(|| {
+            let vp = window.viewport_size();
+            Bounds::new(point(px(24.), vp.height * 0.25), size(px(8.), px(20.)))
+        });
         let words = |selector: String, words: String| {
             div().debug_selector(move || selector.clone()).child(words)
         };
-        let frame = div()
-            .debug_selector(|| "review-hover".to_owned())
-            .flex_none()
-            .max_h(px(160.))
-            .overflow_hidden()
-            .px_2()
-            .py_1()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
-            .text_color(theme.secondary_foreground);
+        let mut popover = Popover::new(anchor).pass_through().selector("review-hover");
         if shown.waiting {
-            return Some(
-                frame.child(
-                    words(
+            popover = popover.child(
+                div()
+                    .px(SPACE_5)
+                    .py(SPACE_4)
+                    .typed(TypeRole::Meta)
+                    .text_color(palette.text_muted)
+                    .child(words(
                         "review-hover-waiting".to_owned(),
                         format!("Asking about {}", shown.place.name),
-                    )
-                    .text_color(theme.muted_foreground),
-                ),
+                    )),
+            );
+            return Some(popover.into_any_element());
+        }
+        if shown.guessed {
+            popover = popover.child(
+                div()
+                    .debug_selector(|| "review-hover-guessed".to_owned())
+                    .px(SPACE_5)
+                    .pt(SPACE_4)
+                    .child(
+                        Chip::new(GUESSED)
+                            .tone(Tone::Warn)
+                            .label_selector(format!("review-hover-guessed-words:{GUESSED}")),
+                    ),
             );
         }
-        let mark = shown.guessed.then(|| {
-            div()
-                .debug_selector(|| "review-hover-guessed".to_owned())
-                .text_color(theme.warning)
+        let body = match &shown.text {
+            Some(text) => div()
+                .px(SPACE_5)
+                .py(SPACE_4)
+                .max_h(px(240.))
+                .overflow_hidden()
+                .typed(TypeRole::CodeSmall)
+                .text_color(palette.text)
+                .child(words(format!("review-hover-text:{text}"), text.clone())),
+            None => div()
+                .px(SPACE_5)
+                .py(SPACE_4)
+                .typed(TypeRole::Meta)
+                .text_color(palette.text_muted)
                 .child(words(
-                    format!("review-hover-guessed-words:{GUESSED}"),
-                    GUESSED.to_owned(),
-                ))
-        });
-        let text = match &shown.text {
-            Some(text) => words(format!("review-hover-text:{text}"), text.clone()),
-            None => words(
-                "review-hover-nothing".to_owned(),
-                format!("Nothing to show for {}", shown.place.name),
-            )
-            .text_color(theme.muted_foreground),
+                    "review-hover-nothing".to_owned(),
+                    format!("Nothing to show for {}", shown.place.name),
+                )),
         };
-        Some(frame.children(mark).child(text))
+        Some(popover.child(body).into_any_element())
     }
 
-    pub(crate) fn render_references(&self, cx: &Context<Self>) -> Option<Div> {
+    pub(crate) fn render_references(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
         let listing = self.navigate.references.as_ref()?;
         let shown = &listing.shown;
-        let theme = cx.theme();
+        let palette = palette(cx);
         let title = if shown.definitions {
             format!("Definitions of {}", shown.place.name)
         } else {
             format!("References to {}", shown.place.name)
         };
+        let max_height = (window.viewport_size().height * 0.34).max(px(140.));
         let frame = div()
             .debug_selector(|| "review-references".to_owned())
             .flex_none()
+            .max_h(max_height)
+            .overflow_hidden()
             .flex()
             .flex_col()
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
-            .text_color(theme.secondary_foreground)
+            .bg(palette.pane)
+            .text_color(palette.text)
             .key_context(REFERENCES_CONTEXT)
             .on_action(cx.listener(Self::reference_down))
             .on_action(cx.listener(Self::reference_up))
@@ -879,42 +937,58 @@ impl ReviewPane {
             Some(focus) => frame.track_focus(focus),
             None => frame,
         };
-        let line = || {
-            div()
-                .flex_none()
-                .h(ROW_HEIGHT)
-                .w_full()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .overflow_hidden()
-                .whitespace_nowrap()
-        };
-        let head = line().text_color(theme.muted_foreground).child(
-            div()
-                .debug_selector({
-                    let title = title.clone();
-                    move || format!("review-references-title:{title}")
-                })
-                .child(title),
-        );
+        let head = div()
+            .flex_none()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(SPACE_4)
+            .px(SPACE_6)
+            .py(SPACE_3)
+            .border_b_1()
+            .border_color(palette.separator)
+            .child(
+                div()
+                    .debug_selector({
+                        let title = title.clone();
+                        move || format!("review-references-title:{title}")
+                    })
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .typed(TypeRole::MetaStrong)
+                    .text_color(palette.text_muted)
+                    .child(title),
+            )
+            .child(
+                Button::new("review-references-close", "×")
+                    .kind(ButtonKind::Ghost)
+                    .small()
+                    .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                        pane.close_references(&crate::CloseReferences, window, cx);
+                    })),
+            );
         if shown.waiting {
             return Some(
-                frame.child(head).child(
-                    line().child(
+                frame
+                    .child(Divider::horizontal().strong())
+                    .child(head)
+                    .child(
                         div()
+                            .px(SPACE_6)
+                            .py(SPACE_4)
+                            .typed(TypeRole::Meta)
+                            .text_color(palette.text_muted)
                             .debug_selector(|| "review-references-waiting".to_owned())
-                            .text_color(theme.muted_foreground)
                             .child("Looking"),
-                    ),
-                ),
+                    )
+                    .into_any_element(),
             );
         }
         let mark = shown.guessed.then(|| {
-            line()
-                .debug_selector(|| "review-references-guessed".to_owned())
-                .text_color(theme.warning)
+            Banner::custom()
+                .tone(Tone::Warn)
+                .selector("review-references-guessed")
                 .child(
                     div()
                         .debug_selector(|| format!("review-references-guessed-words:{GUESSED}"))
@@ -941,25 +1015,24 @@ impl ReviewPane {
                     location.text.trim()
                 );
                 let chosen = index == shown.chosen;
-                line()
-                    .debug_selector(move || format!("review-reference-{index}"))
-                    .cursor_pointer()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |pane, _: &MouseDownEvent, window, cx| {
-                            pane.acted(cx);
-                            pane.open_entry(index, window, cx);
-                        }),
-                    )
+                ListRow::new(("review-reference", index))
+                    .compact()
+                    .selected(chosen)
+                    .focused(chosen)
+                    .selector(format!("review-reference-{index}"))
+                    .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
+                        pane.acted(cx);
+                        pane.open_entry(index, window, cx);
+                    }))
                     .child(if chosen {
                         div()
                             .debug_selector(|| "review-reference-chosen".to_owned())
                             .flex_none()
                             .w(px(3.))
-                            .h_full()
-                            .bg(theme.primary)
+                            .h(px(14.))
+                            .bg(palette.focus)
                     } else {
-                        div().flex_none().w(px(3.)).h_full()
+                        div().flex_none().w(px(3.)).h(px(14.))
                     })
                     .child(
                         div()
@@ -967,11 +1040,35 @@ impl ReviewPane {
                                 let words = words.clone();
                                 move || format!("review-reference-words-{index}:{words}")
                             })
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .typed(TypeRole::CodeSmall)
+                            .text_color(if chosen {
+                                palette.text
+                            } else {
+                                palette.text_muted
+                            })
                             .child(words),
                     )
             })
             .collect::<Vec<_>>();
-        Some(frame.child(head).children(mark).children(entries))
+        Some(
+            frame
+                .child(Divider::horizontal().strong())
+                .child(head)
+                .children(mark)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(SPACE_2)
+                        .px(SPACE_3)
+                        .py(SPACE_2)
+                        .children(entries),
+                )
+                .into_any_element(),
+        )
     }
 
     fn worktree_folder(&self, workspace: &WorkspaceId, cx: &App) -> Option<PathBuf> {

@@ -2,14 +2,16 @@
 //! of its old side's version. The Navigator keeps asking about a repository until it hears
 //! the answer: one the pane already holds shows as answered, with no controls.
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_diff::Side;
 use yaar_link::{RepositoryId, WorkspaceId};
 use yaar_navigator::{FileKind, ServerState, State};
+use yaar_ui::metrics::SPACE_3;
+use yaar_ui::pieces::{Banner, Button, ButtonKind, Chip, Tone};
+use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::ReviewPane;
-use crate::draw::ROW_HEIGHT;
 use crate::threads::path_in;
 
 pub const DOWNLOAD: &str = "Download";
@@ -189,60 +191,85 @@ impl ReviewPane {
         (name, words, controls)
     }
 
-    pub(crate) fn render_servers(&self, cx: &Context<Self>) -> Option<Div> {
+    /// Compact server chip in the review header when the server is ready with no pending action.
+    pub(crate) fn render_server_chip(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let server = self.server_on_screen(cx)?;
         let (name, words, controls) = self.the_line(&server, cx);
-        let theme = cx.theme();
-        let colour = match server.state {
-            State::Missing { .. } | State::Asking { .. } => theme.warning,
-            _ => theme.muted_foreground,
+        if !matches!(server.state, State::Ready) || !controls.is_empty() {
+            return None;
+        }
+        let palette = palette(cx);
+        Some(
+            div()
+                .debug_selector(|| "review-servers".to_owned())
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(SPACE_3)
+                .child(
+                    Chip::new(name)
+                        .tone(Tone::Ok)
+                        .selector(format!("review-servers-state:{name}")),
+                )
+                .child(
+                    div()
+                        .debug_selector(move || format!("review-servers-text:{words}"))
+                        .typed(TypeRole::Small)
+                        .text_color(palette.text_muted)
+                        .whitespace_nowrap()
+                        .child(self.the_line(&server, cx).1),
+                )
+                .into_any_element(),
+        )
+    }
+
+    pub(crate) fn render_servers(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let server = self.server_on_screen(cx)?;
+        let (name, words, controls) = self.the_line(&server, cx);
+        if matches!(server.state, State::Ready) && controls.is_empty() {
+            return None;
+        }
+        let tone = match server.state {
+            State::Missing { .. } | State::Asking { .. } => Tone::Warn,
+            _ => Tone::Plain,
         };
-        let state = div()
-            .debug_selector(|| format!("review-servers-state:{name}"))
-            .flex_none()
-            .text_color(colour)
-            .child(name);
-        // The words may wrap: the controls keep their place beside them.
+        let state = Chip::new(name)
+            .tone(tone)
+            .selector(format!("review-servers-state:{name}"));
         let text = div()
-            .debug_selector(|| format!("review-servers-text:{words}"))
+            .debug_selector({
+                let words = words.clone();
+                move || format!("review-servers-text:{words}")
+            })
             .flex_1()
             .min_w_0()
-            .child(words.clone());
-        let mut line = div()
-            .debug_selector(|| "review-servers".to_owned())
-            .flex_none()
-            .min_h(ROW_HEIGHT)
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_2()
-            .border_b_1()
-            .border_color(theme.border)
+            .child(words);
+        let mut banner = Banner::custom()
+            .tone(tone)
+            .selector("review-servers")
             .child(state)
             .child(text);
-        for (control, words, act) in controls {
-            line = line.child(
-                div()
-                    .debug_selector(|| format!("review-servers-{control}"))
-                    .flex_none()
-                    .px_2()
-                    .bg(theme.secondary)
-                    .child(
-                        div()
-                            .debug_selector(|| format!("review-servers-{control}:{words}"))
-                            .child(words.clone()),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |pane, _: &MouseDownEvent, _, cx| {
-                            pane.acted(cx);
-                            pane.act(act, cx);
-                        }),
-                    ),
+        for (control, label, act) in controls {
+            let kind = match act {
+                Act::Download | Act::Allow => ButtonKind::Primary,
+                Act::Update | Act::Refuse => ButtonKind::Secondary,
+            };
+            banner = banner.action(
+                Button::new(
+                    SharedString::from(format!("review-servers-{control}")),
+                    label.clone(),
+                )
+                .kind(kind)
+                .small()
+                .selector(format!("review-servers-{control}"))
+                .label_selector(format!("review-servers-{control}:{label}"))
+                .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
+                    pane.acted(cx);
+                    pane.act(act, cx);
+                })),
             );
         }
-        Some(line)
+        Some(banner.into_any_element())
     }
 
     /// The Navigation model changed. The settings that hold the answers on servers inside a

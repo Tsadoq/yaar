@@ -5,7 +5,7 @@ use gpui_kit::{
     transparent_black,
 };
 
-use super::{OnClick, marked};
+use super::{CountBadge, OnClick, marked};
 use crate::metrics::{RADIUS_CONTROL, SPACE_2, SPACE_3, SPACE_4, SPACE_5};
 use crate::themes::palette;
 use crate::typography::{TypeRole, Typed};
@@ -25,8 +25,12 @@ pub struct Button {
     kind: ButtonKind,
     small: bool,
     disabled: bool,
+    selected: bool,
     leading: Option<SharedString>,
+    count: Option<usize>,
     selector: Option<SharedString>,
+    label_selector: Option<SharedString>,
+    indicator_selector: Option<SharedString>,
     on_click: Option<OnClick>,
 }
 
@@ -38,8 +42,12 @@ impl Button {
             kind: ButtonKind::default(),
             small: false,
             disabled: false,
+            selected: false,
             leading: None,
+            count: None,
             selector: None,
+            label_selector: None,
+            indicator_selector: None,
             on_click: None,
         }
     }
@@ -60,14 +68,37 @@ impl Button {
         self
     }
 
+    /// Drawn on the raised ground to show the button is currently chosen.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
     /// A Unicode glyph before the label.
     pub fn leading(mut self, glyph: impl Into<SharedString>) -> Self {
         self.leading = Some(glyph.into());
         self
     }
 
+    /// A count badge shown after the label.
+    pub fn count(mut self, count: usize) -> Self {
+        self.count = Some(count);
+        self
+    }
+
     pub fn selector(mut self, selector: impl Into<SharedString>) -> Self {
         self.selector = Some(selector.into());
+        self
+    }
+
+    pub fn label_selector(mut self, selector: impl Into<SharedString>) -> Self {
+        self.label_selector = Some(selector.into());
+        self
+    }
+
+    /// Drawn as a two-pixel bottom accent bar inside the button while `selected` is true.
+    pub fn indicator_selector(mut self, selector: impl Into<SharedString>) -> Self {
+        self.indicator_selector = Some(selector.into());
         self
     }
 
@@ -91,11 +122,24 @@ impl RenderOnce for Button {
                 palette.text_on_accent,
                 transparent_black(),
             ),
-            ButtonKind::Secondary => (None, palette.raised, palette.text, palette.edge),
-            ButtonKind::Ghost => (
-                None,
+            ButtonKind::Secondary => (
+                self.selected.then_some(palette.raised),
                 palette.raised,
-                palette.text_muted,
+                palette.text,
+                if self.selected {
+                    palette.focus
+                } else {
+                    palette.edge
+                },
+            ),
+            ButtonKind::Ghost => (
+                self.selected.then_some(palette.raised),
+                palette.raised,
+                if self.selected {
+                    palette.text
+                } else {
+                    palette.text_muted
+                },
                 transparent_black(),
             ),
         };
@@ -106,8 +150,27 @@ impl RenderOnce for Button {
         };
         let enabled = !self.disabled;
         let on_click = self.on_click;
+        let label = match self.label_selector {
+            Some(selector) => div()
+                .debug_selector(move || selector.to_string())
+                .child(self.label)
+                .into_any_element(),
+            None => self.label.into_any_element(),
+        };
+        let indicator = self.selected.then(|| {
+            let bar = div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .w_full()
+                .h(px(2.))
+                .bg(palette.accent);
+            marked(bar, self.indicator_selector)
+        });
         let button = div()
             .id(self.id)
+            .relative()
+            .overflow_hidden()
             .flex_none()
             .flex()
             .items_center()
@@ -140,7 +203,25 @@ impl RenderOnce for Button {
                     })
             })
             .children(self.leading)
-            .child(self.label);
+            .child(label)
+            .when_some(self.count, |button, count| {
+                if kind == ButtonKind::Primary {
+                    button.child(
+                        div()
+                            .flex_none()
+                            .px(SPACE_2)
+                            .rounded_full()
+                            .bg(palette.text_on_accent.opacity(0.22))
+                            .typed(TypeRole::Small)
+                            .font_features(crate::metrics::tabular())
+                            .text_color(palette.text_on_accent)
+                            .child(count.to_string()),
+                    )
+                } else {
+                    button.child(CountBadge::new(count))
+                }
+            })
+            .children(indicator);
         marked(button, self.selector)
     }
 }

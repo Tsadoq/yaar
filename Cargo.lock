@@ -9136,6 +9136,7 @@ dependencies = [
  "yaar-frame",
  "yaar-link",
  "yaar-navigator",
+ "yaar-ui",
 ]
 
 [[package]]

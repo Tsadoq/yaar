@@ -991,10 +991,11 @@ fn until_the_changes_come_the_last_recorded_turn_is_shown_and_then_the_compariso
     );
     wait_for_paths(&stage, &["story.txt"], &mut cx);
     assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
-    assert!(matches!(
-        rows(&stage.pane, &mut cx).first(),
-        Some(PaneRow::Comparison { .. })
-    ));
+    assert!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.comparison().is_some())
+    );
 }
 
 #[gpui_kit::test]

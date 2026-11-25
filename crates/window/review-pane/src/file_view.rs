@@ -11,13 +11,16 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_diff::Side;
 use yaar_link::{Anchor, CommentId, Lines, Side as LinkSide, Thread, ThreadId};
 use yaar_navigator::{FileKind, Location, OpenedFile};
+use yaar_ui::metrics::{SPACE_3, SPACE_4, SPACE_6, tabular};
+use yaar_ui::pieces::{Button, ButtonKind};
+use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
-use crate::draw::{NUMBER_WIDTH, ROW_HEIGHT, code_text};
+use crate::draw::{NUMBER_WIDTH, ROW_HEIGHT, code_text, diff_highlights};
 use crate::navigate::{Left, Spot};
 use crate::saves::new_id;
 use crate::threads::{Place, place_of};
@@ -296,51 +299,46 @@ impl ReviewPane {
 
     pub(crate) fn render_file_view(&self, cx: &mut Context<Self>) -> Option<Div> {
         let shown = self.navigate.file.as_ref()?;
-        let theme = cx.theme();
+        let palette = palette(cx);
         let path = match &shown.file.kind {
             FileKind::Worktree { relative, .. } | FileKind::Version { relative, .. } => {
                 relative.display().to_string()
             }
             FileKind::Outside => shown.file.path.display().to_string(),
         };
-        let back = div()
-            .debug_selector(|| "review-file-back".to_owned())
-            .flex_none()
-            .px_2()
-            .rounded_sm()
-            .cursor_pointer()
-            .bg(theme.primary)
-            .text_color(theme.primary_foreground)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|pane, _: &MouseDownEvent, window, cx| {
-                    pane.acted(cx);
-                    pane.leave_file_view(window, cx);
-                }),
-            )
-            .child(
-                div()
-                    .debug_selector(|| format!("review-file-back:{BACK}"))
-                    .child(BACK),
-            );
+        let back = Button::new("review-file-back", BACK)
+            .kind(ButtonKind::Secondary)
+            .small()
+            .selector("review-file-back")
+            .label_selector(format!("review-file-back:{BACK}"))
+            .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                pane.acted(cx);
+                pane.leave_file_view(window, cx);
+            }));
         let header = div()
             .flex_none()
-            .h(ROW_HEIGHT)
             .w_full()
             .flex()
             .items_center()
-            .gap_3()
-            .px_2()
+            .gap(SPACE_4)
+            .px(SPACE_6)
+            .py(SPACE_3)
             .overflow_hidden()
             .whitespace_nowrap()
-            .bg(theme.secondary)
-            .text_color(theme.secondary_foreground)
+            .bg(palette.pane)
+            .border_b_1()
+            .border_color(palette.separator)
             .child(
                 div()
                     .debug_selector({
                         let path = path.clone();
                         move || format!("review-file-path:{path}")
                     })
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .typed(TypeRole::Path)
+                    .text_color(palette.text)
                     .child(path),
             )
             .child(back);
@@ -367,18 +365,11 @@ impl ReviewPane {
         )
     }
 
-    fn draw_file_item(&self, item: &FileItem, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
-        let row = div()
-            .h(ROW_HEIGHT)
-            .w_full()
-            .flex()
-            .items_center()
-            .overflow_hidden()
-            .whitespace_nowrap();
+    fn draw_file_item(&self, item: &FileItem, cx: &Context<Self>) -> AnyElement {
+        let palette = palette(cx);
         match item {
-            FileItem::Thread(thread) => self.draw_thread(row, thread, cx),
-            FileItem::Comment(thread, comment) => self.draw_comment(row, thread, comment, "review"),
+            FileItem::Thread(thread) => self.draw_file_thread(thread, cx),
+            FileItem::Comment(thread, comment) => self.draw_file_comment(thread, comment, cx),
             FileItem::Line(line) => {
                 let line = *line;
                 let here = self
@@ -393,21 +384,37 @@ impl ReviewPane {
                 } else {
                     None
                 };
+                let highlights = self
+                    .navigate
+                    .file
+                    .as_ref()
+                    .map(|shown| {
+                        diff_highlights(&shown.file.path, &text[..end], &[], None, &palette)
+                    })
+                    .unwrap_or_default();
                 let (text_element, layout) = code_text(
                     format!("review-file-text-{line}:{}", &text[..end]),
                     &text[..end],
-                    Vec::new(),
+                    highlights,
                     name,
-                    theme.primary,
+                    palette.focus,
+                    palette.text,
                 );
                 let marker = if here {
                     div()
                         .debug_selector(|| "review-file-at".to_owned())
-                        .bg(theme.primary)
+                        .bg(palette.focus)
                 } else {
                     div()
                 };
-                row.debug_selector(move || format!("review-file-line-{line}"))
+                div()
+                    .h(ROW_HEIGHT)
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .debug_selector(move || format!("review-file-line-{line}"))
                     .on_mouse_down(MouseButton::Left, {
                         let layout = layout.clone();
                         cx.listener(move |pane, event: &MouseDownEvent, window, cx| {
@@ -425,15 +432,108 @@ impl ReviewPane {
                         div()
                             .flex_none()
                             .w(NUMBER_WIDTH)
-                            .px_1()
+                            .pr(SPACE_4)
                             .flex()
                             .justify_end()
-                            .text_color(theme.muted_foreground)
+                            .typed(TypeRole::CodeSmall)
+                            .font_features(tabular())
+                            .text_color(palette.text_dim)
                             .child(line.to_string()),
                     )
                     .child(text_element)
+                    .into_any_element()
             }
         }
+    }
+
+    fn draw_file_thread(&self, thread: &ThreadId, cx: &Context<Self>) -> AnyElement {
+        let palette = palette(cx);
+        let row = div()
+            .h(ROW_HEIGHT)
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(SPACE_3)
+            .pl(px(56.))
+            .pr(SPACE_6)
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .bg(palette.window);
+        let Some(held) = self
+            .review()
+            .and_then(|review| review.threads.iter().find(|t| t.id == *thread))
+        else {
+            return row.into_any_element();
+        };
+        let anchor = &held.anchor;
+        let side = match anchor.side {
+            LinkSide::Old => "old",
+            LinkSide::New => "new",
+        };
+        let place = if anchor.lines.first == anchor.lines.last {
+            anchor.lines.last.to_string()
+        } else {
+            format!("{}-{}", anchor.lines.first, anchor.lines.last)
+        };
+        let id = held.id.clone();
+        row.child(
+            div()
+                .debug_selector(|| format!("review-thread-{id}"))
+                .typed(TypeRole::Meta)
+                .text_color(palette.link)
+                .child(format!(
+                    "Thread on {}:{place} ({side}){}",
+                    anchor.path.display(),
+                    if held.resolved { ", resolved" } else { "" }
+                )),
+        )
+        .children(self.thread_state_mark(&held.id, cx))
+        .into_any_element()
+    }
+
+    fn draw_file_comment(
+        &self,
+        thread: &ThreadId,
+        comment: &CommentId,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let palette = palette(cx);
+        let row = div()
+            .h(ROW_HEIGHT)
+            .w_full()
+            .flex()
+            .items_center()
+            .pl(px(68.))
+            .pr(SPACE_6)
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .bg(palette.window);
+        let Some(comment) = self
+            .review()
+            .and_then(|review| review.threads.iter().find(|t| t.id == *thread))
+            .and_then(|thread| thread.comments.iter().find(|c| c.id == *comment))
+        else {
+            return row.into_any_element();
+        };
+        let state = match comment.round {
+            Some(round) => format!("round-{round}"),
+            None => "draft".to_owned(),
+        };
+        let who = match (comment.author, comment.round) {
+            (yaar_link::Author::Agent, _) => "Agent".to_owned(),
+            (yaar_link::Author::Reviewer, Some(round)) => format!("You, round {round}"),
+            (yaar_link::Author::Reviewer, None) => "You, draft".to_owned(),
+        };
+        let first = comment.text.lines().next().unwrap_or_default();
+        let id = comment.id.clone();
+        row.child(
+            div()
+                .debug_selector(|| format!("review-comment-{id}:{state}"))
+                .typed(TypeRole::Body)
+                .text_color(palette.text)
+                .child(format!("{who}: {first}")),
+        )
+        .into_any_element()
     }
 
     pub(crate) fn file_view_step(&mut self, by: i64, cx: &mut Context<Self>) -> bool {

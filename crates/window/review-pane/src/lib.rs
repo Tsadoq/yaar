@@ -441,10 +441,6 @@ pub enum Unshown {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaneRow {
-    Comparison {
-        comparison: Comparison,
-        offers_base: bool,
-    },
     Commit {
         id: String,
         summary: String,
@@ -515,8 +511,8 @@ pub struct ReviewPane {
     by_path: HashMap<PathBuf, usize>,
     reading: Vec<Task<()>>,
     unread: Range<usize>,
-    scroll: UniformListScrollHandle,
-    in_view: Rc<RefCell<Range<usize>>>,
+    list: ListState,
+    list_width: Pixels,
     reviews_of: Option<WorkspaceId>,
     reviews: Option<WorkspaceReviews>,
     saves: Vec<Save>,
@@ -585,8 +581,8 @@ impl ReviewPane {
             by_path: HashMap::new(),
             reading: Vec::new(),
             unread: 0..0,
-            scroll: UniformListScrollHandle::new(),
-            in_view: Rc::new(RefCell::new(0..0)),
+            list: ListState::new(0, ListAlignment::Top, px(200.)),
+            list_width: px(0.),
             reviews_of: None,
             reviews: None,
             saves: Vec::new(),
@@ -634,6 +630,19 @@ impl ReviewPane {
         &self.rows
     }
 
+    /// The comparison shown in the review header while Changes displays the workspace's changes
+    /// against its base, and whether the header offers to set a base.
+    pub fn comparison(&self) -> Option<(&Comparison, bool)> {
+        if self.tree.shown != ChangeShown::Comparison {
+            return None;
+        }
+        let changes = self.changes.as_ref()?;
+        Some((
+            &changes.comparison,
+            matches!(changes.comparison, Comparison::NothingToCompare { .. }),
+        ))
+    }
+
     pub fn text(&self, position: &Position) -> Option<String> {
         let shown = self.diff_of(&position.path)?;
         (position.line < shown.diff.line_count(position.side))
@@ -651,7 +660,31 @@ impl ReviewPane {
     }
 
     pub fn rows_in_view(&self) -> Range<usize> {
-        self.in_view.borrow().clone()
+        let len = self.rows.len();
+        if len == 0 {
+            return 0..0;
+        }
+        let viewport = self.list.viewport_bounds();
+        if viewport.size.height <= px(0.) {
+            return 0..0;
+        }
+        let mut start = self.list.logical_scroll_top().item_ix.min(len);
+        while start < len
+            && self
+                .list
+                .bounds_for_item(start)
+                .is_some_and(|bounds| bounds.bottom() <= viewport.top())
+        {
+            start += 1;
+        }
+        let mut end = start;
+        while end < len {
+            match self.list.bounds_for_item(end) {
+                Some(bounds) if bounds.top() < viewport.bottom() => end += 1,
+                _ => break,
+            }
+        }
+        start..end
     }
 
     /// A save of a draft is told to nobody, so the pane puts each saved text into its copy and
@@ -979,6 +1012,7 @@ impl ReviewPane {
     }
 
     fn loaded(&mut self, index: usize, content: FileContent, cx: &mut Context<Self>) {
+        let top = self.list.logical_scroll_top();
         let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
         let shown = self.new_side_shown();
         let file = &mut self.files[index];
@@ -995,21 +1029,24 @@ impl ReviewPane {
         self.rows
             .truncate(self.files.last().map_or(0, |last| last.rows.end));
         self.rows.extend(threads::elsewhere(&self.files, review));
-        if was.end <= self.in_view.borrow().start {
-            self.shift_view(now as f32 - was.end as f32);
-        }
+        let next_top = if was.end <= top.item_ix {
+            ListOffset {
+                item_ix: top.item_ix - was.end + now,
+                offset_in_item: top.offset_in_item,
+            }
+        } else {
+            top
+        };
+        self.sync_list(Some(next_top));
         self.settle(cx);
     }
 
     pub(crate) fn rebuild(&mut self, cx: &mut Context<Self>) {
+        let top = self.list.logical_scroll_top();
         let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
         let shown = self.new_side_shown();
         let mut rows = Vec::new();
         if let (Some(changes), ChangeShown::Comparison) = (&self.changes, &self.tree.shown) {
-            rows.push(PaneRow::Comparison {
-                comparison: changes.comparison.clone(),
-                offers_base: matches!(changes.comparison, Comparison::NothingToCompare { .. }),
-            });
             rows.extend(changes.commits.iter().map(|commit| PaneRow::Commit {
                 id: commit.id.clone(),
                 summary: commit.summary.clone(),
@@ -1023,7 +1060,21 @@ impl ReviewPane {
             file.rows = start..rows.len();
         }
         rows.extend(threads::elsewhere(&self.files, review));
+        let unchanged = self.rows == rows;
         self.rows = rows;
+        if unchanged {
+            self.list.remeasure();
+        } else {
+            let clamped = ListOffset {
+                item_ix: top.item_ix.min(self.rows.len()),
+                offset_in_item: if top.item_ix < self.rows.len() {
+                    top.offset_in_item
+                } else {
+                    px(0.)
+                },
+            };
+            self.sync_list(Some(clamped));
+        }
         self.settle(cx);
         self.tell_old_side(cx);
         self.live_rebuild(cx);
@@ -1034,9 +1085,6 @@ impl ReviewPane {
         if self.position_row.is_none() {
             self.position = self.first_change();
             self.position_row = self.position.as_ref().and_then(|at| self.locate(at));
-        }
-        if self.rows.is_empty() {
-            *self.in_view.borrow_mut() = 0..0;
         }
         cx.notify();
     }
@@ -1123,15 +1171,19 @@ impl ReviewPane {
         cx: &mut Context<Self>,
     ) {
         self.acted(cx);
-        let was = self.position_row;
+        let was_delta = self
+            .position_row
+            .and_then(|row| self.row_offset_from_top(row));
         self.layout = match self.layout {
             Layout::Unified => Layout::Split,
             Layout::Split => Layout::Unified,
         };
         self.rebuild(cx);
-        if let (Some(was), Some(now)) = (was, self.position_row) {
-            self.shift_view(now as f32 - was as f32);
-            self.scroll.scroll_to_item(now, ScrollStrategy::Nearest);
+        if let Some(now) = self.position_row {
+            match was_delta {
+                Some(delta) => self.scroll_row_to_offset(now, delta),
+                None => self.list.scroll_to_reveal_item(now),
+            }
         }
     }
 
@@ -1147,7 +1199,7 @@ impl ReviewPane {
             return;
         };
         self.go_to(row, side, cx);
-        self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+        self.list.scroll_to_reveal_item(row);
     }
 
     pub(crate) fn go_to(&mut self, index: usize, side: Side, cx: &mut Context<Self>) {
@@ -1167,17 +1219,143 @@ impl ReviewPane {
         cx.notify();
     }
 
-    fn to_top(&self) {
-        let handle = self.scroll.0.borrow().base_handle.clone();
-        handle.set_offset(point(px(0.), px(0.)));
+    pub(crate) fn jump_to_file(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus.focus(window, cx);
+        self.list.scroll_to(ListOffset {
+            item_ix: row.min(self.rows.len()),
+            offset_in_item: px(0.),
+        });
+        if let Some((diff_row, side)) = self
+            .rows
+            .iter()
+            .enumerate()
+            .skip(row + 1)
+            .take_while(|(_, held)| !matches!(held, PaneRow::File { .. }))
+            .find_map(|(index, held)| stops_of(held).next().map(|(side, _)| (index, side)))
+        {
+            self.go_to(diff_row, side, cx);
+        } else {
+            cx.notify();
+        }
     }
 
-    fn shift_view(&self, rows: f32) {
-        let handle = self.scroll.0.borrow().base_handle.clone();
-        let mut offset = handle.offset();
-        // The offset of a list scrolled down is negative.
-        offset.y = (offset.y - draw::ROW_HEIGHT * rows).min(px(0.));
-        handle.set_offset(offset);
+    pub(crate) fn toggle_viewed_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.acted(cx);
+        let (Some(workspace), Some(reviews)) = (self.reviews_of.clone(), &self.reviews) else {
+            return self.say("The reviews are not here yet", cx);
+        };
+        let viewed = !reviews.viewed.contains(&path);
+        let asked = self.models.link.update(cx, |link, cx| {
+            link.ask(
+                yaar_link::Request::SetViewed {
+                    workspace,
+                    path,
+                    viewed,
+                },
+                cx,
+            )
+        });
+        self.report(asked, cx);
+    }
+
+    pub(crate) fn resolve_or_reopen_thread(
+        &mut self,
+        thread: ThreadId,
+        resolve: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.acted(cx);
+        let Some(review) = self.review().map(|review| review.id.clone()) else {
+            return self.say("The reviews are not here yet", cx);
+        };
+        let request = if resolve {
+            yaar_link::Request::ResolveThread { review, thread }
+        } else {
+            yaar_link::Request::ReopenThread { review, thread }
+        };
+        let asked = self
+            .models
+            .link
+            .update(cx, |link, cx| link.ask(request, cx));
+        self.report(asked, cx);
+    }
+
+    pub(crate) fn attach_only_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        self.acted(cx);
+        self.attach(Some(thread), cx);
+    }
+
+    fn to_top(&self) {
+        self.list.scroll_to(ListOffset::default());
+    }
+
+    pub(crate) fn sync_list(&self, anchor: Option<ListOffset>) {
+        self.list
+            .reset_with_uniform_height(self.rows.len(), draw::ROW_HEIGHT);
+        if let Some(offset) = anchor {
+            self.list.scroll_to(offset);
+        }
+    }
+
+    pub(crate) fn row_offset_from_top(&self, index: usize) -> Option<Pixels> {
+        let viewport = self.list.viewport_bounds();
+        if viewport.size.height <= px(0.) {
+            return None;
+        }
+        let bounds = self.list.bounds_for_item(index)?;
+        (bounds.bottom() > viewport.top() && bounds.top() < viewport.bottom())
+            .then_some(bounds.top() - viewport.top())
+    }
+
+    pub(crate) fn row_measured_height(&self, index: usize) -> Option<Pixels> {
+        Some(self.list.bounds_for_item(index)?.size.height)
+    }
+
+    pub(crate) fn scroll_row_to_offset_with_heights(
+        &self,
+        row: usize,
+        delta_from_top: Pixels,
+        known: &[(PaneRow, Pixels)],
+    ) {
+        if delta_from_top <= px(0.) {
+            self.list.scroll_to(ListOffset {
+                item_ix: row,
+                offset_in_item: -delta_from_top,
+            });
+            return;
+        }
+        let mut remaining = delta_from_top;
+        let mut item_ix = row;
+        while item_ix > 0 && remaining > px(0.) {
+            let prev = item_ix - 1;
+            let height = known
+                .iter()
+                .find(|(held, _)| *held == self.rows[prev])
+                .map(|(_, height)| *height)
+                .unwrap_or_else(|| match self.rows[prev] {
+                    PaneRow::File { .. } => draw::FILE_HEADER_HEIGHT,
+                    PaneRow::Commit { .. } => draw::COMMIT_ROW_HEIGHT,
+                    PaneRow::Unshown { .. } => draw::UNSHOWN_ROW_HEIGHT,
+                    _ => draw::ROW_HEIGHT,
+                });
+            if remaining <= height {
+                self.list.scroll_to(ListOffset {
+                    item_ix: prev,
+                    offset_in_item: height - remaining,
+                });
+                return;
+            }
+            remaining -= height;
+            item_ix = prev;
+        }
+        self.list.scroll_to(ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
+    }
+
+    pub(crate) fn scroll_row_to_offset(&self, row: usize, delta_from_top: Pixels) {
+        self.scroll_row_to_offset_with_heights(row, delta_from_top, &[]);
     }
 }
 
