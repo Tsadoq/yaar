@@ -3,9 +3,9 @@
 //! the forced value until the platform tells it again.
 
 use gpui_kit::*;
-use yaar_frame::theme::Appearance;
 use yaar_frame::{Looks, Opened};
 use yaar_link::ThemeChoice;
+use yaar_ui::themes::Appearance;
 
 pub(crate) fn follow_system(opened: &Opened, cx: &mut App) {
     let looks = opened.models.looks.clone();

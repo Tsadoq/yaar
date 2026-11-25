@@ -42,10 +42,11 @@ One Cargo workspace. The folder of a crate gives its group.
 | Keeper | `yaar-recorder` (`crates/keeper/recorder`) | Every call of git: reading the repository, recording states, the commit, adding a worktree |
 | Keeper | `yaar-workspaces` (`crates/keeper/workspaces`) | Workspaces, worktree identity, bases, new worktrees, the file watcher, who changed a path |
 | Window | `yaar-window` (`crates/window/window`) | The Window program: registers the panes, binds the keys and the menus |
-| Window | `yaar-frame` (`crates/window/frame`) | The window, sidebar, layout, themes, settings screen, key routing, the connection to the Keeper, the shared models |
+| Window | `yaar-frame` (`crates/window/frame`) | The window, sidebar, layout, settings screen, key routing, the connection to the Keeper, the shared models |
 | Window | `yaar-review-pane` (`crates/window/review-pane`) | Changes and Flow, the diff views, threads and comment boxes, file views, follow |
 | Window | `yaar-terminal-pane` (`crates/window/terminal-pane`) | The terminal emulator and its drawing, launchers, the attachment at the agent's terminal |
 | Window | `yaar-navigator` (`crates/window/navigator`) | Language servers: registry, search, downloader, driver, the old side |
+| Window | `yaar-ui` (`crates/window/ui`) | The colours, fonts, themes and shared visual pieces of the Window, and what maps them onto the toolkit |
 | Window | `yaar-text-search` (`crates/window/text-search`) | Whole-word search of a worktree, while no language server is ready |
 | Companion | `yaar-companion-claude` (`companions/claude`) | Claude Code's hook program `yaar-claude-hook` and tool server `yaar-claude-tools` |
 | Companion | none (`companions/pi`) | pi's extension, `yaar.ts`, in TypeScript |
@@ -54,7 +55,7 @@ One Cargo workspace. The folder of a crate gives its group.
 
 ## The rules between the crates
 
-`cargo xtask layout` reads `cargo metadata` and fails on any breach of five rules. A
+`cargo xtask layout` reads `cargo metadata` and fails on any breach of six rules. A
 dependency counts when it is a normal or a build dependency, direct or not; what only
 tests use does not count.
 
@@ -63,6 +64,7 @@ tests use does not count.
 3. No crate of the Window depends on a crate of the Keeper, nor the reverse.
 4. Only `yaar-keeper` depends on an Adapter, and an Adapter depends on shared crates only.
 5. The programs the packages ship hold no GPUI test support and no `harness` feature.
+6. `yaar-ui` depends on no crate of the workspace.
 
 `clippy.toml` adds one more: no crate opens a pseudo-terminal through the terminal
 emulator's crate, because terminals belong to the Keeper's Dock.

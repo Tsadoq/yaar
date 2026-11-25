@@ -13,7 +13,6 @@ use gpui_kit::{TestAppContext, VisualTestContext, WindowAppearance};
 use yaar_frame::settings_screen::{
     CLEAN_UP, RowShown, SettingRow, TOTAL_STATES, size_words, stop_after_label,
 };
-use yaar_frame::theme::{self, Appearance, DARK, LIGHT};
 use yaar_frame::{Beside, SETTINGS_CONTEXT};
 use yaar_link::{
     Fact, HistoryEntry, Reply, Request, SessionId, Setting, StateSizes, TerminalId, TerminalPlace,
@@ -23,6 +22,7 @@ use yaar_navigator::{Clock, Place, State, Tree};
 use yaar_review_pane::{ChangeShown, PaneRow};
 use yaar_system_tests::standin::{PROMPT, Script};
 use yaar_system_tests::{Client, DEADLINE, Repo, World, is_alive};
+use yaar_ui::themes::{self, Appearance, DARK, LIGHT, Themes};
 
 use common::{
     Composed, Found, drawn, give_an_identity, key_of, navigator_for, open_another_composed_in,
@@ -102,7 +102,7 @@ fn mode(cx: &mut VisualTestContext) -> ThemeMode {
 }
 
 fn applied(cx: &mut VisualTestContext) -> String {
-    cx.update(|_, app| theme::applied(app).name)
+    cx.update(|_, app| themes::applied(app).name)
 }
 
 fn system(window: &Composed, cx: &mut VisualTestContext) -> Option<Appearance> {
@@ -402,7 +402,7 @@ fn the_model_of_the_theme_holds_the_systems_appearance_the_moment_the_window_pro
         let opened = yaar_window::open_panes(tap.socket(), builders, navigator, app)
             .expect("open the Window on the test platform");
         let told = opened.models.looks.read(app).system();
-        (opened.window, told, theme::applied(app).name)
+        (opened.window, told, themes::applied(app).name)
     });
     let mut cx = VisualTestContext::from_window(window, cx);
     let platform = cx.update(|window, _| window.appearance());
@@ -576,7 +576,11 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
     assert_eq!(applied(&mut cx), DARK);
     assert_eq!(
         cx.update(|_, app| app.theme().background),
-        theme::dark().colors.background
+        Themes::built_in()
+            .named(DARK)
+            .expect("built in")
+            .palette
+            .pane
     );
 
     choose(

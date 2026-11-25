@@ -5,9 +5,11 @@ mod common;
 
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use gpui_kit::TestAppContext;
-use yaar_frame::theme::{self, Appearance, TerminalColors, hex, indexed, rgb24};
 use yaar_link::TerminalSize;
 use yaar_terminal_pane::{Color, Emulator, colour_of};
+use yaar_ui::colour::{hex, indexed, rgb24};
+use yaar_ui::themes::{self, Appearance, Themes};
+use yaar_ui::tokens::TerminalColors;
 
 use common::{open_panes, terminal, wait_until};
 
@@ -190,7 +192,10 @@ fn a_program_that_asks_for_its_colours_is_told_the_themes() {
 #[test]
 fn the_answers_follow_the_colours_handed_last() {
     let mut emulator = emulator();
-    let light = theme::light().terminal;
+    let light = Themes::built_in()
+        .named(themes::LIGHT)
+        .expect("built in")
+        .terminal;
     let light_background = answers(&mut emulator, b"\x1b]11;?\x07");
     emulator.set_colours(own());
     let own_background = answers(&mut emulator, b"\x1b]11;?\x07");
@@ -247,11 +252,11 @@ fn the_terminal_answers_a_question_about_its_colours_from_the_theme_applied(
         .looks
         .update(&mut cx, |looks, cx| looks.system_is(Appearance::Dark, cx));
     wait_until(&mut cx, "the dark theme applied", |cx| {
-        cx.update(|app| theme::applied(app).name == theme::DARK)
+        cx.update(|app| themes::applied(app).name == themes::DARK)
     });
     assert_eq!(
         ask(&mut panes, &id, &mut cx),
-        format!("\x1b]11;{}\x07", rgb(0x0a, 0x0a, 0x0a))
+        format!("\x1b]11;{}\x07", rgb(0x17, 0x17, 0x17))
     );
 
     panes
@@ -259,7 +264,7 @@ fn the_terminal_answers_a_question_about_its_colours_from_the_theme_applied(
         .looks
         .update(&mut cx, |looks, cx| looks.system_is(Appearance::Light, cx));
     wait_until(&mut cx, "the light theme applied", |cx| {
-        cx.update(|app| theme::applied(app).name == theme::LIGHT)
+        cx.update(|app| themes::applied(app).name == themes::LIGHT)
     });
     assert_eq!(
         ask(&mut panes, &id, &mut cx),
@@ -275,7 +280,7 @@ fn a_terminal_opened_under_the_dark_theme_answers_with_it_at_once(cx: &mut TestA
         .looks
         .update(&mut cx, |looks, cx| looks.system_is(Appearance::Dark, cx));
     wait_until(&mut cx, "the dark theme applied", |cx| {
-        cx.update(|app| theme::applied(app).name == theme::DARK)
+        cx.update(|app| themes::applied(app).name == themes::DARK)
     });
     let id = terminal('1');
     panes.open_terminal(&id, &mut cx);

@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 yaar-frame.workspace = true
 yaar-link.workspace = true
+yaar-ui.workspace = true
 gpui-kit.workspace = true
 alacritty_terminal.workspace = true
 

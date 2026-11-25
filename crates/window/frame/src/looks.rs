@@ -5,9 +5,16 @@
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::*;
 use yaar_link::ThemeChoice;
+use yaar_ui::themes::{Appearance, ThemeDefinition, Themes, set_applied};
 
 use crate::settings::SettingList;
-use crate::theme::{Appearance, ThemeDefinition, Themes, set_applied};
+
+fn named(choice: &ThemeChoice) -> Option<&str> {
+    match choice {
+        ThemeChoice::System => None,
+        ThemeChoice::Named(name) => Some(name),
+    }
+}
 
 pub struct Looks {
     settings: Entity<SettingList>,
@@ -25,9 +32,7 @@ impl Looks {
         cx.observe(&settings, |looks, _, cx| looks.apply(cx))
             .detach();
         let themes = Themes::built_in();
-        let applied = themes
-            .resolve(&ThemeChoice::System, Appearance::Light)
-            .clone();
+        let applied = themes.resolve(None, Appearance::Light).clone();
         Looks {
             settings,
             themes,
@@ -64,9 +69,8 @@ impl Looks {
             return;
         };
         let choice = self.chosen(cx);
-        let definition = self.themes.resolve(&choice, system).clone();
-        let forced =
-            matches!(&choice, ThemeChoice::Named(name) if self.themes.named(name).is_some());
+        let definition = self.themes.resolve(named(&choice), system).clone();
+        let forced = named(&choice).is_some_and(|name| self.themes.named(name).is_some());
         let same_definition = self.done && definition == self.applied;
         if same_definition && forced == self.forced {
             return;
@@ -79,7 +83,7 @@ impl Looks {
             Theme::change(mode, None, cx);
             // `change` loaded the toolkit's own colours over everything: the definition goes on
             // top, in a second update.
-            Theme::update(cx, |theme| definition.onto(&mut theme.colors));
+            Theme::update(cx, |theme| definition.apply_to_kit(theme));
             set_applied(definition.clone(), cx);
         }
         cx.set_window_appearance(forced.then_some(match definition.appearance {

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Writes the third-party notices of the programs the packages ship, in three parts.
+# Writes the third-party notices of the programs the packages ship, in three parts and a section
+# for the two fonts the Window embeds.
 # notices.sh <out-file> <target-triple>...; needs cargo-about (install-tools.sh <dir> about).
 set -eu
 OUT=${1:?usage: notices.sh <out-file> <target-triple>...}; shift
@@ -38,6 +39,13 @@ small() {
 [ "$(wc -c < "$TMP/keeper.part")" -gt 10000 ] || small yaar-keeper
 [ "$(wc -c < "$TMP/companion.part")" -gt 10000 ] || small "Claude Code's two programs"
 
+FONTS=$ROOT/crates/window/ui/fonts
+# Each line of the README opens with a font and its release, up to the colon.
+INTER=$(sed -n '1s/:.*//p' "$FONTS/README")
+MONO=$(sed -n '2s/:.*//p' "$FONTS/README")
+[ -n "$INTER" ] && [ -n "$MONO" ] && [ -s "$FONTS/OFL.txt" ] \
+  || { echo "notices.sh: the fonts folder holds no README of two lines and no OFL.txt" >&2; exit 1; }
+
 DOUBLE="================================================================================"
 mkdir -p "$(dirname "$OUT")"
 {
@@ -57,4 +65,12 @@ mkdir -p "$(dirname "$OUT")"
   echo "$DOUBLE"
   echo
   cat "$TMP/companion.part"
+  echo "$DOUBLE"
+  echo "Fonts: $INTER and $MONO, SIL Open Font License 1.1"
+  echo "$DOUBLE"
+  echo
+  cat "$FONTS/OFL.txt"
 } > "$OUT"
+# Text only OFL.txt holds: the heading above says "SIL Open Font License" whatever the file is.
+grep -q "The Inter Project Authors" "$OUT" && grep -q "The JetBrains Mono Project Authors" "$OUT" \
+  || { echo "notices.sh: the notices hold no font licence" >&2; exit 1; }

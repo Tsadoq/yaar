@@ -15,7 +15,6 @@ mod settings;
 pub mod settings_screen;
 mod sidebar;
 mod states;
-pub mod theme;
 pub mod trace;
 mod view;
 

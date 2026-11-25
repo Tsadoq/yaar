@@ -1,0 +1,24 @@
+[package]
+name = "yaar-ui"
+description = "UI: the colours, fonts and shared visual pieces of the Window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui-kit.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+# GPUI's test platform, for tests only: the programs users get are built without it.
+gpui-kit = { workspace = true, features = ["test-support"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui-pre-apple.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gpui-pre-wgpu.workspace = true
+
+[lints]
+workspace = true

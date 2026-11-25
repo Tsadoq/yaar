@@ -64,7 +64,7 @@ fn check_layout() -> ExitCode {
     };
     match run() {
         Ok(breaches) if breaches.is_empty() => {
-            println!("layout: the five rules hold");
+            println!("layout: the six rules hold");
             ExitCode::SUCCESS
         }
         Ok(breaches) => {

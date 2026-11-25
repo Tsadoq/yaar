@@ -13,8 +13,9 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Osc52, TermMode, viewport_to_point};
 use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb, StdSyncHandler};
-use yaar_frame::theme::{self, TerminalColors};
 use yaar_link::TerminalSize;
+use yaar_ui::themes::built_in_light;
+use yaar_ui::tokens::TerminalColors;
 
 use crate::draw::{Colour, colour_of};
 
@@ -53,7 +54,7 @@ impl Default for Kept {
     fn default() -> Kept {
         Kept {
             replies: Vec::new(),
-            colours: theme::light().terminal,
+            colours: built_in_light().terminal,
             title: None,
             columns: 80,
             rows: 24,
@@ -790,6 +791,7 @@ fn cell(cell: &alacritty_terminal::term::cell::Cell) -> Cell {
 #[cfg(test)]
 mod tests {
     use gpui_kit::Keystroke;
+    use yaar_ui::themes::{DARK, Themes};
 
     use super::*;
     use crate::keys::{OptionKey, encode_key, encode_release};
@@ -1100,10 +1102,11 @@ mod tests {
     #[test]
     fn a_program_asking_for_colours_is_told_the_themes_and_xterms_for_the_cube() {
         let mut emulator = emulator();
-        emulator.set_colours(theme::dark().terminal);
+        let dark = Themes::built_in().named(DARK).expect("built in").clone();
+        emulator.set_colours(dark.terminal);
         assert_eq!(
             replies_to(&mut emulator, "\x1b]11;?\x1b\\"),
-            "\x1b]11;rgb:0a0a/0a0a/0a0a\x1b\\"
+            "\x1b]11;rgb:1717/1717/1717\x1b\\"
         );
         assert_eq!(
             replies_to(&mut emulator, "\x1b]10;?\x07"),

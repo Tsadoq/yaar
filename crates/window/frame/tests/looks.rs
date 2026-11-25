@@ -3,14 +3,16 @@
 
 mod common;
 
-use gpui_kit::component::theme::{Theme, ThemeMode};
+use gpui_kit::component::theme::{Theme, ThemeColor, ThemeMode};
 use gpui_kit::{
-    AppContext, Context, InteractiveElement, IntoElement, Render, Size, Styled, TestAppContext,
-    VisualTestContext, Window, div, px, size,
+    AppContext, Context, Hsla, InteractiveElement, IntoElement, Render, Size, Styled,
+    TestAppContext, VisualTestContext, Window, div, px, size,
 };
-use yaar_frame::theme::{Appearance, Colors, DARK, LIGHT, applied, dark, light};
 use yaar_frame::{BuildPane, KeeperLink, Models, Pane};
 use yaar_link::{Fact, Setting, ThemeChoice, TurnEndSelects};
+use yaar_ui::themes::{
+    Appearance, DARK, KIT_ROLES, LIGHT, ThemeDefinition, Themes, applied, kit_role,
+};
 
 use common::{Shown, open_frame, open_frame_staged, wait_until};
 
@@ -24,10 +26,39 @@ fn opened(cx: &mut TestAppContext) -> (Shown, VisualTestContext) {
     open_frame(WINDOW, Vec::new(), cx)
 }
 
-fn kit(cx: &mut VisualTestContext) -> (ThemeMode, Colors) {
+/// The 38 roles of the toolkit's colours that a definition writes, by name.
+type KitColours = Vec<(&'static str, Hsla)>;
+
+fn kit_colours(colors: &ThemeColor) -> KitColours {
+    KIT_ROLES
+        .iter()
+        .map(|name| (*name, kit_role(colors, name).expect("a role of the list")))
+        .collect()
+}
+
+/// What a definition leaves in the toolkit's colours.
+fn written(definition: &ThemeDefinition) -> KitColours {
+    let mut theme = Theme::default();
+    definition.apply_to_kit(&mut theme);
+    kit_colours(&theme.colors)
+}
+
+fn built_in(name: &str) -> ThemeDefinition {
+    Themes::built_in().named(name).expect("built in").clone()
+}
+
+fn dark() -> ThemeDefinition {
+    built_in(DARK)
+}
+
+fn light() -> ThemeDefinition {
+    built_in(LIGHT)
+}
+
+fn kit(cx: &mut VisualTestContext) -> (ThemeMode, KitColours) {
     cx.update(|_, app| {
         let theme = app.global::<Theme>();
-        (theme.mode, Colors::of(&theme.colors))
+        (theme.mode, kit_colours(&theme.colors))
     })
 }
 
@@ -69,15 +100,22 @@ fn told(shown: &mut Shown, setting: Setting, cx: &mut VisualTestContext) {
 }
 
 #[track_caller]
-fn shows(
-    mode: ThemeMode,
-    name: &str,
-    definition: &yaar_frame::theme::ThemeDefinition,
-    cx: &mut VisualTestContext,
-) {
+fn shows(mode: ThemeMode, name: &str, definition: &ThemeDefinition, cx: &mut VisualTestContext) {
     let (kit_mode, colors) = kit(cx);
     assert_eq!(kit_mode, mode, "the toolkit's mode");
-    assert_eq!(colors, definition.colors, "the toolkit's colours");
+    assert_eq!(colors, written(definition), "the toolkit's colours");
+    let fonts = cx.update(|_, app| {
+        let theme = app.global::<Theme>();
+        (
+            theme.font_family.to_string(),
+            theme.mono_font_family.to_string(),
+        )
+    });
+    assert_eq!(
+        fonts,
+        ("Inter".to_owned(), "JetBrains Mono".to_owned()),
+        "the toolkit's fonts"
+    );
     assert_eq!(applied_name(cx), name, "the name `applied` gives");
     assert_eq!(
         cx.update(|_, app| applied(app)),
@@ -86,7 +124,7 @@ fn shows(
     );
 }
 
-type Found = (Option<Appearance>, ThemeMode, Colors);
+type Found = (Option<Appearance>, ThemeMode, KitColours);
 
 struct Empty {
     focus: gpui_kit::FocusHandle,
@@ -105,7 +143,7 @@ fn finding(found: &std::rc::Rc<std::cell::RefCell<Option<Found>>>) -> BuildPane 
     Box::new(move |models, _, cx| {
         let system = models.looks.read(cx).system();
         let theme = cx.global::<Theme>();
-        *found.borrow_mut() = Some((system, theme.mode, Colors::of(&theme.colors)));
+        *found.borrow_mut() = Some((system, theme.mode, kit_colours(&theme.colors)));
         let focus = cx.focus_handle();
         let view = cx.new(|_| Empty {
             focus: focus.clone(),
@@ -153,7 +191,7 @@ fn a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_w
     );
     assert_eq!(
         colors,
-        light().colors,
+        written(&light()),
         "the toolkit's colours when the panes are built"
     );
 
@@ -169,10 +207,10 @@ fn a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_w
     assert_eq!(definition, light());
     let (mode, colors, held) = cx.update(|cx| {
         let theme = cx.global::<Theme>();
-        (theme.mode, Colors::of(&theme.colors), applied(cx))
+        (theme.mode, kit_colours(&theme.colors), applied(cx))
     });
     assert_eq!(mode, ThemeMode::Light, "the toolkit's mode");
-    assert_eq!(colors, light().colors, "the toolkit's colours");
+    assert_eq!(colors, written(&light()), "the toolkit's colours");
     assert_eq!(held, light(), "the definition `applied` gives");
 }
 
@@ -182,7 +220,7 @@ fn nothing_is_applied_and_no_system_is_known_before_the_window_tells_it(cx: &mut
     cx.update(|cx| Theme::change(ThemeMode::Dark, None, cx));
     let before = cx.update(|cx| {
         let theme = cx.global::<Theme>();
-        (theme.mode, Colors::of(&theme.colors))
+        (theme.mode, kit_colours(&theme.colors))
     });
 
     let link = cx.new(|_| KeeperLink::new());
@@ -198,7 +236,7 @@ fn nothing_is_applied_and_no_system_is_known_before_the_window_tells_it(cx: &mut
     });
     let after = cx.update(|cx| {
         let theme = cx.global::<Theme>();
-        (theme.mode, Colors::of(&theme.colors))
+        (theme.mode, kit_colours(&theme.colors))
     });
     assert_eq!(after, before, "the toolkit's theme is as it was");
     assert_eq!(
@@ -239,8 +277,7 @@ fn with_no_theme_chosen_the_app_follows_the_system_as_it_changes(cx: &mut TestAp
         assert_eq!(looks.applied().name, DARK);
     });
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
-    let (_, colors) = kit(&mut cx);
-    assert_eq!(colors.background, dark().colors.background);
+    assert_eq!(background(&mut cx), dark().palette.pane);
 
     system_is(&shown, Appearance::Light, &mut cx);
     shows(ThemeMode::Light, LIGHT, &light(), &mut cx);
@@ -255,13 +292,13 @@ fn the_definition_s_own_colours_are_in_the_toolkit_over_the_mode_s_own(cx: &mut 
     let (_, kits_own) = kit(&mut cx);
     assert_ne!(
         kits_own,
-        dark().colors,
+        written(&dark()),
         "the dark definition holds a colour of its own"
     );
 
     system_is(&shown, Appearance::Dark, &mut cx);
     let (_, colors) = kit(&mut cx);
-    assert_eq!(colors, dark().colors);
+    assert_eq!(colors, written(&dark()));
 }
 
 #[gpui_kit::test]
@@ -469,7 +506,7 @@ fn the_themes_are_the_built_in_ones_and_the_model_tells_its_observers_of_a_chang
 
     let (shown, mut cx) = opened(cx);
     shown.models.looks.read_with(&cx, |looks, _| {
-        assert_eq!(looks.themes(), &yaar_frame::theme::Themes::built_in());
+        assert_eq!(looks.themes(), &Themes::built_in());
     });
     let told = Rc::new(Cell::new(0));
     let _watch = cx.update({
