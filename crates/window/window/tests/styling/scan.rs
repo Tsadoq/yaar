@@ -69,6 +69,10 @@ const STYLING_NAMES: [&str; 12] = [
     "cursor_pointer",
 ];
 
+/// Banned as a method call `.name(..)`. A `cursor()` with no argument reads a cursor, a
+/// `cursor(style)` sets the pointer, so only a call with an argument is the second.
+const STYLING_CALLS: [&str; 2] = ["opacity", "cursor"];
+
 /// Banned as `.name` and as `.name_` followed by anything (`rounded_md`, `shadow_lg`).
 const STYLING_FAMILIES: [&str; 2] = ["rounded", "shadow"];
 
@@ -362,8 +366,22 @@ pub fn styling_banned(source: &str) -> Vec<(usize, &'static str)> {
                 Some(THEME_TRAIT)
             } else if name == "Theme" && line[start + name.len()..].starts_with("::global(") {
                 Some(THEME_GLOBAL)
+            } else if name == "FontWeight" && line[start + name.len()..].starts_with("::") {
+                Some("FontWeight")
+            } else if name == "font"
+                && !before.ends_with('.')
+                && !before.trim_end().ends_with("fn")
+                && line[start + name.len()..].trim_start().starts_with('(')
+            {
+                Some("font")
             } else if !member {
                 None
+            } else if before.ends_with('.')
+                && let Some(call) = STYLING_CALLS.into_iter().find(|call| *call == name)
+                && let Some(args) = line[start + name.len()..].trim_start().strip_prefix('(')
+                && (call == "opacity" || !args.trim_start().starts_with(')'))
+            {
+                Some(call)
             } else if let Some(banned) = STYLING_NAMES.into_iter().find(|banned| *banned == name) {
                 Some(banned)
             } else if let Some(family) = family_of(name) {

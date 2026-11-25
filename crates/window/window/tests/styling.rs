@@ -142,7 +142,7 @@ fn in_a_strict_crate_each_styling_call_is_found() {
         ("div().text_xl()", "text_xl"),
         ("div().text_2xl()", "text_2xl"),
         ("div().text_3xl()", "text_3xl"),
-        ("div().font_weight(FontWeight::BOLD)", "font_weight"),
+        ("div().font_weight(weight)", "font_weight"),
         ("div().rounded_md()", "rounded"),
         ("div().rounded_full()", "rounded"),
         ("div().rounded(px(3.))", "rounded"),
@@ -158,6 +158,14 @@ fn in_a_strict_crate_each_styling_call_is_found() {
         ("let c = Theme::global(cx).accent;", THEME_GLOBAL),
         ("let t = Theme::global(&*cx);", THEME_GLOBAL),
         ("let f = style::font_weight(1);", "font_weight"),
+        ("let c = theme.danger.opacity(0.16);", "opacity"),
+        ("div().opacity(0.5)", "opacity"),
+        ("run.weight = FontWeight::BOLD;", "FontWeight"),
+        ("let w = gpui_kit::FontWeight::NORMAL;", "FontWeight"),
+        ("let f = font(family.clone());", "font"),
+        ("let f = (font (family));", "font"),
+        ("div().cursor(CursorStyle::IBeam)", "cursor"),
+        ("div().cursor( style )", "cursor"),
     ];
     for (text, name) in calls {
         for krate in CRATES {
@@ -270,6 +278,22 @@ fn a_styling_word_inside_a_comment_or_a_string_is_passed() {
         "let n = x.my_theme(1);",
         "let n = x.theme;",
         "let n = x.theme_name();",
+        "let n = x.opacity_of(c);",
+        "let n = x.opacity;",
+        "let n = my_opacity(c);",
+        "let n = x.my_font(f);",
+        "let n = x.font(f);",
+        "let n = my_font(f);",
+        "let n = font_of(f);",
+        "let n = font;",
+        "fn font(f: Family) {}",
+        "let n = MyFontWeight::BOLD;",
+        "let n = FontWeights::BOLD;",
+        "let n = FontWeight;",
+        "let n = self.flow.cursor();",
+        "let n = self.cursor ( );",
+        "let n = x.cursor_of(1);",
+        "let n = x.cursors(1);",
         "let n = cx.themes();",
         "let n = abcx.theme_of();",
         "let rounded = 1; let shadow = 2; let font_family = 3;",
@@ -348,6 +372,29 @@ fn no_strict_crate_styles_what_the_ui_crate_paints() {
         hits.is_empty(),
         "a strict crate styles itself instead of using the pieces of `yaar-ui`:\n{}",
         hits.join("\n")
+    );
+}
+
+#[test]
+fn every_crate_that_draws_is_scanned() {
+    let folder = crates_folder();
+    let mut unlisted = Vec::new();
+    for entry in fs::read_dir(&folder).expect("the crates folder") {
+        let path = entry.expect("an entry").path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Ok(manifest) = fs::read_to_string(path.join("Cargo.toml")) else {
+            continue;
+        };
+        let uses_the_toolkit = manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with("gpui-kit"));
+        if uses_the_toolkit && name != "ui" && !CRATES.contains(&name.as_str()) {
+            unlisted.push(name);
+        }
+    }
+    assert!(
+        unlisted.is_empty(),
+        "a crate draws with the toolkit and is not in the scan's list: {unlisted:?}"
     );
 }
 
