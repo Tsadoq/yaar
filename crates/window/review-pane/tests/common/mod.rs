@@ -772,7 +772,7 @@ pub fn rows(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<PaneRow> 
 pub fn wait_for_files(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) {
     wait_until(cx, "every file of the changes", |cx| {
         pane.read_with(cx, |pane, _| {
-            !pane.rows().is_empty()
+            (!pane.rows().is_empty() || pane.comparison().is_some())
                 && !pane.rows().iter().any(|row| {
                     matches!(
                         row,
