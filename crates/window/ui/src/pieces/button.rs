@@ -108,6 +108,7 @@ impl RenderOnce for Button {
         let on_click = self.on_click;
         let button = div()
             .id(self.id)
+            .flex_none()
             .flex()
             .items_center()
             .gap(SPACE_3)

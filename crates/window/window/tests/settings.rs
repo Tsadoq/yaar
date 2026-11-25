@@ -731,7 +731,7 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         assert_eq!(settings.turn_end(), TurnEndSelects::KeepSelection);
         assert_eq!(settings.stop_after(), Duration::from_secs(300));
         assert_eq!(settings.stop_after_set(), Some(Duration::from_secs(300)));
-        assert_eq!(settings.theme(), ThemeChoice::Named(DARK.to_owned()));
+        assert_eq!(settings.theme_choice(), ThemeChoice::Named(DARK.to_owned()));
         assert_eq!(settings.keep_states(), 60);
         assert_eq!(settings.terminal_place(), TerminalPlace::Below);
     });

@@ -12,6 +12,7 @@ use crate::typography::{TypeRole, Typed};
 #[derive(IntoElement)]
 pub struct EmptyState {
     title: SharedString,
+    display: bool,
     lines: Vec<SharedString>,
     actions: Vec<AnyElement>,
     selector: Option<SharedString>,
@@ -21,10 +22,17 @@ impl EmptyState {
     pub fn new(title: impl Into<SharedString>) -> Self {
         EmptyState {
             title: title.into(),
+            display: false,
             lines: Vec::new(),
             actions: Vec::new(),
             selector: None,
         }
+    }
+
+    /// Larger display heading, for a whole-window empty state.
+    pub fn display(mut self) -> Self {
+        self.display = true;
+        self
     }
 
     pub fn line(mut self, text: impl Into<SharedString>) -> Self {
@@ -63,7 +71,11 @@ impl RenderOnce for EmptyState {
             .text_center()
             .child(
                 div()
-                    .typed(TypeRole::Strong)
+                    .typed(if self.display {
+                        TypeRole::Display
+                    } else {
+                        TypeRole::Strong
+                    })
                     .text_color(palette.text)
                     .child(self.title),
             )

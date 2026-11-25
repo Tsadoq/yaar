@@ -136,7 +136,7 @@ impl SettingList {
         })
     }
 
-    pub fn theme(&self) -> ThemeChoice {
+    pub fn theme_choice(&self) -> ThemeChoice {
         self.settings
             .iter()
             .find_map(|setting| match setting {

@@ -97,12 +97,17 @@ fn a_third_pane_joins_the_frame_watches_the_shared_model_and_takes_a_routed_acti
         window.frame.read_with(&cx, |frame, _| frame.panes()),
         listed
     );
-    wait_until(&mut cx, "the place of the third pane", |cx| {
-        cx.debug_bounds("frame-pane-third").is_some()
-    });
+    wait_until(
+        &mut cx,
+        "the welcome screen before a folder is opened",
+        |cx| cx.debug_bounds("frame-welcome").is_some(),
+    );
 
     let told = third.read_with(&cx, |third, _| third.notified);
     let folder = window.open_a_folder(&mut cx);
+    wait_until(&mut cx, "the place of the third pane", |cx| {
+        cx.debug_bounds("frame-pane-third").is_some()
+    });
     third.read_with(&cx, |third, _| {
         assert!(
             third.notified > told,
@@ -165,11 +170,12 @@ fn a_third_pane_joins_the_frame_watches_the_shared_model_and_takes_a_routed_acti
 fn the_window_lists_the_review_pane_then_the_terminal_pane_and_with_nothing_set_the_terminal_lies_to_the_right(
     cx: &mut TestAppContext,
 ) {
-    let (window, mut cx) = open_composed(cx, Vec::new());
+    let (mut window, mut cx) = open_composed(cx, Vec::new());
     assert_eq!(
         window.frame.read_with(&cx, |frame, _| frame.panes()),
         ["review", "terminal"]
     );
+    window.open_a_folder(&mut cx);
     let mut review = None;
     let mut terminal = None;
     wait_until(&mut cx, "both panes to be drawn", |cx| {
@@ -180,4 +186,5 @@ fn the_window_lists_the_review_pane_then_the_terminal_pane_and_with_nothing_set_
     let (review, terminal) = (review.expect("drawn"), terminal.expect("drawn"));
     assert!(terminal.left() >= review.right());
     assert_eq!(terminal.top(), review.top());
+    assert!(review.size.width > terminal.size.width);
 }

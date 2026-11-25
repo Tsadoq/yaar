@@ -389,8 +389,8 @@ impl Window9 {
     }
 
     /// The row's `settings-chosen-<row>` mark is the chosen value's control (no mark when nothing
-    /// is chosen), and that control is painted in the theme's `primary`, every other in
-    /// `secondary`.
+    /// is chosen), and that control is painted as a primary button (`accent`), every other as a
+    /// secondary button (transparent ground with an `edge` border).
     fn assert_chosen_drawn(&mut self, row: &SettingRow) {
         let at = self.index_of(row);
         let shown = self.row(row);
@@ -417,50 +417,52 @@ impl Window9 {
                  {chosen} chosen"
             );
         }
-        let (primary, secondary) = self.cx.update(|_, app| {
-            let theme = app.theme();
-            (theme.primary, theme.secondary)
-        });
+        let palette = self.cx.update(|_, app| yaar_ui::themes::palette(app));
         for (value, label) in shown.values.iter().enumerate() {
-            let (role, wanted) = if value == chosen {
-                ("primary", primary)
+            let (ground, border) = self.painted_control(&Window9::value(at, value, label));
+            if value == chosen {
+                assert!(
+                    ground == Some(palette.accent) || ground == Some(palette.accent_hover),
+                    "{row:?}: chosen value {value} ({label}) should be painted in accent ({:?} or {:?}), got {ground:?}",
+                    palette.accent,
+                    palette.accent_hover,
+                );
             } else {
-                ("secondary", secondary)
-            };
-            let ground = self.painted_ground(&Window9::value(at, value, label));
-            assert_eq!(
-                ground, wanted,
-                "{row:?}: the control of the value {value} ({label}) is painted in {ground:?}, \
-                 and the theme's {role} is {wanted:?} (the model has {chosen} chosen)"
-            );
+                assert!(
+                    ground != Some(palette.accent) && ground != Some(palette.accent_hover),
+                    "{row:?}: unchosen value {value} ({label}) should not be painted in accent, got {ground:?}"
+                );
+                assert_eq!(
+                    border, palette.edge,
+                    "{row:?}: unchosen value {value} ({label}) should carry the edge border"
+                );
+            }
         }
     }
 
-    /// The solid ground of the one quad painted at the element's bounds in the last frame.
-    /// The scene counts in device pixels, so the bounds are scaled by the window's factor first.
-    fn painted_ground(&mut self, selector: &str) -> gpui_kit::Hsla {
+    /// The solid ground (when opaque) and visible border of the quads painted at the element's
+    /// bounds in the last frame.
+    fn painted_control(&mut self, selector: &str) -> (Option<gpui_kit::Hsla>, gpui_kit::Hsla) {
         let bounds = self.bounds(selector);
         let (scale, quads) = self
             .cx
             .update(|window, _| (window.scale_factor(), window.painted_quads()));
         let at = bounds.scale(scale);
-        let grounds: Vec<_> = quads
-            .iter()
-            .filter(|quad| quad.bounds == at)
-            .map(|quad| quad.background)
-            .collect();
-        assert_eq!(
-            grounds.len(),
-            1,
-            "{selector}: one quad was painted at its bounds {at:?} (scale {scale}), not {} of \
-             the {} painted: {:?}",
-            grounds.len(),
+        let matches: Vec<_> = quads.iter().filter(|quad| quad.bounds == at).collect();
+        assert!(
+            !matches.is_empty(),
+            "{selector}: no quad was painted at its bounds {at:?} (scale {scale}) of the {} painted",
             quads.len(),
-            quads.iter().map(|quad| quad.bounds).collect::<Vec<_>>()
         );
-        grounds[0]
-            .as_solid()
-            .unwrap_or_else(|| panic!("{selector}: the ground painted is not one solid colour"))
+        let ground = matches
+            .iter()
+            .find_map(|quad| quad.background.as_solid().filter(|colour| colour.a > 0.));
+        let border = matches
+            .iter()
+            .map(|quad| quad.border_color)
+            .find(|colour| colour.a > 0.)
+            .unwrap_or_default();
+        (ground, border)
     }
 
     fn assert_every_chosen_drawn(&mut self) {
@@ -1949,7 +1951,7 @@ fn a_theme_named_in_other_letters_is_the_one_chosen_and_a_name_no_theme_has_is_t
             ))));
         window.wait("the theme", |shown, cx| {
             shown.models.settings.read_with(cx, |settings, _| {
-                settings.theme() == ThemeChoice::Named(name.to_owned())
+                settings.theme_choice() == ThemeChoice::Named(name.to_owned())
             })
         });
     };
@@ -2080,4 +2082,16 @@ fn a_refused_answer_to_a_question_for_leave_is_drawn_above_the_rows_until_the_ne
         &mut window.cx,
     );
     assert!(!window.is_drawn("settings-notice"));
+}
+
+#[gpui_kit::test]
+fn a_click_on_the_close_button_closes_the_settings_screen(cx: &mut TestAppContext) {
+    let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
+    window.open_screen(sizes(&[], 0));
+    assert!(window.screen_is_open());
+
+    window.click("settings-close");
+
+    assert!(!window.screen_is_open());
+    assert!(!window.is_drawn("settings-screen"));
 }

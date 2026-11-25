@@ -7,7 +7,8 @@ use gpui_kit::{
     AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, Pixels, Render,
     Size, Styled, TestAppContext, VisualTestContext, Window, div, px, size,
 };
-use yaar_frame::{Beside, BuildPane, FULL_WIDTH, MovePanes, Pane};
+use yaar_frame::{Beside, BuildPane, FULL_WIDTH, MovePanes, Pane, TITLEBAR_HEIGHT, TOP_INSET};
+use yaar_ui::metrics::GUTTER;
 
 use common::{drawn, open_frame, pressed};
 
@@ -71,11 +72,40 @@ fn assert_lies(place: Beside, first: Bounds<Pixels>, second: Bounds<Pixels>) {
     }
 }
 
-fn assert_halves(first: Bounds<Pixels>, second: Bounds<Pixels>) {
-    assert_eq!(
-        second.size, first.size,
-        "equal halves: {first:?} {second:?}"
-    );
+fn assert_split(place: Beside, first: Bounds<Pixels>, second: Bounds<Pixels>) {
+    match place {
+        Beside::Right | Beside::Left => {
+            assert_eq!(second.size.height, first.size.height, "heights");
+            let total = first.size.width + second.size.width;
+            let expected = total * 0.62;
+            let diff = (first.size.width - expected).abs();
+            assert!(
+                diff <= px(2.),
+                "62/38 split: first={first:?} second={second:?}"
+            );
+            let gap = match place {
+                Beside::Right => second.left() - first.right(),
+                Beside::Left => first.left() - second.right(),
+                Beside::Below => unreachable!(),
+            };
+            assert_eq!(gap, GUTTER, "gutter between panes");
+        }
+        Beside::Below => {
+            assert_eq!(second.size.width, first.size.width, "widths");
+            let total = first.size.height + second.size.height;
+            let expected = total * 0.68;
+            let diff = (first.size.height - expected).abs();
+            assert!(
+                diff <= px(2.),
+                "68/32 split: first={first:?} second={second:?}"
+            );
+            assert_eq!(
+                second.top() - first.bottom(),
+                GUTTER,
+                "gutter between panes"
+            );
+        }
+    }
 }
 
 #[gpui_kit::test]
@@ -85,11 +115,19 @@ fn with_nothing_set_the_second_pane_is_to_the_right_of_the_first(cx: &mut TestAp
     assert_eq!(beside(&shown.frame, &mut cx), Beside::Right);
     let (first, second) = (pane("first", &mut cx), pane("second", &mut cx));
     assert_lies(Beside::Right, first, second);
-    assert_halves(first, second);
-    assert_eq!(first.left(), FULL_WIDTH);
-    assert_eq!(second.right(), WINDOW.width);
-    assert_eq!(first.top(), px(0.));
-    assert_eq!(first.bottom(), WINDOW.height);
+    assert_split(Beside::Right, first, second);
+    assert_eq!(first.left(), FULL_WIDTH + GUTTER);
+    assert_eq!(second.right(), WINDOW.width - GUTTER);
+    assert_eq!(first.top(), TOP_INSET);
+    assert_eq!(first.bottom(), WINDOW.height - GUTTER);
+    if cfg!(target_os = "macos") {
+        let bar = drawn("frame-titlebar", &mut cx).expect("titlebar strip drawn on macOS");
+        assert_eq!(bar.top(), px(0.));
+        assert_eq!(bar.size.height, TITLEBAR_HEIGHT);
+        assert_eq!(bar.size.width, WINDOW.width);
+    } else {
+        assert_eq!(drawn("frame-titlebar", &mut cx), None);
+    }
 }
 
 #[gpui_kit::test]
@@ -123,7 +161,7 @@ fn the_key_of_move_panes_takes_the_second_pane_below_then_to_the_left_then_to_th
             first,
             second,
         );
-        assert_halves(first, second);
+        assert_split(now, first, second);
     }
 }
 
@@ -139,7 +177,7 @@ fn the_place_of_the_panes_lasts_through_a_resize_of_the_window(cx: &mut TestAppC
             assert_eq!(beside(&shown.frame, &mut cx), place, "after {resized:?}");
             let (first, second) = (pane("first", &mut cx), pane("second", &mut cx));
             assert_lies(place, first, second);
-            assert_halves(first, second);
+            assert_split(place, first, second);
         }
     }
 }
@@ -193,10 +231,10 @@ fn a_window_with_one_pane_gives_it_the_room_and_the_key_of_move_panes_changes_no
 
     for _ in 0..3 {
         let only = pane("only", &mut cx);
-        assert_eq!(only.left(), FULL_WIDTH);
-        assert_eq!(only.right(), WINDOW.width);
-        assert_eq!(only.top(), px(0.));
-        assert_eq!(only.bottom(), WINDOW.height);
+        assert_eq!(only.left(), FULL_WIDTH + GUTTER);
+        assert_eq!(only.right(), WINDOW.width - GUTTER);
+        assert_eq!(only.top(), TOP_INSET);
+        assert_eq!(only.bottom(), WINDOW.height - GUTTER);
         cx.simulate_keystrokes(&key);
     }
     assert_eq!(beside(&shown.frame, &mut cx), Beside::Right);

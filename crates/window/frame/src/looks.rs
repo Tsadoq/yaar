@@ -53,7 +53,7 @@ impl Looks {
     }
 
     pub fn chosen(&self, cx: &App) -> ThemeChoice {
-        self.settings.read(cx).theme()
+        self.settings.read(cx).theme_choice()
     }
 
     pub fn applied(&self) -> &ThemeDefinition {

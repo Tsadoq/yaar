@@ -1,13 +1,14 @@
 use std::path::PathBuf;
-
-use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
-use gpui_kit::component::theme::ActiveTheme;
-use gpui_kit::*;
-
 use std::time::Duration;
 
+use gpui_kit::component::input::{Escape, InputEvent, InputState};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use yaar_link::{Age, Fact, Head, Hello, SessionId, Setting, TerminalPlace, WorkspaceId};
-use yaar_ui::themes::Appearance;
+use yaar_ui::metrics::{GUTTER, SPACE_6};
+use yaar_ui::pieces::{Banner, Button, ButtonKind, EmptyState, Field, Pane as UiPane, Toast, Tone};
+use yaar_ui::themes::{Appearance, palette};
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::agents::Wanted;
 use crate::controls::{
@@ -21,6 +22,20 @@ use crate::models::Models;
 use crate::settings_screen::SettingsScreen;
 use crate::sidebar::{Sidebar, workspace_name};
 use crate::trace;
+
+/// Height of the transparent macOS title-bar drag strip; zero where the system draws the frame.
+pub const TITLEBAR_HEIGHT: Pixels = if cfg!(target_os = "macos") {
+    px(32.)
+} else {
+    px(0.)
+};
+
+/// Space above the pane cards: the transparent title bar on macOS, one gutter on other systems.
+pub const TOP_INSET: Pixels = if cfg!(target_os = "macos") {
+    TITLEBAR_HEIGHT
+} else {
+    GUTTER
+};
 
 pub struct Pane {
     pub name: &'static str,
@@ -90,6 +105,8 @@ impl Beside {
 pub struct Frame {
     link: Entity<KeeperLink>,
     first_frame_marked: bool,
+    #[cfg(target_os = "macos")]
+    titlebar_drag: bool,
     composed: Option<Composed>,
 }
 
@@ -106,8 +123,10 @@ struct Composed {
     beside: Beside,
     worktree_notice: Option<String>,
     no_dialog: Option<String>,
-    /// The last turn that ended in a workspace not on screen, until that workspace comes on screen.
+    /// The last turn that ended in a workspace not on screen, until that workspace comes on screen
+    /// or the user dismisses its toast.
     finished_elsewhere: Option<(WorkspaceId, SessionId)>,
+    showing_welcome: bool,
 }
 
 struct LineField {
@@ -127,6 +146,8 @@ impl Frame {
         Self {
             link,
             first_frame_marked: false,
+            #[cfg(target_os = "macos")]
+            titlebar_drag: false,
             composed: None,
         }
     }
@@ -226,6 +247,8 @@ impl Frame {
         Self {
             link,
             first_frame_marked: false,
+            #[cfg(target_os = "macos")]
+            titlebar_drag: false,
             composed: Some(Composed {
                 models,
                 sidebar,
@@ -238,6 +261,7 @@ impl Frame {
                 worktree_notice: None,
                 no_dialog: None,
                 finished_elsewhere: None,
+                showing_welcome: false,
             }),
         }
     }
@@ -318,6 +342,14 @@ impl Frame {
         cx.notify();
     }
 
+    fn dismiss_turn_notice(&mut self, cx: &mut Context<Self>) {
+        if let Some(composed) = &mut self.composed
+            && composed.finished_elsewhere.take().is_some()
+        {
+            cx.notify();
+        }
+    }
+
     pub fn panes(&self) -> Vec<&'static str> {
         self.composed
             .iter()
@@ -351,6 +383,13 @@ impl Frame {
             ),
             LinkStatus::Failed(why) => format!("No Keeper: {why}"),
             LinkStatus::Lost(why) => format!("The Keeper went away: {why}"),
+        }
+    }
+
+    fn shows_welcome(composed: &Composed, cx: &App) -> bool {
+        composed.settings.is_none() && !composed.panes.is_empty() && {
+            let list = composed.models.workspaces.read(cx);
+            list.loaded() && list.repositories().is_empty()
         }
     }
 
@@ -710,9 +749,8 @@ impl Frame {
             return;
         };
         let count = composed.panes.len();
-        // The panes are not drawn while the settings screen is: a pane given the focus would hold
-        // keys nobody can see.
-        if count == 0 || composed.settings.is_some() {
+        // The panes are not drawn while settings or the welcome screen are open.
+        if count == 0 || composed.settings.is_some() || Self::shows_welcome(composed, cx) {
             return;
         }
         let holding = composed
@@ -767,72 +805,151 @@ impl Frame {
         }
     }
 
-    fn keeper_note_line(&self, cx: &Context<Self>) -> Option<Div> {
-        let note = self.keeper_note(cx)?;
-        let theme = cx.theme();
-        let offer = div()
-            .id("frame-keeper-note-stop")
-            .debug_selector(|| "frame-keeper-note-stop".to_owned())
-            .flex_none()
-            .px_2()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.border)
-            .text_color(theme.foreground)
-            .cursor_pointer()
-            .hover(|offer| offer.bg(theme.list_hover))
-            .on_click(cx.listener(|frame, _, _, cx| frame.stop_everything_and_quit(cx)))
-            .child("Quit and stop agents");
+    #[cfg(target_os = "macos")]
+    fn titlebar(&self, cx: &Context<Self>) -> Option<AnyElement> {
         Some(
             div()
-                .debug_selector(|| "frame-keeper-note".to_owned())
+                .id("frame-titlebar")
+                .debug_selector(|| "frame-titlebar".to_owned())
                 .flex_none()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_3()
-                .py_1()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .border_b_1()
-                .border_color(theme.border)
-                .child(div().flex_1().min_w_0().child(note))
-                .child(offer),
+                .w_full()
+                .h(TITLEBAR_HEIGHT)
+                .bg(palette(cx).window)
+                .window_control_area(WindowControlArea::Drag)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|frame, event: &MouseDownEvent, window, _| {
+                        if event.click_count >= 2 {
+                            frame.titlebar_drag = false;
+                            window.titlebar_double_click();
+                        } else {
+                            frame.titlebar_drag = true;
+                        }
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|frame, _: &MouseUpEvent, _, _| {
+                        frame.titlebar_drag = false;
+                    }),
+                )
+                .on_mouse_move(cx.listener(|frame, _: &MouseMoveEvent, window, _| {
+                    if frame.titlebar_drag {
+                        frame.titlebar_drag = false;
+                        window.start_window_move();
+                    }
+                }))
+                .into_any_element(),
         )
     }
 
-    fn laid_out(&self, composed: &Composed) -> Div {
-        let selector = |pane: &Pane| {
-            let name = pane.name;
-            move || format!("frame-pane-{name}")
-        };
-        let slot = |pane: &Pane| {
+    #[cfg(not(target_os = "macos"))]
+    fn titlebar(&self, _: &Context<Self>) -> Option<AnyElement> {
+        None
+    }
+
+    fn keeper_note_line(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let note = self.keeper_note(cx)?;
+        let offer = Button::new("frame-keeper-note-stop", "Quit and stop agents")
+            .kind(ButtonKind::Secondary)
+            .small()
+            .selector("frame-keeper-note-stop")
+            .on_click(cx.listener(|frame, _, _, cx| frame.stop_everything_and_quit(cx)));
+        Some(
             div()
-                .debug_selector(selector(pane))
-                .size_full()
+                .flex_none()
+                .child(
+                    Banner::new(note)
+                        .tone(Tone::Warn)
+                        .card()
+                        .selector("frame-keeper-note")
+                        .action(offer),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn prompt_field(
+        &self,
+        selector: &'static str,
+        cancel_id: &'static str,
+        input: &Entity<InputState>,
+        on_close: fn(&mut Self, &mut Window, &mut Context<Self>),
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let palette = palette(cx);
+        let footer = div()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .typed(TypeRole::Small)
+                    .text_color(palette.text_dim)
+                    .child("Enter to confirm, Escape to cancel"),
+            )
+            .child(
+                Button::new(cancel_id, "Cancel")
+                    .kind(ButtonKind::Ghost)
+                    .small()
+                    .on_click(cx.listener(move |frame, _, window, cx| on_close(frame, window, cx))),
+            );
+        div()
+            .debug_selector(move || selector.to_owned())
+            .flex_none()
+            // The field lets Escape pass once it has nothing of its own to close.
+            .on_action(cx.listener(move |frame, _: &Escape, window, cx| {
+                on_close(frame, window, cx);
+            }))
+            .child(Field::input(input).footer(footer))
+            .into_any_element()
+    }
+
+    fn laid_out(&self, composed: &Composed) -> Div {
+        let slot = |pane: &Pane| {
+            UiPane::new()
+                .selector(format!("frame-pane-{}", pane.name))
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
                 .child(pane.view.clone())
         };
-        let (first, others) = composed.panes.split_first().expect("a pane to lay out");
-        let first = slot(first);
+        let (first_pane, others) = composed.panes.split_first().expect("a pane to lay out");
         if others.is_empty() {
-            return div().flex_1().min_h_0().flex().child(first);
+            return div()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .flex()
+                .child(slot(first_pane));
         }
         let below = composed.beside == Beside::Below;
-        let rest = if below {
+        let (first_weight, rest_weight) = if below { (68., 32.) } else { (62., 38.) };
+        let mut first = UiPane::new()
+            .selector(format!("frame-pane-{}", first_pane.name))
+            .flex_basis(px(0.))
+            .flex_shrink(1.)
+            .min_w_0()
+            .min_h_0()
+            .child(first_pane.view.clone());
+        first.style().flex_grow = Some(first_weight);
+
+        let mut rest = if below {
             div().flex_row()
         } else {
             div().flex_col()
         }
         .flex()
-        .size_full()
-        .flex_1()
+        .gap(GUTTER)
+        .flex_basis(px(0.))
+        .flex_shrink(1.)
         .min_w_0()
         .min_h_0()
         .children(others.iter().map(slot));
-        let area = div().flex_1().min_h_0().flex();
+        rest.style().flex_grow = Some(rest_weight);
+
+        let area = div().flex_1().min_w_0().min_h_0().flex().gap(GUTTER);
         match composed.beside {
             Beside::Right => area.flex_row().child(first).child(rest),
             Beside::Left => area.flex_row().child(rest).child(first),
@@ -840,27 +957,43 @@ impl Frame {
         }
     }
 
-    fn empty(&self, cx: &Context<Self>) -> Div {
-        div()
+    fn welcome(&self, cx: &Context<Self>) -> AnyElement {
+        let open = Button::new("frame-open-folder", "Open Folder…")
+            .kind(ButtonKind::Primary)
+            .selector("frame-open-folder")
+            .on_click(cx.listener(|frame, _, window, cx| {
+                frame.open_folder(&OpenFolder, window, cx);
+            }));
+        UiPane::new()
+            .selector("frame-welcome")
+            .flex_1()
             .size_full()
-            .flex()
-            .flex_col()
             .items_center()
             .justify_center()
-            .gap_2()
-            .child(div().text_xl().child("YAAR"))
             .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(self.status_line(cx)),
+                EmptyState::new("Open a repository")
+                    .display()
+                    .line("Pick a git repository or worktree to review diffs and run agents beside your code.")
+                    .action(open),
             )
-            .children(
-                self.composed
-                    .is_none()
-                    .then(|| self.keeper_note_line(cx))
-                    .flatten(),
-            )
+            .into_any_element()
+    }
+
+    fn empty(&self, cx: &Context<Self>) -> AnyElement {
+        let note = self
+            .composed
+            .is_none()
+            .then(|| self.keeper_note_line(cx))
+            .flatten();
+        UiPane::new()
+            .flex_1()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap(GUTTER)
+            .child(EmptyState::new("YAAR").display().line(self.status_line(cx)))
+            .children(note)
+            .into_any_element()
     }
 }
 
@@ -871,121 +1004,120 @@ impl Render for Frame {
             window.on_next_frame(|_, _| trace::mark("first_frame"));
             cx.defer_in(window, Self::keep_the_focus_in_what_is_drawn);
         }
-        let theme = cx.theme();
-        let (background, foreground, muted, border, danger) = (
-            theme.background,
-            theme.foreground,
-            theme.muted_foreground,
-            theme.border,
-            theme.danger,
-        );
+        let palette = palette(cx);
         let root = div()
+            .relative()
             .size_full()
             // A key of the app that is no Cmd key is bound in this context, so it has to be set by
             // the outermost element to hold wherever the focus is.
             .key_context(KEY_CONTEXT)
-            .bg(background)
-            .text_color(foreground);
+            .bg(palette.window)
+            .text_color(palette.text)
+            .flex()
+            .flex_col();
+
+        if let Some(composed) = &mut self.composed {
+            let now_welcome = Self::shows_welcome(composed, cx);
+            if composed.showing_welcome && !now_welcome && composed.settings.is_none() {
+                cx.defer_in(window, |frame, window, cx| {
+                    if let Some(composed) = &frame.composed
+                        && composed.settings.is_none()
+                        && let Some(first) = composed.panes.first()
+                    {
+                        first.focus.focus(window, cx);
+                    }
+                });
+            }
+            composed.showing_welcome = now_welcome;
+        }
+
         let Some(composed) = &self.composed else {
-            return root.child(self.empty(cx));
+            return root.children(self.titlebar(cx)).child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .px(GUTTER)
+                    .pb(GUTTER)
+                    .when(!cfg!(target_os = "macos"), |el| el.pt(GUTTER))
+                    .child(self.empty(cx)),
+            );
         };
 
         let notice = self.notice(cx).map(|notice| {
-            div()
-                .debug_selector(|| "frame-notice".to_owned())
-                .flex_none()
-                .px_3()
-                .py_1()
-                .text_sm()
-                .text_color(danger)
-                .border_b_1()
-                .border_color(border)
-                .child(notice)
+            div().flex_none().child(
+                Banner::new(notice)
+                    .tone(Tone::Danger)
+                    .card()
+                    .selector("frame-notice"),
+            )
         });
         let turn_notice = self.turn_notice(cx).map(|notice| {
-            div()
-                .debug_selector(|| "frame-turn-notice".to_owned())
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_3()
-                .py_1()
-                .text_sm()
-                .border_b_1()
-                .border_color(border)
-                .child(div().flex_1().min_w_0().truncate().child(notice.text))
-                .child(
-                    div()
-                        .id("frame-turn-notice-show")
-                        .debug_selector(|| "frame-turn-notice-show".to_owned())
-                        .flex_none()
-                        .px_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(border)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|frame, _, window, cx| {
-                            frame.show_finished_turn(&ShowFinishedTurn, window, cx);
-                        }))
-                        .child("Show"),
-                )
+            let entity = cx.entity().downgrade();
+            div().absolute().bottom(SPACE_6).right(SPACE_6).child(
+                Toast::new("frame-turn-notice", notice.text)
+                    .selector("frame-turn-notice")
+                    .action(
+                        Button::new("frame-turn-notice-show", "Show")
+                            .kind(ButtonKind::Primary)
+                            .small()
+                            .selector("frame-turn-notice-show")
+                            .on_click(cx.listener(|frame, _, window, cx| {
+                                frame.show_finished_turn(&ShowFinishedTurn, window, cx);
+                            })),
+                    )
+                    .on_dismiss(move |_, cx| {
+                        entity
+                            .update(cx, |frame, cx| frame.dismiss_turn_notice(cx))
+                            .ok();
+                    }),
+            )
         });
         let base_field = composed.base_field.as_ref().map(|field| {
-            div()
-                .debug_selector(|| "frame-base-field".to_owned())
-                .flex_none()
-                .p_2()
-                .border_b_1()
-                .border_color(border)
-                // The field lets Escape pass once it has nothing of its own to close.
-                .on_action(cx.listener(|frame, _: &Escape, window, cx| {
-                    frame.close_base_field(window, cx);
-                }))
-                .child(Input::new(&field.input))
+            self.prompt_field(
+                "frame-base-field",
+                "frame-base-cancel",
+                &field.input,
+                Self::close_base_field,
+                cx,
+            )
         });
         let worktree_field = composed.worktree_field.as_ref().map(|field| {
-            div()
-                .debug_selector(|| "frame-worktree-field".to_owned())
-                .flex_none()
-                .p_2()
-                .border_b_1()
-                .border_color(border)
-                .on_action(cx.listener(|frame, _: &Escape, window, cx| {
-                    frame.close_worktree_field(window, cx);
-                }))
-                .child(Input::new(&field.input))
+            self.prompt_field(
+                "frame-worktree-field",
+                "frame-worktree-cancel",
+                &field.input,
+                Self::close_worktree_field,
+                cx,
+            )
         });
         let connected = matches!(self.link.read(cx).status(), LinkStatus::Connected(_));
-        let panes = if let Some(open) = &composed.settings {
+        let panes: AnyElement = if let Some(open) = &composed.settings {
             div()
                 .flex_1()
+                .min_w_0()
                 .min_h_0()
                 .flex()
                 .flex_col()
                 .track_focus(open.screen.read(cx).focus())
                 .child(open.screen.clone())
+                .into_any_element()
         } else if composed.panes.is_empty() {
-            self.empty(cx).flex_1().min_h_0()
+            self.empty(cx)
+        } else if composed.showing_welcome {
+            self.welcome(cx)
         } else {
-            self.laid_out(composed)
+            self.laid_out(composed).into_any_element()
         };
         let status = (!connected && !composed.panes.is_empty()).then(|| {
             div()
                 .flex_none()
-                .px_3()
-                .py_1()
-                .text_sm()
-                .text_color(muted)
-                .border_t_1()
-                .border_color(border)
-                .child(self.status_line(cx))
+                .child(Banner::new(self.status_line(cx)).tone(Tone::Plain).card())
         });
 
         let root = composed.models.routes.apply(root);
-        root.flex()
-            .flex_row()
-            .track_focus(&composed.focus)
+        root.track_focus(&composed.focus)
             // An element that tracks a focus takes it at any press nothing further in took, which
             // would pull the focus from a pane at every click in the sidebar or on the notice. The
             // press never moves it.
@@ -1004,22 +1136,36 @@ impl Render for Frame {
             .on_action(cx.listener(Self::move_panes))
             .on_action(cx.listener(Self::show_finished_turn))
             .on_action(cx.listener(Self::quit_and_stop_agents))
-            .child(composed.sidebar.clone())
+            .children(self.titlebar(cx))
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
-                    .h_full()
+                    .min_h_0()
+                    .w_full()
                     .flex()
-                    .flex_col()
-                    .children(notice)
-                    .children(turn_notice)
-                    .children(self.keeper_note_line(cx))
-                    .children(base_field)
-                    .children(worktree_field)
-                    .child(panes)
-                    .children(status),
+                    .flex_row()
+                    .gap(GUTTER)
+                    .pr(GUTTER)
+                    .pb(GUTTER)
+                    .when(!cfg!(target_os = "macos"), |el| el.pt(GUTTER))
+                    .child(composed.sidebar.clone())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .gap(GUTTER)
+                            .children(notice)
+                            .children(self.keeper_note_line(cx))
+                            .children(base_field)
+                            .children(worktree_field)
+                            .child(panes)
+                            .children(status),
+                    ),
             )
+            .children(turn_notice)
     }
 }
 
@@ -1045,14 +1191,24 @@ pub fn open(
         .looks
         .update(cx, |looks, cx| looks.system_is(system, cx));
     let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+    let titlebar = if cfg!(target_os = "macos") {
+        TitlebarOptions {
+            title: Some("YAAR".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(12.), px(10.))),
+        }
+    } else {
+        TitlebarOptions {
+            title: Some("YAAR".into()),
+            ..Default::default()
+        }
+    };
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         // What a Linux desktop matches the desktop entry and the icon by.
         app_id: Some("io.github.tsadoq.yaar".into()),
-        titlebar: Some(TitlebarOptions {
-            title: Some("YAAR".into()),
-            ..Default::default()
-        }),
+        titlebar: Some(titlebar),
+        app_owns_titlebar_drag: cfg!(target_os = "macos"),
         ..Default::default()
     };
     let (window, frame) = gpui_kit::open_window(options, cx, {

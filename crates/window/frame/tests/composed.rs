@@ -17,6 +17,7 @@ use yaar_frame::{
     SetBase, SidebarForm, ToggleSidebar, bind,
 };
 use yaar_link::{Refusal, Reply, Repository, Request, WorkspaceId};
+use yaar_ui::metrics::GUTTER;
 
 use common::{Shown, drawn, id, key_of, open_frame, pressed, repository, wait_until, workspace};
 
@@ -49,7 +50,7 @@ fn showing(
         shown
             .models
             .workspaces
-            .read_with(cx, |list, _| list.repositories() == listed)
+            .read_with(cx, |list, _| list.loaded() && list.repositories() == listed)
     });
     if let Some(first) = listed.iter().flat_map(|r| &r.workspaces).next() {
         shown.keeper.expect(
@@ -361,24 +362,36 @@ fn the_panes_lie_beside_the_sidebar_in_the_order_given_and_the_keys_of_the_frame
         drawn(&format!("pane-{name}"), cx).expect("the pane is drawn")
     };
     let (left, right) = (pane("left", &mut cx), pane("right", &mut cx));
+    let border = px(1.);
     assert_eq!(
         left.left(),
-        FULL_WIDTH,
-        "the first pane starts where the sidebar ends"
+        FULL_WIDTH + GUTTER + border,
+        "the first pane starts after the sidebar and gutter"
     );
-    assert_eq!(right.left(), left.right(), "the second follows the first");
-    assert_eq!(right.right(), WINDOW.width, "and ends with the window");
-    assert_eq!(left.size.width, right.size.width);
-    assert_eq!(left.bottom(), WINDOW.height);
+    assert_eq!(
+        right.left(),
+        left.right() + GUTTER + border * 2.,
+        "the second follows the first after the gutter"
+    );
+    assert_eq!(
+        right.right(),
+        WINDOW.width - GUTTER - border,
+        "and ends before the right gutter"
+    );
+    assert!(left.size.width > right.size.width);
+    assert_eq!(left.bottom(), WINDOW.height - GUTTER - border);
 
     cx.simulate_keystrokes(key_of::<ToggleSidebar>());
     assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
     assert_eq!(
         pane("left", &mut cx).left(),
-        RAIL_WIDTH,
+        RAIL_WIDTH + GUTTER + border,
         "the panes take the room the rail leaves"
     );
-    assert_eq!(pane("right", &mut cx).right(), WINDOW.width);
+    assert_eq!(
+        pane("right", &mut cx).right(),
+        WINDOW.width - GUTTER - border
+    );
 }
 
 type Kept = Rc<RefCell<Vec<FocusHandle>>>;
@@ -718,4 +731,37 @@ fn a_pane_holds_the_focus_while_it_is_inside_it_and_next_leaves_for_the_next_pan
         [false, true],
         "previous from inside"
     );
+}
+
+#[gpui_kit::test]
+fn with_no_repositories_opened_the_frame_shows_a_welcome_screen_whose_button_prompts_for_a_folder(
+    cx: &mut TestAppContext,
+) {
+    let kept = Kept::default();
+    let (mut shown, mut cx) = showing(
+        &[],
+        vec![keeping("left", &kept), keeping("right", &kept)],
+        cx,
+    );
+    assert!(drawn("frame-welcome", &mut cx).is_some());
+    assert_eq!(drawn("frame-pane-left", &mut cx), None);
+
+    let button = drawn("frame-open-folder", &mut cx).expect("the open folder button is drawn");
+    cx.simulate_click(button.center(), Modifiers::none());
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+
+    shown
+        .keeper
+        .tell(yaar_link::Fact::Workspaces(one_repository()));
+    wait_until(&mut cx, "a repository is listed", |cx| {
+        shown
+            .models
+            .workspaces
+            .read_with(cx, |list, _| !list.repositories().is_empty())
+    });
+    assert!(drawn("frame-pane-left", &mut cx).is_some());
+    assert_eq!(drawn("frame-welcome", &mut cx), None);
+    assert_eq!(focused(&kept, &mut cx), [true, false]);
 }

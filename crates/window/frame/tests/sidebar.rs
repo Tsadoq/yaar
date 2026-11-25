@@ -519,3 +519,36 @@ fn a_worktree_that_is_gone_is_named_by_its_folder_marked_as_gone_and_still_selec
             .expect(Request::GetChanges { workspace: id('2') }, &mut cx);
     }
 }
+
+#[gpui_kit::test]
+fn the_add_control_opens_a_menu_whose_items_prompt_for_a_folder_or_start_a_new_worktree(
+    cx: &mut TestAppContext,
+) {
+    let (shown, mut cx) = showing(&two_repositories(), WIDE, cx);
+    assert_eq!(drawn("sidebar-add-menu", &mut cx), None);
+
+    let add = drawn("sidebar-add", &mut cx).expect("the add control is drawn");
+    cx.simulate_click(add.center(), Modifiers::none());
+    assert!(drawn("sidebar-add-menu", &mut cx).is_some());
+
+    let open = drawn("sidebar-add-open", &mut cx).expect("the open folder item is drawn");
+    cx.simulate_click(open.center(), Modifiers::none());
+    assert_eq!(drawn("sidebar-add-menu", &mut cx), None);
+    assert!(cx.did_prompt_for_paths(), "open folder prompted for a path");
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+
+    let add = drawn("sidebar-add", &mut cx).expect("the add control is drawn");
+    cx.simulate_click(add.center(), Modifiers::none());
+    let worktree = drawn("sidebar-add-worktree", &mut cx).expect("the new worktree item is drawn");
+    cx.simulate_click(worktree.center(), Modifiers::none());
+    assert_eq!(drawn("sidebar-add-menu", &mut cx), None);
+    // No agent CLI is staged here, so dispatching NewWorktree surfaces the notice instead of a field.
+    assert!(
+        shown
+            .frame
+            .read_with(&cx, |frame, cx| frame.notice(cx))
+            .is_some(),
+        "new worktree was dispatched"
+    );
+}

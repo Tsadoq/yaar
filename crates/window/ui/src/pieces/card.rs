@@ -16,6 +16,7 @@ pub struct Card {
     header: Option<AnyElement>,
     children: Vec<AnyElement>,
     dashed: bool,
+    selected: bool,
     style: StyleRefinement,
     selector: Option<SharedString>,
 }
@@ -26,6 +27,7 @@ impl Card {
             header: None,
             children: Vec::new(),
             dashed: false,
+            selected: false,
             style: StyleRefinement::default(),
             selector: None,
         }
@@ -39,6 +41,11 @@ impl Card {
 
     pub fn dashed(mut self) -> Self {
         self.dashed = true;
+        self
+    }
+
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
         self
     }
 
@@ -83,11 +90,16 @@ impl RenderOnce for Card {
             marked(row, part(&self.selector, "header"))
         });
         let dashed = self.dashed;
+        let selected = self.selected;
         let mut card = div()
             .flex()
             .overflow_hidden()
             .border_1()
-            .border_color(palette.edge)
+            .border_color(if selected {
+                palette.focus
+            } else {
+                palette.edge
+            })
             .rounded(RADIUS_CARD)
             .typed(TypeRole::Body)
             .text_color(palette.text)
@@ -101,7 +113,13 @@ impl RenderOnce for Card {
                     .py(SPACE_5)
                     .text_color(palette.text_muted)
             })
-            .when(!dashed, |card| card.flex_col().bg(palette.window))
+            .when(!dashed, |card| {
+                card.flex_col().bg(if selected {
+                    palette.raised
+                } else {
+                    palette.window
+                })
+            })
             .children(header)
             .children(self.children);
         card.style().refine(&self.style);

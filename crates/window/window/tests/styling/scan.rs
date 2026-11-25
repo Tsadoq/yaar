@@ -69,9 +69,9 @@ const STYLING_NAMES: [&str; 12] = [
     "cursor_pointer",
 ];
 
-/// Banned as a method call `.name(..)`. A `cursor()` with no argument reads a cursor, a
-/// `cursor(style)` sets the pointer, so only a call with an argument is the second.
-const STYLING_CALLS: [&str; 2] = ["opacity", "cursor"];
+/// Banned as a method call `.name(..)`. A zero-argument `cursor()` or `font()` is a reader, not
+/// a styling call, so only a call with an argument is banned for those.
+const STYLING_CALLS: [&str; 3] = ["opacity", "cursor", "font"];
 
 /// Banned as `.name` and as `.name_` followed by anything (`rounded_md`, `shadow_lg`).
 const STYLING_FAMILIES: [&str; 2] = ["rounded", "shadow"];
@@ -366,7 +366,10 @@ pub fn styling_banned(source: &str) -> Vec<(usize, &'static str)> {
                 Some(THEME_TRAIT)
             } else if name == "Theme" && line[start + name.len()..].starts_with("::global(") {
                 Some(THEME_GLOBAL)
-            } else if name == "FontWeight" && line[start + name.len()..].starts_with("::") {
+            } else if name == "FontWeight"
+                && (line[start + name.len()..].starts_with("::")
+                    || line[start + name.len()..].trim_start().starts_with('('))
+            {
                 Some("FontWeight")
             } else if name == "font"
                 && !before.ends_with('.')

@@ -15,7 +15,7 @@ use scan::{
 };
 
 /// The crates held to the full styling rule, not only to the colour rules.
-const STRICT: &[&str] = &[];
+const STRICT: &[&str] = &["frame"];
 
 fn said(findings: &[Finding], rule: Rule) -> Vec<String> {
     findings
@@ -162,8 +162,10 @@ fn in_a_strict_crate_each_styling_call_is_found() {
         ("div().opacity(0.5)", "opacity"),
         ("run.weight = FontWeight::BOLD;", "FontWeight"),
         ("let w = gpui_kit::FontWeight::NORMAL;", "FontWeight"),
+        ("let w = FontWeight(400.);", "FontWeight"),
         ("let f = font(family.clone());", "font"),
         ("let f = (font (family));", "font"),
+        ("div().font(f)", "font"),
         ("div().cursor(CursorStyle::IBeam)", "cursor"),
         ("div().cursor( style )", "cursor"),
     ];
@@ -282,7 +284,7 @@ fn a_styling_word_inside_a_comment_or_a_string_is_passed() {
         "let n = x.opacity;",
         "let n = my_opacity(c);",
         "let n = x.my_font(f);",
-        "let n = x.font(f);",
+        "let n = x.font();",
         "let n = my_font(f);",
         "let n = font_of(f);",
         "let n = font;",
@@ -385,9 +387,13 @@ fn every_crate_that_draws_is_scanned() {
         let Ok(manifest) = fs::read_to_string(path.join("Cargo.toml")) else {
             continue;
         };
-        let uses_the_toolkit = manifest
-            .lines()
-            .any(|line| line.trim_start().starts_with("gpui-kit"));
+        let uses_the_toolkit = manifest.lines().any(|line| {
+            line.trim_start()
+                .strip_prefix("gpui-kit")
+                .is_some_and(|rest| {
+                    rest.starts_with(|c: char| c.is_whitespace() || c == '=' || c == '.')
+                })
+        });
         if uses_the_toolkit && name != "ui" && !CRATES.contains(&name.as_str()) {
             unlisted.push(name);
         }
