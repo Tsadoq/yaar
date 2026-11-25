@@ -1,9 +1,12 @@
 //! The question an Adapter asks before it writes into the user's settings of its CLI, with
 //! the yes and no controls. Not modal: terminals and launchers work while it is up.
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_link::{Consent, ConsentAnswer};
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_5};
+use yaar_ui::pieces::{Button, ButtonKind};
+use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::{InstallAgentExtensions, KeepAgentExtensionsOut, TerminalPane};
 
@@ -24,73 +27,59 @@ impl TerminalPane {
         if asked.is_empty() {
             return None;
         }
-        let theme = cx.theme();
+        let palette = palette(cx);
         let questions = asked.into_iter().enumerate().map(|(n, consent)| {
             // Each text takes the width of its words, so that its bounds show what is drawn in it.
             div()
                 .flex()
                 .flex_col()
                 .items_start()
-                .gap_0p5()
+                .gap(SPACE_1)
                 .child(
                     div()
                         .debug_selector(move || format!("terminal-consent-question-{n}"))
-                        .text_sm()
+                        .typed(TypeRole::Body)
+                        .text_color(palette.text)
                         .child(consent.question),
                 )
                 .children(consent.problem.map(|problem| {
                     div()
                         .debug_selector(move || format!("terminal-consent-problem-{n}"))
-                        .text_sm()
-                        .text_color(theme.danger)
+                        .typed(TypeRole::Body)
+                        .text_color(palette.danger)
                         .child(problem)
                 }))
         });
         let control = |name: &'static str, label: &'static str, primary: bool| {
-            let button = div()
-                .id(SharedString::from(name))
-                .debug_selector(move || name.to_owned())
-                .flex_none()
-                .px_2()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_xs();
-            // The selector carries the text drawn, so that a test reads which words a control
-            // shows.
-            let words = div()
-                .debug_selector(move || format!("{name}-label:{label}"))
-                .child(label);
-            if primary {
-                button
-                    .bg(theme.primary)
-                    .text_color(theme.primary_foreground)
-                    .child(words)
-            } else {
-                button
-                    .bg(theme.secondary)
-                    .text_color(theme.secondary_foreground)
-                    .child(words)
-            }
+            Button::new(name, label)
+                .kind(if primary {
+                    ButtonKind::Primary
+                } else {
+                    ButtonKind::Secondary
+                })
+                .small()
+                .selector(name)
+                .label_selector(format!("{name}-label:{label}"))
         };
         Some(
             div()
                 .debug_selector(|| "terminal-consent".to_owned())
                 .flex_none()
-                .px_3()
-                .py_1()
-                .gap_1()
+                .px(SPACE_5)
+                .py(SPACE_3)
+                .gap(SPACE_2)
                 .flex()
                 .flex_col()
-                .bg(theme.muted)
-                .text_color(theme.foreground)
+                .bg(palette.window)
+                .text_color(palette.text)
                 .border_b_1()
-                .border_color(theme.border)
+                .border_color(palette.separator)
                 .children(questions)
                 .child(
                     div()
                         .flex()
                         .flex_row()
-                        .gap_2()
+                        .gap(SPACE_3)
                         .child(control("terminal-consent-yes", YES_LABEL, true).on_click(
                             cx.listener(|pane, _: &ClickEvent, _, cx| {
                                 pane.answer(ConsentAnswer::Yes, cx)

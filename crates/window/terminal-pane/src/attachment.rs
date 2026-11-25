@@ -4,10 +4,13 @@
 
 use std::collections::HashMap;
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_frame::{AskError, Wanted};
 use yaar_link::{Attachment, Fact, Program, Reply, Request, ReviewId, SessionState, TerminalId};
+use yaar_ui::metrics::{SPACE_3, SPACE_4, SPACE_5};
+use yaar_ui::pieces::{Button, ButtonKind};
+use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::{
     AddressEachComment, DetachAttachment, TerminalPane, ViewAttachment, WORKTREE_BEING_MADE,
@@ -187,33 +190,21 @@ impl TerminalPane {
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         let attached = self.attachment(terminal, cx)?;
-        let theme = cx.theme();
+        let palette = palette(cx);
         let words = match attached {
             Attachment::Review => "Review attached to your next message",
             Attachment::Thread(_) => "One thread attached to your next message",
         };
         let control = |name: &'static str, label: &'static str, primary: bool| {
-            let button = div()
-                .id(SharedString::from(format!(
-                    "terminal-attachment-{name}-{n}"
-                )))
-                .debug_selector(move || format!("terminal-attachment-{name}-{n}"))
-                .flex_none()
-                .px_2()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_xs();
-            if primary {
-                button
-                    .bg(theme.primary)
-                    .text_color(theme.primary_foreground)
-                    .child(label)
-            } else {
-                button
-                    .bg(theme.secondary)
-                    .text_color(theme.secondary_foreground)
-                    .child(label)
-            }
+            let selector = format!("terminal-attachment-{name}-{n}");
+            Button::new(SharedString::from(selector.clone()), label)
+                .kind(if primary {
+                    ButtonKind::Primary
+                } else {
+                    ButtonKind::Secondary
+                })
+                .small()
+                .selector(selector)
         };
         let click = |act: fn(&mut Self, &TerminalId, &mut Context<Self>)| {
             let terminal = terminal.clone();
@@ -229,17 +220,24 @@ impl TerminalPane {
             .left_0()
             .right_0()
             .h(LINE)
-            .px_2()
-            .gap_2()
+            .px(SPACE_5)
+            .gap(SPACE_3)
             .flex()
             .flex_row()
             .items_center()
             .occlude()
-            .bg(theme.muted)
-            .text_color(theme.foreground)
+            .bg(palette.window)
+            .text_color(palette.text)
             .border_t_1()
-            .border_color(theme.border)
-            .child(div().flex_1().min_w_0().truncate().text_xs().child(words))
+            .border_color(palette.separator)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .typed(TypeRole::Meta)
+                    .child(words),
+            )
             .child(control("view", "View", false).on_click(click(Self::toggle_view)))
             .child(control("detach", "Detach", false).on_click(click(Self::detach)))
             .children(self.offers_address(terminal, cx).then(|| {
@@ -264,12 +262,12 @@ impl TerminalPane {
                     .max_h_3_4()
                     .overflow_y_scroll()
                     .occlude()
-                    .p_2()
-                    .bg(theme.background)
-                    .text_color(theme.foreground)
-                    .text_sm()
+                    .p(SPACE_4)
+                    .bg(palette.pane)
+                    .text_color(palette.text)
+                    .typed(TypeRole::Body)
                     .border_t_1()
-                    .border_color(theme.border)
+                    .border_color(palette.separator)
                     .child(text)
             });
         Some(
