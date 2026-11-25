@@ -123,7 +123,7 @@ fn each_reader_gives_its_default_while_nothing_is_set(cx: &mut TestAppContext) {
         assert_eq!(list.turn_end(), TurnEndSelects::WhatChanged);
         assert_eq!(list.stop_after(), Duration::from_secs(600));
         assert_eq!(list.stop_after_set(), None);
-        assert_eq!(list.theme(), ThemeChoice::System);
+        assert_eq!(list.theme_choice(), ThemeChoice::System);
         assert_eq!(list.terminal_place(), TerminalPlace::Right);
         assert_eq!(list.keep_states(), 30);
         assert_eq!(list.option_key(), OptionKey::ByLayout);
@@ -159,7 +159,7 @@ fn each_reader_gives_what_the_keeper_listed_then_what_it_told(cx: &mut TestAppCo
         assert_eq!(list.turn_end(), TurnEndSelects::KeepSelection);
         assert_eq!(list.stop_after(), Duration::from_secs(90));
         assert_eq!(list.stop_after_set(), Some(Duration::from_secs(90)));
-        assert_eq!(list.theme(), ThemeChoice::Named("Light".to_owned()));
+        assert_eq!(list.theme_choice(), ThemeChoice::Named("Light".to_owned()));
         assert_eq!(list.terminal_place(), TerminalPlace::Below);
         assert_eq!(list.keep_states(), 7);
         assert_eq!(list.option_key(), OptionKey::Meta);
@@ -197,7 +197,7 @@ fn each_reader_gives_what_the_keeper_listed_then_what_it_told(cx: &mut TestAppCo
         assert_eq!(list.turn_end(), TurnEndSelects::WhatChanged);
         assert_eq!(list.stop_after_set(), Some(Duration::from_secs(5)));
         assert_eq!(list.stop_after(), Duration::from_secs(5));
-        assert_eq!(list.theme(), ThemeChoice::System);
+        assert_eq!(list.theme_choice(), ThemeChoice::System);
         assert_eq!(list.terminal_place(), TerminalPlace::Left);
         assert_eq!(list.option_key(), OptionKey::Characters);
         assert_eq!(

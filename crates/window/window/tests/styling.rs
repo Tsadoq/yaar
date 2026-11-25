@@ -15,7 +15,7 @@ use scan::{
 };
 
 /// The crates held to the full styling rule, not only to the colour rules.
-const STRICT: &[&str] = &[];
+const STRICT: &[&str] = &["frame"];
 
 fn said(findings: &[Finding], rule: Rule) -> Vec<String> {
     findings

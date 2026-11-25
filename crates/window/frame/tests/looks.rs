@@ -94,7 +94,7 @@ fn told(shown: &mut Shown, setting: Setting, cx: &mut VisualTestContext) {
         shown
             .models
             .settings
-            .read_with(cx, |list, _| list.theme() == choice)
+            .read_with(cx, |list, _| list.theme_choice() == choice)
     });
     cx.run_until_parked();
 }
@@ -374,7 +374,7 @@ fn a_choice_the_keeper_held_at_the_connection_is_applied_at_the_first_telling(
     });
     wait_until(&mut cx, "the settings to reach the model", |cx| {
         shown.models.settings.read_with(cx, |list, _| {
-            list.theme() == ThemeChoice::Named(DARK.to_owned())
+            list.theme_choice() == ThemeChoice::Named(DARK.to_owned())
         })
     });
     shown
