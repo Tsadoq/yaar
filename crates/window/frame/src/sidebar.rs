@@ -1,9 +1,13 @@
-use gpui_kit::component::theme::ActiveTheme;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use yaar_link::{RepositoryId, SessionState, Workspace, WorkspaceId};
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_5};
+use yaar_ui::pieces::{Button, ButtonKind, Card, Divider, ListRow, SectionLabel, State, StateDot};
+use yaar_ui::themes::palette;
+use yaar_ui::tokens::Palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::agents::AgentList;
+use crate::controls::{NewWorktree, OpenFolder};
 use crate::models::WorkspaceList;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,9 +20,9 @@ pub enum SidebarForm {
 /// form.
 pub const RAIL_BELOW: Pixels = px(1000.);
 
-pub const FULL_WIDTH: Pixels = px(240.);
+pub const FULL_WIDTH: Pixels = px(218.);
 
-pub const RAIL_WIDTH: Pixels = px(48.);
+pub const RAIL_WIDTH: Pixels = px(54.);
 
 pub fn sidebar_form(window_width: Pixels, pinned: Option<SidebarForm>) -> SidebarForm {
     pinned.unwrap_or(if window_width < RAIL_BELOW {
@@ -53,6 +57,7 @@ pub struct Sidebar {
     pinned: Option<SidebarForm>,
     form: SidebarForm,
     window_width: Option<Pixels>,
+    add_menu_open: bool,
 }
 
 impl Sidebar {
@@ -67,6 +72,7 @@ impl Sidebar {
             pinned: None,
             form: SidebarForm::Full,
             window_width: None,
+            add_menu_open: false,
         }
     }
 
@@ -143,30 +149,39 @@ impl Sidebar {
         };
         if form != self.form {
             self.form = form;
+            if form == SidebarForm::Rail {
+                self.add_menu_open = false;
+            }
             cx.notify();
         }
     }
 
-    fn row(&self, row: SidebarRow, colors: &Colors, cx: &mut Context<Self>) -> AnyElement {
+    fn toggle_add_menu(&mut self, cx: &mut Context<Self>) {
+        self.add_menu_open = !self.add_menu_open;
+        cx.notify();
+    }
+
+    fn row(&self, row: SidebarRow, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let rail = self.form == SidebarForm::Rail;
         match row {
             SidebarRow::Repository { id, name } => {
-                let row = div()
-                    .debug_selector(move || format!("sidebar-repository-{id}"))
-                    .flex_none();
                 if rail {
-                    // In the rail a repository is the line between two groups of marks.
-                    row.mx_2()
-                        .my_1()
-                        .h(px(1.))
-                        .bg(colors.border)
+                    // In the rail a repository is the rule between two groups of marks.
+                    div()
+                        .flex_none()
+                        .px(SPACE_3)
+                        .py(SPACE_2)
+                        .child(Divider::horizontal().selector(format!("sidebar-repository-{id}")))
                         .into_any_element()
                 } else {
-                    row.px_3()
-                        .pt_3()
-                        .pb_1()
-                        .text_xs()
-                        .text_color(colors.muted)
+                    div()
+                        .debug_selector(move || format!("sidebar-repository-{id}"))
+                        .flex_none()
+                        .px(SPACE_5)
+                        .pt(SPACE_5)
+                        .pb(SPACE_2)
+                        .typed(TypeRole::MetaStrong)
+                        .text_color(palette.text_muted)
                         .truncate()
                         .child(name)
                         .into_any_element()
@@ -180,72 +195,237 @@ impl Sidebar {
                 agent,
             } => {
                 let selector = format!("sidebar-workspace-{id}");
-                let agent_mark = agent.and_then(|state| agent_mark(&id, state, rail, colors));
-                // After the name, so that a reader sees which row it is and then that it is
-                // gone; in the rail, which has room for no sentence, a cross.
-                let gone_mark = gone.then(|| {
-                    let selector = format!("sidebar-gone-{id}");
-                    div()
-                        .debug_selector(move || selector)
-                        .flex_none()
-                        .text_xs()
-                        .text_color(colors.muted)
-                        .child(if rail { "×" } else { "worktree gone" })
+                let select_id = id.clone();
+                let on_click = cx.listener(move |sidebar, _: &ClickEvent, _, cx| {
+                    sidebar
+                        .workspaces
+                        .update(cx, |list, cx| list.select(&select_id, cx));
                 });
-                let row = div()
-                    .id(SharedString::from(selector.clone()))
-                    .debug_selector(move || selector)
-                    .flex_none()
-                    .cursor_pointer()
-                    .text_sm()
-                    .when(selected, |row| {
-                        row.bg(colors.selected).text_color(colors.selected_text)
-                    })
-                    .when(!selected, |row| row.hover(|row| row.bg(colors.hover)))
-                    .on_click(cx.listener(move |sidebar, _, _, cx| {
-                        sidebar
-                            .workspaces
-                            .update(cx, |list, cx| list.select(&id, cx));
-                    }));
+                let state = agent_presentation(agent, palette);
+                let dot_selector = state
+                    .selector_word
+                    .map(|word| format!("sidebar-agent-{id}-{word}"));
+                let mut dot = StateDot::new(state.dot);
+                if agent == Some(SessionState::Works) {
+                    dot = dot.pulsing(SharedString::from(format!("sidebar-pulse-{id}")));
+                }
+                if let Some(mark_selector) = dot_selector {
+                    dot = dot.selector(mark_selector);
+                }
+
                 if rail {
-                    row.mx_2()
-                        .my_0p5()
-                        .size_8()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_md()
-                        .relative()
-                        .child(mark(&name))
+                    let rail_dot =
+                        agent.map(|_| div().absolute().top(SPACE_1).right(SPACE_1).child(dot));
+                    let gone_mark = gone.then(|| {
+                        let gone_selector = format!("sidebar-gone-{id}");
+                        div()
+                            .debug_selector(move || gone_selector)
+                            .absolute()
+                            .bottom(SPACE_1)
+                            .right(SPACE_1)
+                            .typed(TypeRole::Tiny)
+                            .text_color(palette.text_dim)
+                            .child("×")
+                    });
+                    ListRow::rail(SharedString::from(selector.clone()))
+                        .selected(selected)
+                        .selector(selector)
+                        .on_click(on_click)
+                        .child(
+                            div()
+                                .typed(TypeRole::Strong)
+                                .text_color(if selected {
+                                    palette.text
+                                } else {
+                                    palette.text_muted
+                                })
+                                .child(mark(&name)),
+                        )
+                        .children(rail_dot)
                         .children(gone_mark)
-                        .children(agent_mark)
                         .into_any_element()
                 } else {
-                    row.pl_5()
-                        .pr_3()
-                        .py_1()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().flex_1().min_w_0().truncate().child(name))
-                        .children(gone_mark)
-                        .children(agent_mark)
+                    let gone_mark = gone.then(|| {
+                        let gone_selector = format!("sidebar-gone-{id}");
+                        div()
+                            .debug_selector(move || gone_selector)
+                            .typed(TypeRole::Tiny)
+                            .text_color(palette.danger)
+                            .child("worktree gone")
+                    });
+                    ListRow::new(SharedString::from(selector.clone()))
+                        .nested()
+                        .selected(selected)
+                        .selector(selector)
+                        .on_click(on_click)
+                        .child(div().flex_none().pt(SPACE_2).child(dot))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(SPACE_1)
+                                .child(
+                                    div()
+                                        .typed(TypeRole::Path)
+                                        .text_color(if selected {
+                                            palette.text
+                                        } else {
+                                            palette.text_muted
+                                        })
+                                        .truncate()
+                                        .child(name),
+                                )
+                                .child(
+                                    div()
+                                        .typed(TypeRole::Meta)
+                                        .text_color(state.word_colour)
+                                        .truncate()
+                                        .child(state.words),
+                                )
+                                .children(gone_mark),
+                        )
                         .into_any_element()
                 }
             }
         }
     }
+
+    fn header(&self, rail: bool, cx: &mut Context<Self>) -> AnyElement {
+        let pin = Button::new("sidebar-pin", if rail { "»" } else { "«" })
+            .kind(ButtonKind::Ghost)
+            .small()
+            .selector("sidebar-pin")
+            .on_click(cx.listener(|sidebar, _, _, cx| sidebar.pin_other_form(cx)));
+        if rail {
+            return div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .py(SPACE_2)
+                .child(pin)
+                .into_any_element();
+        }
+        let add = Button::new("sidebar-add", "+")
+            .kind(ButtonKind::Ghost)
+            .small()
+            .selector("sidebar-add")
+            .on_click(cx.listener(|sidebar, _, _, cx| sidebar.toggle_add_menu(cx)));
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_between()
+            .pr(SPACE_3)
+            .py(SPACE_1)
+            .child(SectionLabel::new("Workspaces"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_1)
+                    .child(add)
+                    .child(pin),
+            )
+            .into_any_element()
+    }
+
+    fn add_menu(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.add_menu_open || self.form == SidebarForm::Rail {
+            return None;
+        }
+        let open_folder = ListRow::new("sidebar-add-open")
+            .selector("sidebar-add-open")
+            .on_click(cx.listener(|sidebar, _, window, cx| {
+                sidebar.add_menu_open = false;
+                cx.notify();
+                window.dispatch_action(Box::new(OpenFolder), cx);
+            }))
+            .child(
+                div()
+                    .typed(TypeRole::Body)
+                    .text_color(palette.text)
+                    .child("Open Folder…"),
+            );
+        let new_worktree = ListRow::new("sidebar-add-worktree")
+            .selector("sidebar-add-worktree")
+            .on_click(cx.listener(|sidebar, _, window, cx| {
+                sidebar.add_menu_open = false;
+                cx.notify();
+                window.dispatch_action(Box::new(NewWorktree), cx);
+            }))
+            .child(
+                div()
+                    .typed(TypeRole::Body)
+                    .text_color(palette.text)
+                    .child("New Worktree…"),
+            );
+        Some(
+            div()
+                .flex_none()
+                .px(SPACE_3)
+                .pb(SPACE_2)
+                .child(
+                    Card::new()
+                        .selector("sidebar-add-menu")
+                        .p(SPACE_1)
+                        .gap(SPACE_1)
+                        .child(open_folder)
+                        .child(new_worktree),
+                )
+                .into_any_element(),
+        )
+    }
 }
 
-struct Colors {
-    border: Hsla,
-    muted: Hsla,
-    waiting: Hsla,
-    unreviewed: Hsla,
-    working: Hsla,
-    hover: Hsla,
-    selected: Hsla,
-    selected_text: Hsla,
+struct AgentPresentation {
+    dot: State,
+    words: &'static str,
+    word_colour: Hsla,
+    selector_word: Option<&'static str>,
+}
+
+fn agent_presentation(agent: Option<SessionState>, palette: &Palette) -> AgentPresentation {
+    match agent {
+        Some(SessionState::Works) => AgentPresentation {
+            dot: State::Working,
+            words: "working",
+            word_colour: palette.link,
+            selector_word: Some("working"),
+        },
+        Some(SessionState::WaitsForPermission) => AgentPresentation {
+            dot: State::Permission,
+            words: "waiting",
+            word_colour: palette.danger,
+            selector_word: Some("waiting"),
+        },
+        Some(SessionState::Unreviewed) => AgentPresentation {
+            dot: State::NeedsYou,
+            words: "to review",
+            word_colour: palette.warn,
+            selector_word: Some("unreviewed"),
+        },
+        Some(SessionState::NotRunning) => AgentPresentation {
+            dot: State::Idle,
+            words: "not running",
+            word_colour: palette.text_dim,
+            selector_word: Some("not-running"),
+        },
+        Some(SessionState::Idle) => AgentPresentation {
+            dot: State::Ok,
+            words: "idle",
+            word_colour: palette.text_dim,
+            selector_word: None,
+        },
+        None => AgentPresentation {
+            dot: State::Idle,
+            words: "no agent running",
+            word_colour: palette.text_dim,
+            selector_word: None,
+        },
+    }
 }
 
 pub(crate) fn workspace_name(workspace: &Workspace) -> String {
@@ -258,38 +438,6 @@ pub(crate) fn workspace_name(workspace: &Workspace) -> String {
             .to_string_lossy()
             .into_owned(),
     }
-}
-
-fn agent_mark(
-    workspace: &WorkspaceId,
-    state: SessionState,
-    rail: bool,
-    colors: &Colors,
-) -> Option<Div> {
-    let (word, words, colour) = match state {
-        SessionState::WaitsForPermission => ("waiting", "waiting", colors.waiting),
-        SessionState::Unreviewed => ("unreviewed", "to review", colors.unreviewed),
-        SessionState::Works => ("working", "working", colors.working),
-        SessionState::NotRunning => ("not-running", "not running", colors.muted),
-        SessionState::Idle => return None,
-    };
-    let selector = format!("sidebar-agent-{workspace}-{word}");
-    let dot = div().flex_none().size_2().rounded_full().bg(colour);
-    let mark = div()
-        .debug_selector(move || selector)
-        .flex_none()
-        .flex()
-        .items_center();
-    Some(if rail {
-        // Over the corner of the workspace's letter, where the rail has room for no word.
-        mark.absolute().top_0().right_0().child(dot)
-    } else {
-        mark.gap_1()
-            .text_xs()
-            .text_color(colors.muted)
-            .child(dot)
-            .child(words)
-    })
 }
 
 /// A workspace's mark in the rail: the first character, uppercased, of the last part of its name,
@@ -306,38 +454,12 @@ fn mark(name: &str) -> String {
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rail = self.form == SidebarForm::Rail;
-        let theme = cx.theme();
-        let (background, foreground) = (theme.sidebar, theme.sidebar_foreground);
-        let colors = Colors {
-            border: theme.sidebar_border,
-            muted: theme.muted_foreground,
-            waiting: theme.warning,
-            unreviewed: theme.info,
-            working: theme.success,
-            hover: theme.list_hover,
-            selected: theme.sidebar_accent,
-            selected_text: theme.sidebar_accent_foreground,
-        };
+        let palette = palette(cx);
         let rows: Vec<AnyElement> = self
             .rows(cx)
             .into_iter()
-            .map(|row| self.row(row, &colors, cx))
+            .map(|row| self.row(row, &palette, cx))
             .collect();
-        let pin = div()
-            .id("sidebar-pin")
-            .debug_selector(|| "sidebar-pin".to_owned())
-            .flex_none()
-            .h_8()
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .border_t_1()
-            .border_color(colors.border)
-            .when(self.pinned.is_none(), |pin| pin.text_color(colors.muted))
-            .hover(|pin| pin.bg(colors.hover))
-            .on_click(cx.listener(|sidebar, _, _, cx| sidebar.pin_other_form(cx)))
-            .child(if rail { "»" } else { "«" });
 
         div()
             .debug_selector(|| "sidebar".to_owned())
@@ -346,10 +468,10 @@ impl Render for Sidebar {
             .w(if rail { RAIL_WIDTH } else { FULL_WIDTH })
             .flex()
             .flex_col()
-            .bg(background)
-            .text_color(foreground)
-            .border_r_1()
-            .border_color(colors.border)
+            .bg(palette.window)
+            .text_color(palette.text)
+            .child(self.header(rail, cx))
+            .children(self.add_menu(&palette, cx))
             .child(
                 div()
                     .id("sidebar-rows")
@@ -357,10 +479,11 @@ impl Render for Sidebar {
                     .min_h_0()
                     .flex()
                     .flex_col()
+                    .px(SPACE_2)
+                    .gap(SPACE_1)
                     .overflow_y_scroll()
                     .children(rows),
             )
-            .child(pin)
     }
 }
 
