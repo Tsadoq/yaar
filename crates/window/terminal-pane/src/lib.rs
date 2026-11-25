@@ -22,9 +22,11 @@ use yaar_link::{
     Ending, Fact, Program, Reply, Request, RequestKind, SessionState, TerminalId, TerminalInfo,
     TerminalPlace, TerminalSize, WorkspaceId,
 };
-use yaar_ui::metrics::{SPACE_2, SPACE_3, SPACE_4, SPACE_5};
-use yaar_ui::pieces::{Banner, Button, ButtonKind, Chip, Divider, EmptyState, SectionLabel, Tone};
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5};
+use yaar_ui::pieces::{Banner, Button, ButtonKind, Chip, Divider, EmptyState, Tone};
 use yaar_ui::themes::palette;
+use yaar_ui::tokens::Palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 pub use attachment::ADDRESS_EACH_COMMENT;
 pub use consent::{NO_LABEL, NOTHING_TO_INSTALL, YES_LABEL};
@@ -972,6 +974,16 @@ fn how_to_open() -> String {
     format!("Start an agent CLI ({agent}) or open a shell ({shell}) in the workspace on screen.")
 }
 
+fn split_header_style(active_slot: bool, pane_focused: bool, palette: &Palette) -> (Hsla, Hsla) {
+    if active_slot && pane_focused {
+        (palette.focus, palette.text)
+    } else if active_slot {
+        (palette.edge, palette.text_dim)
+    } else {
+        (transparent_black(), palette.text_dim)
+    }
+}
+
 impl Render for TerminalPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_title(window, cx);
@@ -983,6 +995,7 @@ impl Render for TerminalPane {
         }
 
         let palette = palette(cx);
+        let pane_focused = self.focus.contains_focused(window, cx);
         let stacked = self.models.settings.read(cx).terminal_place() != TerminalPlace::Below;
         let shown = self.shown();
         let split = shown.len() == 2;
@@ -992,6 +1005,7 @@ impl Render for TerminalPane {
             let entry = self.entry(id)?;
             let view = entry.view.clone();
             let name = entry.id.as_str().to_owned();
+            let active_slot = self.layout().is_some_and(|l| l.focus_slot == n);
             let slot = div()
                 .debug_selector(move || format!("terminal-slot-{n}"))
                 .flex_1()
@@ -1043,15 +1057,28 @@ impl Render for TerminalPane {
                 )
                 .absolute()
                 .size_full();
+                let (stripe, text_colour) = split_header_style(active_slot, pane_focused, &palette);
                 div()
                     .flex_none()
                     .relative()
                     .pt(SPACE_2)
                     .bg(palette.pane)
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(move |pane, _, window, cx| pane.click_slot(n, window, cx)),
+                    )
                     .child(measure)
                     .child(
-                        SectionLabel::new(self.terminal_label(id, cx))
-                            .selector(format!("terminal-split-header-{n}")),
+                        div()
+                            .debug_selector(move || format!("terminal-split-header-{n}"))
+                            .border_l_2()
+                            .border_color(stripe)
+                            .px(SPACE_5)
+                            .pt(SPACE_1)
+                            .pb(SPACE_3)
+                            .typed(TypeRole::Label)
+                            .text_color(text_colour)
+                            .child(self.terminal_label(id, cx).to_uppercase()),
                     )
             });
             let named = div()
@@ -1206,6 +1233,18 @@ impl Render for TerminalPane {
         div()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(|pane, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "enter"
+                    && !event.keystroke.modifiers.modified()
+                    && pane.shown().is_empty()
+                {
+                    let program = match pane.chosen_cli(cx) {
+                        Some(cli) => Program::Agent { agent: cli.agent },
+                        None => Program::Shell,
+                    };
+                    pane.launch(program, cx);
+                }
+            }))
             .size_full()
             .bg(palette.pane)
             .flex()
@@ -1224,5 +1263,34 @@ impl Render for TerminalPane {
                     .children(empty)
                     .children(slots_area),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::transparent_black;
+    use yaar_ui::themes::{DARK, Themes};
+
+    use super::split_header_style;
+
+    #[test]
+    fn split_header_style_distinguishes_focused_active_unfocused_active_and_inactive_slots() {
+        let palette = Themes::built_in().named(DARK).expect("dark theme").palette;
+        assert_eq!(
+            split_header_style(true, true, &palette),
+            (palette.focus, palette.text)
+        );
+        assert_eq!(
+            split_header_style(true, false, &palette),
+            (palette.edge, palette.text_dim)
+        );
+        assert_eq!(
+            split_header_style(false, true, &palette),
+            (transparent_black(), palette.text_dim)
+        );
+        assert_eq!(
+            split_header_style(false, false, &palette),
+            (transparent_black(), palette.text_dim)
+        );
     }
 }

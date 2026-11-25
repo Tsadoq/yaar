@@ -951,3 +951,44 @@ fn empty_state_launcher_button_opens_the_chosen_agent_cli(cx: &mut TestAppContex
         }) && drawn("terminal-how-to-open", cx).is_none()
     });
 }
+
+#[gpui_kit::test]
+fn pressing_enter_in_empty_focused_terminal_pane_launches_chosen_agent_cli(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_naming(cx, vec![claude(), pi()]);
+    wait_for_launchers(&panes, 2, &mut cx);
+    cx.update(|window, cx| panes.pane_focus.focus(window, cx));
+    cx.run_until_parked();
+    assert!(cx.update(|window, _| panes.pane_focus.is_focused(window)));
+
+    cx.simulate_keystrokes("enter");
+    let (workspace, _) = panes.answer_open(&terminal('a'), agent("claude"), &mut cx);
+    assert_eq!(workspace, workspace_id('1'));
+    wait_drawn(&mut cx, "the launched agent terminal", |cx| {
+        panes.pane.read_with(cx, |pane, _| {
+            pane.shown() == std::slice::from_ref(&terminal('a'))
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn pressing_enter_in_empty_focused_terminal_pane_falls_back_to_shell_without_clis(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_naming(cx, Vec::new());
+    wait_drawn(&mut cx, "the empty state", |cx| {
+        drawn("terminal-how-to-open", cx).is_some()
+    });
+    cx.update(|window, cx| panes.pane_focus.focus(window, cx));
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("enter");
+    let (workspace, _) = panes.answer_open(&terminal('s'), Program::Shell, &mut cx);
+    assert_eq!(workspace, workspace_id('1'));
+    wait_drawn(&mut cx, "the launched shell terminal", |cx| {
+        panes.pane.read_with(cx, |pane, _| {
+            pane.shown() == std::slice::from_ref(&terminal('s'))
+        })
+    });
+}

@@ -238,10 +238,17 @@ impl TerminalPane {
         let focused = self.focused();
         let pane_entity = cx.entity();
 
+        let (shell_key, agent_key, split_key) = if cfg!(target_os = "macos") {
+            ("Cmd-T", "Cmd-Shift-T", "Cmd-D")
+        } else {
+            ("Ctrl-T", "Ctrl-Shift-T", "Ctrl-D")
+        };
+
         let mut launcher_buttons = div().flex_none().flex().items_center().gap(SPACE_1).child(
             Button::new("terminal-launcher-shell", "+ Shell")
                 .kind(ButtonKind::Ghost)
                 .small()
+                .tooltip(format!("Open a new shell ({shell_key})"))
                 .selector("terminal-launcher-shell")
                 .on_click(cx.listener(|pane, _: &ClickEvent, _, cx| {
                     pane.launch(Program::Shell, cx);
@@ -256,7 +263,8 @@ impl TerminalPane {
             )
             .kind(ButtonKind::Ghost)
             .small()
-            .selected(is_chosen)
+            .chosen_dot(is_chosen)
+            .tooltip(format!("Open a new {} terminal ({agent_key})", cli.title))
             .selector(format!("terminal-launcher-{}", cli.agent))
             .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
                 pane.launch(
@@ -267,8 +275,7 @@ impl TerminalPane {
                 );
             }));
             if is_chosen {
-                button =
-                    button.indicator_selector(format!("terminal-launcher-chosen-{}", cli.agent));
+                button = button.label_selector(format!("terminal-launcher-chosen-{}", cli.agent));
             }
             launcher_buttons = launcher_buttons.child(button);
         }
@@ -297,10 +304,18 @@ impl TerminalPane {
                 });
             });
 
+        let split_disabled = here.len() < 2;
+        let split_tooltip = if split_disabled {
+            "Open a second terminal to split".to_owned()
+        } else {
+            format!("Split terminal view ({split_key})")
+        };
         let split_button = Button::new("terminal-split-toggle", "Split")
+            .kind(ButtonKind::Ghost)
             .small()
             .selected(self.split())
-            .disabled(here.len() < 2)
+            .disabled(split_disabled)
+            .tooltip(split_tooltip)
             .selector("terminal-split-toggle")
             .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                 pane.toggle_split(&ToggleSplit, window, cx);
