@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::*;
-use yaar_diff::{FileDiff, Row, Side};
+use yaar_diff::{Row, Side};
 use yaar_frame::AskError;
 use yaar_link::{
     ChangedFile, Fact, FileStatus, FlowForm, HistoryEntry, Reply, Request, Step, TurnId,
@@ -727,13 +727,10 @@ impl ReviewPane {
                     Ok((old, new)) => {
                         // The diff of a large file takes long enough to be seen: it is made off the
                         // thread that draws.
-                        let diff = cx
-                            .background_spawn(async move { FileDiff::new(&old, &new) })
+                        let (diff, max_chars) = cx
+                            .background_spawn(async move { crate::compute_diff(&old, &new) })
                             .await;
-                        FileContent::Diff(Box::new(ShownDiff {
-                            diff,
-                            emphasis: RefCell::default(),
-                        }))
+                        FileContent::Diff(Box::new(ShownDiff::from_parts(diff, max_chars)))
                     }
                     Err(why) => FileContent::Unshown(why),
                 },

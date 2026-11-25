@@ -494,6 +494,35 @@ struct Asked {
 struct ShownDiff {
     diff: FileDiff,
     emphasis: RefCell<HashMap<usize, Rc<Emphasis>>>,
+    max_line_chars: usize,
+}
+
+impl ShownDiff {
+    pub(crate) fn from_parts(diff: FileDiff, max_line_chars: usize) -> Self {
+        Self {
+            diff,
+            emphasis: RefCell::default(),
+            max_line_chars,
+        }
+    }
+}
+
+pub(crate) fn compute_diff(old: &[u8], new: &[u8]) -> (FileDiff, usize) {
+    let diff = FileDiff::new(old, new);
+    let max_chars = max_line_chars(&diff);
+    (diff, max_chars)
+}
+
+fn max_line_chars(diff: &FileDiff) -> usize {
+    let mut max_chars = 0usize;
+    for side in [Side::Old, Side::New] {
+        for line in 0..diff.line_count(side) {
+            let text = String::from_utf8_lossy(diff.line(side, line));
+            let end = text.floor_char_boundary(draw::DRAWN_BYTES);
+            max_chars = max_chars.max(text[..end].chars().count());
+        }
+    }
+    max_chars
 }
 
 /// The reviewer is on one line while a diff is shown. Lines have one order whatever the layout,
@@ -513,6 +542,7 @@ pub struct ReviewPane {
     unread: Range<usize>,
     list: ListState,
     list_width: Pixels,
+    h_scroll: Pixels,
     reviews_of: Option<WorkspaceId>,
     reviews: Option<WorkspaceReviews>,
     saves: Vec<Save>,
@@ -583,6 +613,7 @@ impl ReviewPane {
             unread: 0..0,
             list: ListState::new(0, ListAlignment::Top, px(200.)),
             list_width: px(0.),
+            h_scroll: px(0.),
             reviews_of: None,
             reviews: None,
             saves: Vec::new(),
@@ -624,6 +655,60 @@ impl ReviewPane {
 
     pub fn layout(&self) -> Layout {
         self.layout
+    }
+
+    pub fn h_scroll(&self) -> Pixels {
+        self.h_scroll
+    }
+
+    pub(crate) fn max_h_scroll(&self) -> Pixels {
+        let max_chars = self
+            .files
+            .iter()
+            .filter_map(|held| match &held.content {
+                FileContent::Diff(shown) => Some(shown.max_line_chars),
+                FileContent::Unshown(_) => None,
+            })
+            .max()
+            .unwrap_or(0);
+        if max_chars == 0 {
+            return px(0.);
+        }
+        let viewport = if self.list_width > px(0.) {
+            self.list_width
+        } else {
+            self.list.viewport_bounds().size.width
+        };
+        if viewport <= px(0.) {
+            return px(0.);
+        }
+        let code_width = match self.layout {
+            Layout::Unified => (viewport - px(125.)).max(px(0.)),
+            Layout::Split => (viewport / 2. - px(74.)).max(px(0.)),
+        };
+        let content_width = px(max_chars as f32 * 8.0) + yaar_ui::metrics::SPACE_6;
+        (content_width - code_width).max(px(0.))
+    }
+
+    pub(crate) fn scroll_horizontal(&mut self, event: &ScrollEvent, cx: &mut Context<Self>) {
+        let (dx, dy) = match event.delta {
+            ScrollDelta::Pixels(delta) => (delta.x, delta.y),
+            ScrollDelta::Lines(lines) => (px(lines.x * 24.), px(lines.y * 24.)),
+        };
+        let delta_x = if dx != px(0.) {
+            dx
+        } else if event.modifiers.shift && dy != px(0.) {
+            dy
+        } else {
+            return;
+        };
+        let max = self.max_h_scroll();
+        let next = (self.h_scroll - delta_x).clamp(px(0.), max);
+        if next != self.h_scroll {
+            self.h_scroll = next;
+            self.scrolled();
+            cx.notify();
+        }
     }
 
     pub fn rows(&self) -> &[PaneRow] {
@@ -852,6 +937,7 @@ impl ReviewPane {
                 self.unread = 0..0;
                 self.listed = None;
                 self.position = None;
+                self.h_scroll = px(0.);
                 self.rebuild(cx);
             }
             return;
@@ -885,6 +971,7 @@ impl ReviewPane {
             .is_some_and(|shown| shown.workspace == changes.workspace);
         if !same_workspace {
             self.listed = None;
+            self.h_scroll = px(0.);
         }
         let files = changes.files.clone();
         self.changes = Some(changes);
@@ -906,6 +993,7 @@ impl ReviewPane {
             );
         } else {
             self.position = None;
+            self.h_scroll = px(0.);
             self.to_top();
         }
         self.by_path = files
@@ -941,13 +1029,10 @@ impl ReviewPane {
                     Ok(Ok((old, new))) => {
                         // The diff of a large file takes long enough to be seen: it is made off the
                         // drawing thread.
-                        let diff = cx
-                            .background_spawn(async move { FileDiff::new(&old, &new) })
+                        let (diff, max_chars) = cx
+                            .background_spawn(async move { compute_diff(&old, &new) })
                             .await;
-                        FileContent::Diff(Box::new(ShownDiff {
-                            diff,
-                            emphasis: RefCell::default(),
-                        }))
+                        FileContent::Diff(Box::new(ShownDiff::from_parts(diff, max_chars)))
                     }
                     Ok(Err(why)) => FileContent::Unshown(why),
                     Err(_) => FileContent::Unshown(Unshown::Refused),
@@ -1178,6 +1263,7 @@ impl ReviewPane {
             Layout::Unified => Layout::Split,
             Layout::Split => Layout::Unified,
         };
+        self.h_scroll = px(0.);
         self.rebuild(cx);
         if let Some(now) = self.position_row {
             match was_delta {

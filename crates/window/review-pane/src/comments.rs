@@ -704,6 +704,7 @@ impl ReviewPane {
         }
         if added {
             self.rebuild(cx);
+            self.scroll_file_to_comment(&view.thread, &view.comment);
         } else {
             cx.notify();
         }

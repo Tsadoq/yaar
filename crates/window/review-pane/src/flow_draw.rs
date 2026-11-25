@@ -169,6 +169,7 @@ impl ReviewPane {
                         Chip::new(label)
                             .mono()
                             .max_width(px(210.))
+                            .tooltip("Click to change comparison base branch")
                             .on_click("review-base-chip", |_, window, cx| {
                                 window.dispatch_action(Box::new(SetBase), cx)
                             }),
@@ -187,6 +188,7 @@ impl ReviewPane {
             .kind(ButtonKind::Primary)
             .small()
             .disabled(!has_review)
+            .tooltip("Queue unsent review comments for your next agent message (a)")
             .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
                 if attached {
                     pane.detach_review(&DetachReview, window, cx);
@@ -205,8 +207,12 @@ impl ReviewPane {
                 .gap(SPACE_3)
                 .child(
                     Button::new("review-mark-reviewed", "Mark reviewed")
+                        .kind(ButtonKind::Ghost)
                         .small()
                         .disabled(!has_review)
+                        .tooltip(
+                            "Mark current changes reviewed — future turns diff from here (Shift-R)",
+                        )
                         .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                             pane.mark_reviewed(&MarkReviewed, window, cx);
                         })),
@@ -214,7 +220,9 @@ impl ReviewPane {
                 .child(attach)
                 .child(
                     Button::new("review-commit", "Commit…")
+                        .kind(ButtonKind::Ghost)
                         .small()
+                        .tooltip("Stage all changes and commit with a message (Shift-C)")
                         .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                             pane.commit(&Commit, window, cx);
                         })),
@@ -264,6 +272,7 @@ impl ReviewPane {
         let follow = Toggle::new("flow-follow", follow_label)
             .on(self.following == Following::On)
             .paused(matches!(self.following, Following::Paused { .. }))
+            .tooltip("Automatically follow the agent's live reads and edits (Shift-F)")
             .selector("flow-follow")
             .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                 pane.toggle_follow(&ToggleFollow, window, cx);
@@ -318,7 +327,8 @@ impl ReviewPane {
             .items_center()
             .gap(SPACE_4)
             .px(SPACE_5)
-            .py(SPACE_3)
+            .py(SPACE_2)
+            .bg(palette.fold_ground)
             .overflow_hidden()
             .whitespace_nowrap()
             .border_b_1()
