@@ -1,11 +1,13 @@
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::component::input::{Escape, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use yaar_link::{Age, Fact, Head, Hello, SessionId, Setting, TerminalPlace, WorkspaceId};
-use yaar_ui::metrics::{GUTTER, SPACE_6};
+use yaar_ui::metrics::{GUTTER, SPACE_6, cursor_col_resize, cursor_row_resize};
 use yaar_ui::pieces::{Banner, Button, ButtonKind, EmptyState, Field, Pane as UiPane, Toast, Tone};
 use yaar_ui::themes::{Appearance, palette};
 use yaar_ui::typography::{TypeRole, Typed};
@@ -110,10 +112,16 @@ pub struct Frame {
     composed: Option<Composed>,
 }
 
+struct PaneSlot {
+    pane: Pane,
+    slot_focus: FocusHandle,
+    _focus_subscriptions: Vec<Subscription>,
+}
+
 struct Composed {
     models: Models,
     sidebar: Entity<Sidebar>,
-    panes: Vec<Pane>,
+    panes: Vec<PaneSlot>,
     /// Where the focus is while it is in no pane and no field: an action reaches the Frame only
     /// from a place inside what it draws.
     focus: FocusHandle,
@@ -121,6 +129,9 @@ struct Composed {
     worktree_field: Option<LineField>,
     settings: Option<OpenScreen>,
     beside: Beside,
+    split_ratio: Option<f32>,
+    dragging_split: bool,
+    panes_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     worktree_notice: Option<String>,
     no_dialog: Option<String>,
     /// The last turn that ended in a workspace not on screen, until that workspace comes on screen
@@ -175,6 +186,11 @@ impl Frame {
             if let Some(composed) = &mut frame.composed {
                 let place = Beside::of(settings.read(cx).terminal_place());
                 if composed.beside != place {
+                    let was_below = composed.beside == Beside::Below;
+                    let now_below = place == Beside::Below;
+                    if was_below != now_below {
+                        composed.split_ratio = None;
+                    }
                     composed.beside = place;
                     cx.notify();
                 }
@@ -234,12 +250,28 @@ impl Frame {
         })
         .detach();
 
-        let panes: Vec<Pane> = panes
+        let panes: Vec<PaneSlot> = panes
             .into_iter()
-            .map(|build| build(&models, window, cx))
+            .map(|build| {
+                let pane = build(&models, window, cx);
+                let slot_focus = cx.focus_handle();
+                let target = pane.focus.clone();
+                let _focus_subscriptions = vec![
+                    cx.on_focus_in(&slot_focus, window, |_, _, cx| cx.notify()),
+                    cx.on_focus_out(&slot_focus, window, |_, _, _, cx| cx.notify()),
+                    cx.on_focus(&slot_focus, window, move |_, window, cx| {
+                        target.focus(window, cx);
+                    }),
+                ];
+                PaneSlot {
+                    pane,
+                    slot_focus,
+                    _focus_subscriptions,
+                }
+            })
             .collect();
         match panes.first() {
-            Some(first) => first.focus.focus(window, cx),
+            Some(first) => first.pane.focus.focus(window, cx),
             None => focus.focus(window, cx),
         }
 
@@ -258,6 +290,9 @@ impl Frame {
                 worktree_field: None,
                 settings: None,
                 beside,
+                split_ratio: None,
+                dragging_split: false,
+                panes_bounds: Rc::new(Cell::new(None)),
                 worktree_notice: None,
                 no_dialog: None,
                 finished_elsewhere: None,
@@ -354,7 +389,7 @@ impl Frame {
         self.composed
             .iter()
             .flat_map(|composed| &composed.panes)
-            .map(|pane| pane.name)
+            .map(|slot| slot.pane.name)
             .collect()
     }
 
@@ -756,14 +791,14 @@ impl Frame {
         let holding = composed
             .panes
             .iter()
-            .position(|pane| pane.focus.contains_focused(window, cx));
+            .position(|slot| slot.slot_focus.contains_focused(window, cx));
         let to = match (holding, forward) {
             (Some(at), true) => (at + 1) % count,
             (Some(at), false) => (at + count - 1) % count,
             (None, true) => 0,
             (None, false) => count - 1,
         };
-        composed.panes[to].focus.focus(window, cx);
+        composed.panes[to].pane.focus.focus(window, cx);
     }
 
     fn show_finished_turn(&mut self, _: &ShowFinishedTurn, _: &mut Window, cx: &mut Context<Self>) {
@@ -906,33 +941,42 @@ impl Frame {
             .into_any_element()
     }
 
-    fn laid_out(&self, composed: &Composed) -> Div {
-        let slot = |pane: &Pane| {
-            UiPane::new()
-                .selector(format!("frame-pane-{}", pane.name))
-                .flex_1()
+    fn laid_out(&self, composed: &Composed, window: &Window, cx: &Context<Self>) -> Div {
+        let palette = palette(cx);
+        let pane_box = |slot: &PaneSlot| {
+            let focused = slot.slot_focus.contains_focused(window, cx);
+            div()
+                .track_focus(&slot.slot_focus)
+                .flex()
+                .flex_col()
                 .min_w_0()
                 .min_h_0()
-                .child(pane.view.clone())
+                .child(
+                    UiPane::new()
+                        .selector(format!("frame-pane-{}", slot.pane.name))
+                        .focused(focused)
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .child(slot.pane.view.clone()),
+                )
         };
-        let (first_pane, others) = composed.panes.split_first().expect("a pane to lay out");
+        let (first_slot, others) = composed.panes.split_first().expect("a pane to lay out");
         if others.is_empty() {
             return div()
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
                 .flex()
-                .child(slot(first_pane));
+                .child(pane_box(first_slot).flex_1());
         }
         let below = composed.beside == Beside::Below;
-        let (first_weight, rest_weight) = if below { (68., 32.) } else { (62., 38.) };
-        let mut first = UiPane::new()
-            .selector(format!("frame-pane-{}", first_pane.name))
-            .flex_basis(px(0.))
-            .flex_shrink(1.)
-            .min_w_0()
-            .min_h_0()
-            .child(first_pane.view.clone());
+        let (first_weight, rest_weight) = match composed.split_ratio {
+            Some(ratio) => (ratio, 1.0 - ratio),
+            None if below => (68., 32.),
+            None => (62., 38.),
+        };
+        let mut first = pane_box(first_slot).flex_basis(px(0.)).flex_shrink(1.);
         first.style().flex_grow = Some(first_weight);
 
         let mut rest = if below {
@@ -946,14 +990,75 @@ impl Frame {
         .flex_shrink(1.)
         .min_w_0()
         .min_h_0()
-        .children(others.iter().map(slot));
+        .children(others.iter().map(|slot| pane_box(slot).flex_1()));
         rest.style().flex_grow = Some(rest_weight);
 
-        let area = div().flex_1().min_w_0().min_h_0().flex().gap(GUTTER);
+        let dragging = composed.dragging_split;
+        let grip = if below {
+            div().h(px(2.)).w(px(32.))
+        } else {
+            div().w(px(2.)).h(px(32.))
+        }
+        .when(dragging, |el| el.bg(palette.focus))
+        .when(!dragging, |el| {
+            el.group_hover("frame-split-handle", move |style| style.bg(palette.edge))
+        });
+
+        let handle = div()
+            .id("frame-split-handle")
+            .debug_selector(|| "frame-split-handle".to_owned())
+            .group("frame-split-handle")
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .map(|el| {
+                if below {
+                    cursor_row_resize(el.h(GUTTER).w_full())
+                } else {
+                    cursor_col_resize(el.w(GUTTER).h_full())
+                }
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|frame, event: &MouseDownEvent, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    let Some(composed) = &mut frame.composed else {
+                        return;
+                    };
+                    if event.click_count >= 2 {
+                        composed.dragging_split = false;
+                        composed.split_ratio = None;
+                    } else {
+                        composed.dragging_split = true;
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(grip);
+
+        let measured = composed.panes_bounds.clone();
+        let measure = canvas(
+            |bounds, _, _| bounds,
+            move |_, bounds, _, _| {
+                measured.set(Some(bounds));
+            },
+        )
+        .absolute()
+        .size_full();
+
+        let area = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .child(measure);
         match composed.beside {
-            Beside::Right => area.flex_row().child(first).child(rest),
-            Beside::Left => area.flex_row().child(rest).child(first),
-            Beside::Below => area.flex_col().child(first).child(rest),
+            Beside::Right => area.flex_row().child(first).child(handle).child(rest),
+            Beside::Left => area.flex_row().child(rest).child(handle).child(first),
+            Beside::Below => area.flex_col().child(first).child(handle).child(rest),
         }
     }
 
@@ -1024,7 +1129,7 @@ impl Render for Frame {
                         && composed.settings.is_none()
                         && let Some(first) = composed.panes.first()
                     {
-                        first.focus.focus(window, cx);
+                        first.pane.focus.focus(window, cx);
                     }
                 });
             }
@@ -1108,7 +1213,7 @@ impl Render for Frame {
         } else if composed.showing_welcome {
             self.welcome(cx)
         } else {
-            self.laid_out(composed).into_any_element()
+            self.laid_out(composed, window, cx).into_any_element()
         };
         let status = (!connected && !composed.panes.is_empty()).then(|| {
             div()
@@ -1122,6 +1227,73 @@ impl Render for Frame {
             // would pull the focus from a pane at every click in the sidebar or on the notice. The
             // press never moves it.
             .on_any_mouse_down(|_, window, _| window.prevent_default())
+            .on_mouse_move(cx.listener(|frame, event: &MouseMoveEvent, _, cx| {
+                let Some(composed) = &mut frame.composed else {
+                    return;
+                };
+                if !composed.dragging_split {
+                    return;
+                }
+                if !event.dragging() {
+                    composed.dragging_split = false;
+                    cx.notify();
+                    return;
+                }
+                let Some(bounds) = composed.panes_bounds.get() else {
+                    return;
+                };
+                let ratio = match composed.beside {
+                    Beside::Right => {
+                        let span = f32::from(bounds.size.width - GUTTER);
+                        if span <= 0. {
+                            return;
+                        }
+                        (f32::from(event.position.x - bounds.origin.x) - f32::from(GUTTER) / 2.)
+                            / span
+                    }
+                    Beside::Left => {
+                        let span = f32::from(bounds.size.width - GUTTER);
+                        if span <= 0. {
+                            return;
+                        }
+                        1.0 - (f32::from(event.position.x - bounds.origin.x)
+                            - f32::from(GUTTER) / 2.)
+                            / span
+                    }
+                    Beside::Below => {
+                        let span = f32::from(bounds.size.height - GUTTER);
+                        if span <= 0. {
+                            return;
+                        }
+                        (f32::from(event.position.y - bounds.origin.y) - f32::from(GUTTER) / 2.)
+                            / span
+                    }
+                };
+                composed.split_ratio = Some(ratio.clamp(0.25, 0.80));
+                cx.notify();
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|frame, _: &MouseUpEvent, _, cx| {
+                    if let Some(composed) = &mut frame.composed
+                        && composed.dragging_split
+                    {
+                        composed.dragging_split = false;
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|frame, _: &MouseUpEvent, _, cx| {
+                    if let Some(composed) = &mut frame.composed
+                        && composed.dragging_split
+                    {
+                        composed.dragging_split = false;
+                        cx.notify();
+                    }
+                }),
+            )
             .on_action(cx.listener(Self::open_folder))
             .on_action(cx.listener(Self::set_base))
             .on_action(cx.listener(Self::open_settings))

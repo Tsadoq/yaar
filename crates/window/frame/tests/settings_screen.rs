@@ -389,8 +389,8 @@ impl Window9 {
     }
 
     /// The row's `settings-chosen-<row>` mark is the chosen value's control (no mark when nothing
-    /// is chosen), and that control is painted as a primary button (`accent`), every other as a
-    /// secondary button (transparent ground with an `edge` border).
+    /// is chosen), and that control is painted as a selected secondary button (`raised` ground
+    /// with a `focus` border), every other as an unselected secondary button (`edge` border).
     fn assert_chosen_drawn(&mut self, row: &SettingRow) {
         let at = self.index_of(row);
         let shown = self.row(row);
@@ -421,11 +421,14 @@ impl Window9 {
         for (value, label) in shown.values.iter().enumerate() {
             let (ground, border) = self.painted_control(&Window9::value(at, value, label));
             if value == chosen {
-                assert!(
-                    ground == Some(palette.accent) || ground == Some(palette.accent_hover),
-                    "{row:?}: chosen value {value} ({label}) should be painted in accent ({:?} or {:?}), got {ground:?}",
-                    palette.accent,
-                    palette.accent_hover,
+                assert_eq!(
+                    ground,
+                    Some(palette.raised),
+                    "{row:?}: chosen value {value} ({label}) should be painted on the raised ground"
+                );
+                assert_eq!(
+                    border, palette.focus,
+                    "{row:?}: chosen value {value} ({label}) should carry the focus border"
                 );
             } else {
                 assert!(
