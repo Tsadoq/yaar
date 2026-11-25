@@ -121,6 +121,7 @@ request_kinds! {
     CreateWorktree = 38, User;
     GetStateSizes = 39, Window;
     CleanUpStates = 40, User;
+    CloseTerminal = 41, User;
 }
 
 impl RequestKind {
@@ -329,6 +330,10 @@ pub enum Request {
     /// what only such states held and the files of long reviews of sessions that no longer run.
     /// Answered with the sizes after.
     CleanUpStates,
+    /// Stops one terminal's program and its session, then forgets the terminal.
+    CloseTerminal {
+        terminal: TerminalId,
+    },
 }
 
 impl Request {
@@ -374,6 +379,7 @@ impl Request {
             Self::CreateWorktree { .. } => RequestKind::CreateWorktree,
             Self::GetStateSizes => RequestKind::GetStateSizes,
             Self::CleanUpStates => RequestKind::CleanUpStates,
+            Self::CloseTerminal { .. } => RequestKind::CloseTerminal,
         }
     }
 }
@@ -747,6 +753,7 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             write_size(out, *size);
         }
         Request::GetStateSizes | Request::CleanUpStates => {}
+        Request::CloseTerminal { terminal } => out.text(terminal.as_str()),
     }
 }
 
@@ -895,6 +902,9 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
         },
         RequestKind::GetStateSizes => Request::GetStateSizes,
         RequestKind::CleanUpStates => Request::CleanUpStates,
+        RequestKind::CloseTerminal => Request::CloseTerminal {
+            terminal: TerminalId::new(input.text()?),
+        },
     };
     Ok((id, request))
 }

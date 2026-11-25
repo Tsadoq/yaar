@@ -605,6 +605,9 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
             },
             RequestKind::GetStateSizes => Request::GetStateSizes,
             RequestKind::CleanUpStates => Request::CleanUpStates,
+            RequestKind::CloseTerminal => Request::CloseTerminal {
+                terminal: TerminalId::new("0".repeat(32)),
+            },
         };
         assert_eq!(
             window.ask(request),

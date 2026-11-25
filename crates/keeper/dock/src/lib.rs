@@ -540,25 +540,41 @@ impl Dock {
         Ok(())
     }
 
+    /// Hangs up, then after [`STOP_STEP`] terminates, then kills every process of one terminal's
+    /// session, on a background thread so the caller does not wait. Returns `false` if no live
+    /// terminal has `id`.
+    pub fn stop_one(&self, id: &TerminalId) -> bool {
+        let Some(terminal) = self.inner.state().live.get(id).cloned() else {
+            return false;
+        };
+        terminal.stop_typing();
+        let session = terminal.pid();
+        let inner = Arc::clone(&self.inner);
+        let spawned = std::thread::Builder::new()
+            .name("dock-stopper".to_owned())
+            .spawn(move || {
+                stop_sessions(&[session]);
+                inner.left_behind_sessions();
+            });
+        if let Ok(thread) = spawned {
+            let mut threads = self.threads();
+            threads.retain(|thread| !thread.is_finished());
+            threads.push(thread);
+        } else {
+            for pid in session::members(&[session]) {
+                // SAFETY: `kill` only sends; `ESRCH` from a vanished process is fine.
+                unsafe { libc::kill(pid, libc::SIGHUP) };
+            }
+        }
+        true
+    }
+
     /// Hangs up, then after [`STOP_STEP`] terminates, then kills every process of each terminal's
     /// session. A process that left its session, as a daemon does, is not reached.
     pub fn stop_all(&self) {
         let sessions = self.begin_stopping();
         let _stopping = Stopping(&self.inner);
-        for signal in STOP_SIGNALS {
-            let members = session::members(&sessions);
-            if members.is_empty() {
-                break;
-            }
-            for pid in members {
-                // SAFETY: `kill` only sends; `ESRCH` from a vanished process is fine.
-                unsafe { libc::kill(pid, signal) };
-            }
-            let deadline = Instant::now() + STOP_STEP;
-            while !session::members(&sessions).is_empty() && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
+        stop_sessions(&sessions);
         {
             let mut state = self.inner.state();
             while state.untold > 0 {
@@ -598,6 +614,23 @@ impl Dock {
         sessions.sort_unstable();
         sessions.dedup();
         sessions
+    }
+}
+
+fn stop_sessions(sessions: &[libc::pid_t]) {
+    for signal in STOP_SIGNALS {
+        let members = session::members(sessions);
+        if members.is_empty() {
+            break;
+        }
+        for pid in members {
+            // SAFETY: `kill` only sends; `ESRCH` from a vanished process is fine.
+            unsafe { libc::kill(pid, signal) };
+        }
+        let deadline = Instant::now() + STOP_STEP;
+        while !session::members(sessions).is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
@@ -822,5 +855,71 @@ mod tests {
         );
         assert_eq!(launcher.folder, PathBuf::from("/work"));
         assert_eq!((launcher.size.columns, launcher.size.rows), (100, 30));
+    }
+
+    #[test]
+    fn stop_one_terminates_one_running_terminal_and_emits_ended_without_blocking_or_touching_others()
+     {
+        use std::sync::mpsc;
+
+        let dock = Dock::new();
+        let unknown = TerminalId::random().expect("an id");
+        assert!(!dock.stop_one(&unknown));
+
+        let sleeper = || {
+            Start::program(
+                PathBuf::from("sleep"),
+                vec![OsString::from("300")],
+                PathBuf::from("/"),
+                Size {
+                    columns: 80,
+                    rows: 24,
+                },
+            )
+        };
+        let (first_tx, first_rx) = mpsc::channel();
+        let (second_tx, second_rx) = mpsc::channel();
+        let first = TerminalId::random().expect("first id");
+        let second = TerminalId::random().expect("second id");
+        dock.open(
+            first.clone(),
+            sleeper(),
+            Box::new(move |event| {
+                let _ = first_tx.send(event);
+            }),
+        )
+        .expect("open first");
+        dock.open(
+            second.clone(),
+            sleeper(),
+            Box::new(move |event| {
+                let _ = second_tx.send(event);
+            }),
+        )
+        .expect("open second");
+        assert_eq!(dock.running(), 2);
+
+        let started = Instant::now();
+        assert!(dock.stop_one(&first));
+        assert!(
+            started.elapsed() < STOP_STEP,
+            "stop_one blocked for {:?}",
+            started.elapsed()
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let ended = loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "timed out waiting for Event::Ended");
+            if let Ok(Event::Ended(how)) = first_rx.recv_timeout(left) {
+                break how;
+            }
+        };
+        assert!(matches!(ended, Ending::Signalled(_) | Ending::Exited(_)));
+        assert_eq!(dock.running(), 1);
+        assert!(
+            second_rx.try_recv().is_err(),
+            "stopping one terminal must not end another"
+        );
     }
 }
