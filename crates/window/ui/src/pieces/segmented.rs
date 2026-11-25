@@ -68,7 +68,7 @@ impl RenderOnce for Segmented {
                 let handler = self.on_select.clone();
                 let segment = div()
                     .id(ElementId::NamedChild(parent.clone(), key.clone()))
-                    .px(px(9.))
+                    .px(px(7.))
                     .py(SPACE_1)
                     .rounded(RADIUS_INLINE)
                     .typed(TypeRole::Body)

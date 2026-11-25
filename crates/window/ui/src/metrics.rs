@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui_kit::{BoxShadow, FontFeatures, Pixels, hsla, point, px};
+use gpui_kit::{BoxShadow, CursorStyle, FontFeatures, Pixels, Styled, hsla, point, px};
 
 pub const RADIUS_WINDOW: Pixels = px(12.);
 pub const RADIUS_CARD: Pixels = px(10.);
@@ -46,6 +46,11 @@ pub fn shadow_card() -> Vec<BoxShadow> {
 /// Equal-width digits. A function, not a constant: the feature list is a shared allocation.
 pub fn tabular() -> FontFeatures {
     FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)]))
+}
+
+/// Text-beam cursor for painted terminal surfaces.
+pub fn ibeam<T: Styled>(element: T) -> T {
+    element.cursor(CursorStyle::IBeam)
 }
 
 #[cfg(test)]
