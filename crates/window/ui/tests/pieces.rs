@@ -3,15 +3,20 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
+use gpui_kit::component::input::{InputState, TextareaState};
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{
-    AnyElement, AppContext, Bounds, Context, Hsla, IntoElement, Modifiers, ParentElement, Pixels,
-    Render, Styled, TestAppContext, VisualTestContext, Window, WindowBounds, WindowOptions, div,
-    point, px, size,
+    AnyElement, AppContext, BorderStyle, Bounds, Context, Entity, Hsla, InteractiveElement,
+    IntoElement, Modifiers, ParentElement, Pixels, Render, Styled, TestAppContext,
+    VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px, size,
 };
+use yaar_ui::colour::composited;
 use yaar_ui::pieces::{
-    Button, ButtonKind, Chip, CountBadge, Segmented, State, StateDot, Tabs, Toggle, Tone,
+    Avatar, Banner, Button, ButtonKind, Card, Chip, CountBadge, Divider, EmptyState, Field,
+    ListRow, Pane, Pill, Popover, SectionLabel, Segmented, State, StateDot, Tabs, Toast, Toggle,
+    Tone,
 };
 use yaar_ui::themes::{Appearance, DARK, LIGHT, Themes, palette, set_applied};
 use yaar_ui::tokens::Palette;
@@ -141,9 +146,16 @@ impl Shown {
     }
 
     /// The border colour the element is drawn with. GPUI paints a bordered, unfilled quad in
-    /// clipped strips, which all carry it.
+    /// clipped strips, which all carry it; a filled one is a quad without a border and the strips.
     fn border(&mut self, selector: &str) -> Hsla {
-        let quads = self.quads_at(selector);
+        let all = self.quads_at(selector);
+        let bordered: Vec<_> = all
+            .iter()
+            .filter(|quad| quad.border_widths != Default::default())
+            .cloned()
+            .collect();
+        // A border that is fully transparent is not painted: the quad then has no widths.
+        let quads = if bordered.is_empty() { all } else { bordered };
         let first = quads
             .first()
             .unwrap_or_else(|| panic!("{selector}: no quad at its bounds"))
@@ -652,5 +664,682 @@ fn a_selector_given_to_a_piece_finds_its_bounds(cx: &mut TestAppContext) {
         );
         let mut unnamed = Shown::open(LIGHT, cx, move || make(None));
         assert!(!unnamed.is_drawn("mine"), "{name}");
+    }
+}
+
+impl Shown {
+    /// The corner radius of the element's own quad, in logical pixels.
+    fn radius(&mut self, selector: &str) -> f32 {
+        let scale = self.cx.update(|window, _| window.scale_factor());
+        let quads = self.quads_at(selector);
+        let quad = quads
+            .first()
+            .unwrap_or_else(|| panic!("{selector}: no quad at its bounds"));
+        quad.corner_radii.top_left.0 / scale
+    }
+
+    fn window_bounds(&mut self) -> Bounds<Pixels> {
+        self.cx.update(|window, _| window.bounds())
+    }
+
+    /// Draws the frame again after something the pieces read has changed.
+    fn redraw(&mut self) {
+        self.cx.update(|window, _| window.refresh());
+        self.cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+fn a_pane_is_painted_on_the_pane_ground_inside_an_edge_border(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            Pane::new()
+                .w(px(300.))
+                .h(px(100.))
+                .selector("pane")
+                .child(div().child("inside"))
+                .into_any_element()
+        },
+        |shown| {
+            let palette = shown.palette();
+            assert_eq!(shown.ground("pane"), Some(palette.pane));
+            assert_eq!(shown.border("pane"), palette.edge);
+            assert_eq!(shown.radius("pane"), 10.);
+            // The layout methods the pane takes reach it.
+            assert_eq!(shown.bounds("pane").size, size(px(300.), px(100.)));
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_card_is_on_the_window_ground_in_an_edge_border_and_a_dashed_one_is_an_outline(
+    cx: &mut TestAppContext,
+) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(10.))
+                .child(Card::new().selector("card").child(div().child("a thread")))
+                .child(
+                    Card::new()
+                        .dashed()
+                        .selector("end")
+                        .child(div().child("the end")),
+                )
+                .into_any_element()
+        },
+        |shown| {
+            let palette = shown.palette();
+            assert_eq!(shown.ground("card"), Some(palette.window));
+            assert_eq!(shown.border("card"), palette.edge);
+            assert_eq!(shown.radius("card"), 10.);
+            assert_eq!(shown.quads_at("card")[0].border_style, BorderStyle::Solid);
+            assert_eq!(shown.ground("end"), None);
+            assert_eq!(shown.border("end"), palette.edge);
+            assert!(
+                shown
+                    .quads_at("end")
+                    .iter()
+                    .all(|quad| quad.border_style == BorderStyle::Dashed)
+            );
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_cards_header_sits_above_its_children_under_a_separator(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            Card::new()
+                .selector("card")
+                .header(
+                    div()
+                        .id("title")
+                        .debug_selector(|| "title".into())
+                        .child("Thread"),
+                )
+                .child(div().debug_selector(|| "body".into()).child("text"))
+                .into_any_element()
+        },
+        |shown| {
+            let (card, header) = (shown.bounds("card"), shown.bounds("card-header"));
+            let (title, body) = (shown.bounds("title"), shown.bounds("body"));
+            assert!(inside(card, header) && inside(header, title));
+            assert!(header.bottom() <= body.top(), "{header:?} {body:?}");
+            assert!(header.size.height >= px(32.));
+            // The rule under the header is drawn in the separator.
+            let separator = shown.palette().separator;
+            let scale = shown.cx.update(|window, _| window.scale_factor());
+            let at = header.scale(scale);
+            let quads = shown.cx.update(|window, _| window.painted_quads());
+            assert!(quads.iter().any(|quad| {
+                quad.bounds == at
+                    && quad.border_color == separator
+                    && quad.border_widths.bottom.0 > 0.
+            }));
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_selected_row_is_painted_raised_and_an_unselected_one_is_not(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .w(px(300.))
+                .flex()
+                .flex_col()
+                .child(
+                    ListRow::new("one")
+                        .selected(true)
+                        .selector("one")
+                        .child("One"),
+                )
+                .child(ListRow::new("two").selector("two").child("Two"))
+                .into_any_element()
+        },
+        |shown| {
+            let raised = shown.palette().raised;
+            assert_eq!(shown.ground("one"), Some(raised));
+            assert_eq!(shown.ground("two"), None);
+            assert_eq!(shown.radius("one"), 6.);
+            // Both fill the width they are given.
+            assert_eq!(shown.bounds("one").size.width, px(300.));
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_row_under_the_pointer_is_raised_and_a_click_on_it_is_reported(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let clicks = counter();
+        let heard = clicks.clone();
+        let mut shown = Shown::open(theme, cx, move || {
+            let heard = heard.clone();
+            ListRow::new("row")
+                .selector("row")
+                .on_click(move |_, _, _| heard.set(heard.get() + 1))
+                .child("Row")
+                .into_any_element()
+        });
+        let raised = shown.palette().raised;
+        assert_eq!(shown.ground("row"), None, "{theme}");
+        shown.hover("row");
+        assert_eq!(shown.ground("row"), Some(raised), "{theme}");
+        shown.click("row");
+        assert_eq!(clicks.get(), 1, "{theme}");
+    }
+}
+
+#[gpui_kit::test]
+fn a_nested_row_starts_twenty_two_pixels_right_of_its_parent(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .w(px(300.))
+                .flex()
+                .flex_col()
+                .child(
+                    ListRow::new("parent")
+                        .selector("parent")
+                        .child(div().debug_selector(|| "parent-text".into()).child("repo")),
+                )
+                .child(
+                    ListRow::new("child").nested().selector("child").child(
+                        div()
+                            .debug_selector(|| "child-text".into())
+                            .child("worktree"),
+                    ),
+                )
+                .into_any_element()
+        },
+        |shown| {
+            let offset = |shown: &mut Shown, row: &str, text: &str| {
+                shown.bounds(text).left() - shown.bounds(row).left()
+            };
+            assert_eq!(offset(shown, "parent", "parent-text"), px(10.));
+            assert_eq!(offset(shown, "child", "child-text"), px(22.));
+            assert_eq!(shown.bounds("child").left(), shown.bounds("parent").left());
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_section_label_is_drawn_with_its_text(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            SectionLabel::new("Workspaces")
+                .selector("label")
+                .into_any_element()
+        },
+        |shown| {
+            let label = shown.bounds("label");
+            assert!(label.size.width > px(0.) && label.size.height > px(0.));
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_banner_is_painted_on_its_tones_wash_over_the_pane_and_the_live_one_on_the_plain_wash(
+    cx: &mut TestAppContext,
+) {
+    let tones: [(Tone, Token); 4] = [
+        (Tone::Ok, |p| p.ok),
+        (Tone::Warn, |p| p.warn),
+        (Tone::Info, |p| p.info),
+        (Tone::Danger, |p| p.danger),
+    ];
+    for theme in THEMES {
+        let mut shown = Shown::open(theme, cx, || {
+            Banner::new("Plain").selector("banner").into_any_element()
+        });
+        let palette = shown.palette();
+        // The stage is the window ground, and the banner's own ground does not show it through.
+        let plain = composited(faded(palette.text, 0.03), palette.pane);
+        assert_eq!(shown.ground("banner"), Some(plain), "{theme}");
+
+        for (tone, token) in tones {
+            let mut shown = Shown::open(theme, cx, move || {
+                Banner::new("Notice")
+                    .tone(tone)
+                    .selector("banner")
+                    .into_any_element()
+            });
+            let palette = shown.palette();
+            let wanted = composited(faded(token(&palette), 0.08), palette.pane);
+            assert_eq!(shown.ground("banner"), Some(wanted), "{theme} {tone:?}");
+        }
+
+        let mut shown = Shown::open(theme, cx, || {
+            Banner::new("Working")
+                .live()
+                .selector("banner")
+                .into_any_element()
+        });
+        let palette = shown.palette();
+        let plain = composited(faded(palette.text, 0.03), palette.pane);
+        assert_eq!(shown.ground("banner"), Some(plain), "{theme} live");
+    }
+}
+
+#[gpui_kit::test]
+fn a_banner_holds_its_action_at_its_end(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .w(px(400.))
+                .child(
+                    Banner::new("Notice")
+                        .action(Button::new("act", "Retry").small().selector("act"))
+                        .selector("banner"),
+                )
+                .into_any_element()
+        },
+        |shown| {
+            let (banner, action) = (shown.bounds("banner"), shown.bounds("act"));
+            assert!(inside(banner, action));
+            assert!(
+                banner.right() - action.right() <= px(14.),
+                "{banner:?} {action:?}"
+            );
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_toast_stays_until_dismissed_and_reports_the_dismissal(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let gone = Rc::new(Cell::new(false));
+        let calls = counter();
+        let (flag, heard) = (gone.clone(), calls.clone());
+        let mut shown = Shown::open(theme, cx, move || {
+            if flag.get() {
+                return div().into_any_element();
+            }
+            let (flag, heard) = (flag.clone(), heard.clone());
+            Toast::new("toast", "Saved")
+                .selector("toast")
+                .action(Button::new("undo", "Undo").small().selector("undo"))
+                .on_dismiss(move |window, _| {
+                    heard.set(heard.get() + 1);
+                    flag.set(true);
+                    window.refresh();
+                })
+                .into_any_element()
+        });
+        let palette = shown.palette();
+        assert_eq!(shown.ground("toast"), Some(palette.raised), "{theme}");
+        assert_eq!(shown.border("toast"), palette.edge, "{theme}");
+        assert_eq!(shown.radius("toast"), 6., "{theme}");
+        assert!(inside(shown.bounds("toast"), shown.bounds("toast-dismiss")));
+        assert!(inside(shown.bounds("toast"), shown.bounds("undo")));
+
+        // Nothing but the dismissal takes it away, however long it is left.
+        shown
+            .cx
+            .executor()
+            .advance_clock(Duration::from_secs(3_600));
+        shown.redraw();
+        assert!(
+            shown.is_drawn("toast"),
+            "{theme}: still there after an hour"
+        );
+        assert_eq!(calls.get(), 0, "{theme}");
+
+        shown.click("toast-dismiss");
+        shown.cx.run_until_parked();
+        assert_eq!(calls.get(), 1, "{theme}");
+        assert!(!shown.is_drawn("toast"), "{theme}: gone once dismissed");
+    }
+}
+
+#[gpui_kit::test]
+fn a_pill_is_a_raised_pill_that_holds_its_action(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            Pill::new("pill", "Agent is working")
+                .action(Button::new("stop", "Stop").small().selector("stop"))
+                .selector("pill")
+                .into_any_element()
+        },
+        |shown| {
+            let palette = shown.palette();
+            assert_eq!(shown.ground("pill"), Some(palette.raised));
+            assert_eq!(shown.border("pill"), palette.edge);
+            let pill = shown.bounds("pill");
+            assert!(shown.radius("pill") >= f32::from(pill.size.height) / 2.);
+            assert!(inside(pill, shown.bounds("stop")));
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn the_two_avatars_are_round_22_pixel_discs_in_the_accent_and_the_raised_ground(
+    cx: &mut TestAppContext,
+) {
+    for theme in THEMES {
+        for (agent, token) in [
+            (false, (|p: &Palette| p.accent) as Token),
+            (true, |p| p.raised),
+        ] {
+            let mut shown = Shown::open(theme, cx, move || {
+                let avatar = if agent {
+                    Avatar::agent()
+                } else {
+                    Avatar::you()
+                };
+                avatar.selector("avatar").into_any_element()
+            });
+            let wanted = token(&shown.palette());
+            assert_eq!(
+                shown.ground("avatar"),
+                Some(wanted),
+                "{theme} agent: {agent}"
+            );
+            assert_eq!(shown.bounds("avatar").size, size(px(22.), px(22.)));
+            assert_eq!(shown.radius("avatar"), 11.);
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn an_empty_state_centres_its_title_lines_and_action(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            EmptyState::new("Nothing to review")
+                .line("The agent has not changed any file in this workspace yet.")
+                .action(Button::new("go", "Refresh").selector("go"))
+                .selector("empty")
+                .into_any_element()
+        },
+        |shown| {
+            let empty = shown.bounds("empty");
+            // The line is the widest part, so the button is what shows the centring.
+            let go = shown.bounds("go");
+            assert!(inside(empty, go));
+            assert!(go.left() > empty.left() + px(24.), "{empty:?} {go:?}");
+            let (left, right) = (go.left() - empty.left(), empty.right() - go.right());
+            assert!((left - right).abs() <= px(1.), "{left:?} {right:?}");
+            assert!(empty.size.height >= px(80.));
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_strong_divider_is_painted_in_edge_and_a_plain_one_in_separator(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .w(px(300.))
+                .h(px(100.))
+                .flex()
+                .flex_col()
+                .gap(px(10.))
+                .child(Divider::horizontal().selector("plain"))
+                .child(Divider::horizontal().strong().selector("strong"))
+                .child(
+                    div()
+                        .h(px(40.))
+                        .flex()
+                        .gap(px(10.))
+                        .child(Divider::vertical().selector("upright"))
+                        .child(Divider::vertical().strong().selector("upright-strong")),
+                )
+                .into_any_element()
+        },
+        |shown| {
+            let palette = shown.palette();
+            assert_eq!(shown.ground("plain"), Some(palette.separator));
+            assert_eq!(shown.ground("strong"), Some(palette.edge));
+            assert_eq!(shown.ground("upright"), Some(palette.separator));
+            assert_eq!(shown.ground("upright-strong"), Some(palette.edge));
+            assert_eq!(shown.bounds("plain").size, size(px(300.), px(1.)));
+            assert_eq!(shown.bounds("upright").size, size(px(1.), px(40.)));
+        },
+    );
+}
+
+/// Opens one piece that draws a toolkit input, whose state needs the window to exist.
+fn open_with_state<S: 'static>(
+    theme: &str,
+    cx: &mut TestAppContext,
+    make: impl FnOnce(&mut Window, &mut gpui_kit::Context<S>) -> S,
+    piece: impl Fn(&Entity<S>) -> AnyElement + 'static,
+) -> (Shown, Entity<S>) {
+    let cell: Rc<RefCell<Option<Entity<S>>>> = Rc::new(RefCell::new(None));
+    let seen = cell.clone();
+    let mut shown = Shown::open(theme, cx, move || match seen.borrow().as_ref() {
+        Some(state) => piece(state),
+        None => div().into_any_element(),
+    });
+    let state = shown.cx.update(|window, app| {
+        let state = app.new(|cx| make(window, cx));
+        state.update(app, |_, _| {});
+        state
+    });
+    *cell.borrow_mut() = Some(state.clone());
+    shown.redraw();
+    (shown, state)
+}
+
+#[gpui_kit::test]
+fn a_field_holds_the_kits_input_and_typing_into_it_changes_its_text(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let (mut shown, state) = open_with_state(theme, cx, InputState::new, |state| {
+            Field::input(state)
+                .footer(Button::new("save", "Save").small().selector("save"))
+                .selector("field")
+                .into_any_element()
+        });
+        let palette = shown.palette();
+        assert_eq!(shown.ground("field"), Some(palette.window), "{theme}");
+        assert_eq!(shown.border("field"), palette.edge, "{theme}");
+        assert_eq!(shown.radius("field"), 10., "{theme}");
+        let (field, input) = (shown.bounds("field"), shown.bounds("field-input"));
+        assert!(inside(field, input), "{field:?} {input:?}");
+        assert!(input.size.width > px(100.) && input.size.height > px(10.));
+        let (footer, save) = (shown.bounds("field-footer"), shown.bounds("save"));
+        assert!(input.bottom() <= footer.top() && inside(footer, save));
+
+        shown.cx.update(|window, app| {
+            state.update(app, |state, cx| state.focus(window, cx));
+        });
+        assert_eq!(state.read_with(&shown.cx, |s, _| s.value()), "");
+        shown.cx.simulate_keystrokes("h e l l o");
+        assert_eq!(
+            state.read_with(&shown.cx, |s, _| s.value()),
+            "hello",
+            "{theme}"
+        );
+        shown.cx.simulate_keystrokes("backspace x");
+        assert_eq!(
+            state.read_with(&shown.cx, |s, _| s.value()),
+            "hellx",
+            "{theme}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn a_textarea_field_takes_several_lines(cx: &mut TestAppContext) {
+    let (mut shown, state) = open_with_state(LIGHT, cx, TextareaState::new, |state| {
+        Field::textarea(state).selector("field").into_any_element()
+    });
+    let (field, input) = (shown.bounds("field"), shown.bounds("field-input"));
+    assert!(inside(field, input), "{field:?} {input:?}");
+    assert!(input.size.height >= px(40.), "{input:?}");
+    shown.cx.update(|window, app| {
+        state.update(app, |state, cx| state.focus(window, cx));
+    });
+    shown.cx.simulate_keystrokes("a enter b");
+    assert_eq!(state.read_with(&shown.cx, |s, _| s.value()), "a\nb");
+}
+
+/// A popover under test, placed by the anchor and the height of what it holds.
+fn popover_shown(
+    theme: &str,
+    cx: &mut TestAppContext,
+    anchor: Bounds<Pixels>,
+    height: Pixels,
+) -> Shown {
+    Shown::open(theme, cx, move || {
+        div()
+            .child(
+                Popover::new(anchor)
+                    .selector("pop")
+                    .child(div().h(height).child("hover text")),
+            )
+            .into_any_element()
+    })
+}
+
+#[gpui_kit::test]
+fn a_popover_opens_under_its_anchor_on_the_pane_ground(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let anchor = Bounds {
+            origin: point(px(30.), px(20.)),
+            size: size(px(60.), px(18.)),
+        };
+        let mut shown = popover_shown(theme, cx, anchor, px(60.));
+        let palette = shown.palette();
+        let pop = shown.bounds("pop");
+        assert_eq!(pop.left(), anchor.left(), "{theme}");
+        assert_eq!(pop.top(), anchor.bottom() + px(6.), "{theme}");
+        assert_eq!(pop.size.width, px(460.), "{theme}");
+        assert_eq!(shown.ground("pop"), Some(palette.pane), "{theme}");
+        assert_eq!(shown.border("pop"), palette.edge, "{theme}");
+        assert_eq!(shown.radius("pop"), 10., "{theme}");
+    }
+}
+
+#[gpui_kit::test]
+fn a_popover_near_the_right_edge_is_moved_to_stay_inside_the_window(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let near_right = Bounds {
+            origin: point(px(520.), px(20.)),
+            size: size(px(60.), px(18.)),
+        };
+        let mut shown = popover_shown(theme, cx, near_right, px(60.));
+        let (window, pop) = (shown.window_bounds(), shown.bounds("pop"));
+        assert!(inside(window, pop), "{theme}: {pop:?} in {window:?}");
+        assert_eq!(pop.size.width, px(460.), "{theme}");
+        assert!(pop.left() < near_right.left(), "{theme}: moved left");
+        assert_eq!(pop.top(), near_right.bottom() + px(6.), "{theme}");
+
+        // Under an anchor near the bottom there is no room below: it moves up.
+        let near_bottom = Bounds {
+            origin: point(px(100.), px(150.)),
+            size: size(px(60.), px(18.)),
+        };
+        let mut shown = popover_shown(theme, cx, near_bottom, px(100.));
+        let (window, pop) = (shown.window_bounds(), shown.bounds("pop"));
+        assert!(inside(window, pop), "{theme}: {pop:?} in {window:?}");
+        assert!(
+            pop.bottom() <= near_bottom.top(),
+            "{theme}: above the anchor, not over it: {pop:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn a_popover_in_a_window_narrower_than_itself_narrows_to_fit(cx: &mut TestAppContext) {
+    let mut shown = popover_shown(
+        LIGHT,
+        cx,
+        Bounds {
+            origin: point(px(10.), px(10.)),
+            size: size(px(40.), px(18.)),
+        },
+        px(40.),
+    );
+    shown.cx.simulate_resize(size(px(300.), px(200.)));
+    shown.redraw();
+    let (window, pop) = (shown.window_bounds(), shown.bounds("pop"));
+    assert!(inside(window, pop), "{pop:?} in {window:?}");
+    assert!(pop.size.width <= px(284.), "{pop:?}");
+}
+
+#[gpui_kit::test]
+fn a_selector_given_to_a_surface_piece_finds_its_bounds(cx: &mut TestAppContext) {
+    type Make = fn(Option<&'static str>) -> AnyElement;
+    let makers: [(&str, Make); 9] = [
+        ("pane", |s| named!(Pane::new(), s)),
+        ("card", |s| named!(Card::new(), s)),
+        ("row", |s| named!(ListRow::new("a"), s)),
+        ("label", |s| named!(SectionLabel::new("a"), s)),
+        ("banner", |s| named!(Banner::new("a"), s)),
+        ("toast", |s| named!(Toast::new("a", "a"), s)),
+        ("pill", |s| named!(Pill::new("a", "a"), s)),
+        ("avatar", |s| named!(Avatar::you(), s)),
+        ("empty", |s| named!(EmptyState::new("a"), s)),
+    ];
+    for (name, make) in makers {
+        let mut named = Shown::open(LIGHT, cx, move || make(Some("mine")));
+        let found = named.bounds("mine");
+        assert!(
+            found.size.width > px(0.) && found.size.height > px(0.),
+            "{name}: {found:?}"
+        );
+        let mut unnamed = Shown::open(LIGHT, cx, move || make(None));
+        assert!(!unnamed.is_drawn("mine"), "{name}");
+    }
+}
+
+#[gpui_kit::test]
+fn a_second_action_is_shown_beside_the_first_on_each_piece_that_takes_one(cx: &mut TestAppContext) {
+    type Make = fn() -> AnyElement;
+    let makers: [(&str, &str, Make); 4] = [
+        ("banner", "banner", || {
+            Banner::new("A language server is missing")
+                .action(Button::new("one", "Install").small().selector("one"))
+                .action(Button::new("two", "Not now").small().selector("two"))
+                .selector("banner")
+                .into_any_element()
+        }),
+        ("toast", "toast", || {
+            Toast::new("t", "Saved")
+                .action(Button::new("one", "Undo").small().selector("one"))
+                .action(Button::new("two", "View").small().selector("two"))
+                .selector("toast")
+                .into_any_element()
+        }),
+        ("pill", "pill", || {
+            Pill::new("p", "Working")
+                .action(Button::new("one", "Stop").small().selector("one"))
+                .action(Button::new("two", "Open").small().selector("two"))
+                .selector("pill")
+                .into_any_element()
+        }),
+        ("empty", "empty", || {
+            EmptyState::new("Nothing here")
+                .action(Button::new("one", "Refresh").selector("one"))
+                .action(Button::new("two", "Settings").selector("two"))
+                .selector("empty")
+                .into_any_element()
+        }),
+    ];
+    for theme in THEMES {
+        for (name, root, make) in makers {
+            let mut shown = Shown::open(theme, cx, make);
+            let (root, one, two) = (shown.bounds(root), shown.bounds("one"), shown.bounds("two"));
+            assert!(inside(root, one) && inside(root, two), "{theme} {name}");
+            // Beside each other in a row, or one under the other in the centred column.
+            assert!(
+                one.right() <= two.left() || one.bottom() <= two.top(),
+                "{theme} {name}: {one:?} {two:?}"
+            );
+        }
     }
 }

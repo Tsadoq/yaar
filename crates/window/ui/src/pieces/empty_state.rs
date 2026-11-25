@@ -1,0 +1,74 @@
+use gpui_kit::{
+    AnyElement, App, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window, div, px,
+};
+
+use super::{Button, marked};
+use crate::metrics::SPACE_5;
+use crate::themes::palette;
+use crate::typography::{TypeRole, Typed};
+
+/// What a pane shows when it has nothing to show: a title, a few lines and perhaps a button,
+/// centred.
+#[derive(IntoElement)]
+pub struct EmptyState {
+    title: SharedString,
+    lines: Vec<SharedString>,
+    actions: Vec<AnyElement>,
+    selector: Option<SharedString>,
+}
+
+impl EmptyState {
+    pub fn new(title: impl Into<SharedString>) -> Self {
+        EmptyState {
+            title: title.into(),
+            lines: Vec::new(),
+            actions: Vec::new(),
+            selector: None,
+        }
+    }
+
+    pub fn line(mut self, text: impl Into<SharedString>) -> Self {
+        self.lines.push(text.into());
+        self
+    }
+
+    /// Each call adds a button after the ones before.
+    pub fn action(mut self, button: Button) -> Self {
+        self.actions.push(button.into_any_element());
+        self
+    }
+
+    pub fn selector(mut self, selector: impl Into<SharedString>) -> Self {
+        self.selector = Some(selector.into());
+        self
+    }
+}
+
+impl RenderOnce for EmptyState {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let palette = palette(cx);
+        let lines = self.lines.into_iter().map(|line| {
+            div()
+                .typed(TypeRole::Body)
+                .text_color(palette.text_muted)
+                .child(line)
+        });
+        let state = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(SPACE_5)
+            .px(px(24.))
+            .py(px(40.))
+            .text_center()
+            .child(
+                div()
+                    .typed(TypeRole::Strong)
+                    .text_color(palette.text)
+                    .child(self.title),
+            )
+            .children(lines)
+            .children(self.actions);
+        marked(state, self.selector)
+    }
+}
