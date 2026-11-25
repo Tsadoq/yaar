@@ -23,7 +23,7 @@ use yaar_link::{
     TerminalPlace, TerminalSize, WorkspaceId,
 };
 use yaar_ui::metrics::{SPACE_2, SPACE_3, SPACE_4, SPACE_5};
-use yaar_ui::pieces::{Banner, Chip, Divider, EmptyState, SectionLabel, Tone};
+use yaar_ui::pieces::{Banner, Button, ButtonKind, Chip, Divider, EmptyState, SectionLabel, Tone};
 use yaar_ui::themes::palette;
 
 pub use attachment::ADDRESS_EACH_COMMENT;
@@ -39,6 +39,7 @@ actions!(
     terminal,
     [
         NewTerminal,
+        CloseTerminal,
         NextTerminal,
         PreviousTerminal,
         ToggleSplit,
@@ -117,6 +118,14 @@ pub fn controls() -> Vec<Control> {
             keystroke: "secondary-t",
             place: Place::Anywhere,
             sends: Some(Sends::Request(RequestKind::OpenTerminal)),
+            asks: Asks::Nothing,
+        },
+        Control {
+            title: "Close Terminal",
+            action: || Box::new(CloseTerminal),
+            keystroke: "secondary-shift-w",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::CloseTerminal)),
             asks: Asks::Nothing,
         },
         nothing(
@@ -334,6 +343,7 @@ impl TerminalPane {
     pub fn new(models: &Models, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let pane = cx.entity();
         models.routes.route(&pane, Self::new_terminal);
+        models.routes.route(&pane, Self::close_focused_terminal);
         models.routes.route(&pane, Self::next_terminal);
         models.routes.route(&pane, Self::previous_terminal);
         models.routes.route(&pane, Self::toggle_split);
@@ -856,6 +866,86 @@ impl TerminalPane {
         cx.notify();
     }
 
+    fn close_focused_terminal(
+        &mut self,
+        _: &CloseTerminal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.focused() {
+            self.close_terminal(id, window, cx);
+        }
+    }
+
+    pub(crate) fn close_terminal(
+        &mut self,
+        id: TerminalId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pos) = self.terminals.iter().position(|entry| entry.id == id) else {
+            return;
+        };
+        let workspace = self.terminals[pos].workspace.clone();
+        let old_index = self
+            .terminals
+            .iter()
+            .filter(|entry| entry.workspace == workspace)
+            .position(|entry| entry.id == id)
+            .unwrap_or(0);
+        let entry = self.terminals.remove(pos);
+        let ended = entry.view.read(cx).ending().is_some();
+        self.attachments.remove(&id);
+
+        if !ended {
+            let asked = self.models.link.update(cx, |link, cx| {
+                link.ask(
+                    Request::CloseTerminal {
+                        terminal: id.clone(),
+                    },
+                    cx,
+                )
+            });
+            cx.spawn(async move |_, _| {
+                let _ = asked.await;
+            })
+            .detach();
+        }
+        self.models
+            .terminals
+            .update(cx, |list, cx| list.closed(&id, cx));
+
+        let remaining: Vec<TerminalId> = self
+            .terminals
+            .iter()
+            .filter(|entry| entry.workspace == workspace)
+            .map(|entry| entry.id.clone())
+            .collect();
+        if let Some(layout) = self.layouts.get_mut(&workspace)
+            && let Some(slot_index) = layout.shown.iter().position(|shown| *shown == id)
+        {
+            layout.shown.remove(slot_index);
+            if layout.shown.is_empty() {
+                if !remaining.is_empty() {
+                    let next = remaining[old_index.min(remaining.len() - 1)].clone();
+                    layout.shown.push(next);
+                }
+                layout.focus_slot = 0;
+            } else {
+                layout.focus_slot = layout.focus_slot.min(layout.shown.len() - 1);
+            }
+        }
+
+        if self.on_screen.as_ref() == Some(&workspace) {
+            if self.focused().is_some() {
+                self.focus_terminal(window, cx);
+            } else {
+                self.focus.focus(window, cx);
+            }
+        }
+        cx.notify();
+    }
+
     fn sync_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let given = self
             .focused()
@@ -874,12 +964,12 @@ impl TerminalPane {
 }
 
 fn how_to_open() -> String {
-    let key = if cfg!(target_os = "macos") {
-        "Cmd-T"
+    let (agent, shell) = if cfg!(target_os = "macos") {
+        ("Cmd-Shift-T", "Cmd-T")
     } else {
-        "Ctrl-T"
+        ("Ctrl-Shift-T", "Ctrl-T")
     };
-    format!("No terminal is open. Press {key} to open one in the workspace on screen.")
+    format!("Start an agent CLI ({agent}) or open a shell ({shell}) in the workspace on screen.")
 }
 
 impl Render for TerminalPane {
@@ -995,17 +1085,77 @@ impl Render for TerminalPane {
         });
         let slots = slots.flat_map(|(divider, slot)| divider.into_iter().chain([slot]));
         let empty = shown.is_empty().then(|| {
+            let clis = self.launchers(cx);
+            let chosen = self.chosen_cli(cx);
+            let mut state = EmptyState::new("No terminal open")
+                .line(how_to_open())
+                .selector("terminal-how-to-open");
+            if let Some(primary) = chosen.or_else(|| clis.first().cloned()) {
+                let agent = primary.agent.clone();
+                state = state.action(
+                    Button::new(
+                        SharedString::from(format!("terminal-empty-open-{}", primary.agent)),
+                        format!("Open {}", primary.title),
+                    )
+                    .kind(ButtonKind::Primary)
+                    .selector(format!("terminal-empty-open-{}", primary.agent))
+                    .on_click(cx.listener(
+                        move |pane, _: &ClickEvent, _, cx| {
+                            pane.launch(
+                                Program::Agent {
+                                    agent: agent.clone(),
+                                },
+                                cx,
+                            );
+                        },
+                    )),
+                );
+                for cli in clis.into_iter().filter(|cli| cli.agent != primary.agent) {
+                    let agent = cli.agent.clone();
+                    state = state.action(
+                        Button::new(
+                            SharedString::from(format!("terminal-empty-open-{}", cli.agent)),
+                            format!("Open {}", cli.title),
+                        )
+                        .kind(ButtonKind::Secondary)
+                        .selector(format!("terminal-empty-open-{}", cli.agent))
+                        .on_click(cx.listener(
+                            move |pane, _: &ClickEvent, _, cx| {
+                                pane.launch(
+                                    Program::Agent {
+                                        agent: agent.clone(),
+                                    },
+                                    cx,
+                                );
+                            },
+                        )),
+                    );
+                }
+                state = state.action(
+                    Button::new("terminal-empty-open-shell", "Open Shell")
+                        .kind(ButtonKind::Secondary)
+                        .selector("terminal-empty-open-shell")
+                        .on_click(cx.listener(|pane, _: &ClickEvent, _, cx| {
+                            pane.launch(Program::Shell, cx);
+                        })),
+                );
+            } else {
+                state = state.action(
+                    Button::new("terminal-empty-open-shell", "Open Shell")
+                        .kind(ButtonKind::Primary)
+                        .selector("terminal-empty-open-shell")
+                        .on_click(cx.listener(|pane, _: &ClickEvent, _, cx| {
+                            pane.launch(Program::Shell, cx);
+                        })),
+                );
+            }
             div()
                 .flex_1()
                 .min_h_0()
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(
-                    EmptyState::new("No terminal open")
-                        .line(how_to_open())
-                        .selector("terminal-how-to-open"),
-                )
+                .child(state)
         });
         let slots_area = (!shown.is_empty()).then(|| {
             let area = div().flex_1().min_h_0().flex();
@@ -1018,21 +1168,29 @@ impl Render for TerminalPane {
         });
         let cell = TerminalView::metrics(window, cx).2;
         let (weak, seen) = (cx.weak_entity(), self.room_seen.clone());
+        let reserved_for_tabs = if self.terminals_here().is_empty() {
+            launchers::TABS_BAR_HEIGHT
+        } else {
+            Pixels::ZERO
+        };
         let room = div().absolute().inset_0().px(SPACE_5).py(SPACE_3).child(
             canvas(
                 |bounds, _, _| bounds,
                 move |_, bounds, window, cx| {
+                    let height = (bounds.size.height - reserved_for_tabs).max(Pixels::ZERO);
                     let columns =
                         (f32::from(bounds.size.width) / f32::from(cell.width)).floor() as u16;
-                    let rows =
-                        (f32::from(bounds.size.height) / f32::from(cell.height)).floor() as u16;
+                    let rows = (f32::from(height) / f32::from(cell.height)).floor() as u16;
                     let room = TerminalSize { columns, rows };
                     if columns == 0 || rows == 0 || seen.get() == Some(room) {
                         return;
                     }
                     seen.set(Some(room));
                     let weak = weak.clone();
-                    let size = bounds.size;
+                    let size = Size {
+                        width: bounds.size.width,
+                        height,
+                    };
                     window.defer(cx, move |_, cx| {
                         weak.update(cx, |pane, cx| pane.room_found(room, size, cell, cx))
                             .ok();

@@ -10,7 +10,7 @@ use yaar_link::{
     AgentCli, Ending, Fact, Program, Reply, Repository, Request, Session, SessionId, SessionState,
     TerminalId, WorkspaceAgents, WorkspaceId,
 };
-use yaar_terminal_pane::{NewAgentTerminal, NewTerminal, NextAgentCli, ResumeAgent};
+use yaar_terminal_pane::{CloseTerminal, NewAgentTerminal, NewTerminal, NextAgentCli, ResumeAgent};
 
 use common::{
     Panes, click_in, drawn, lines, open_panes_listing, open_panes_staged, refused, terminal,
@@ -844,4 +844,110 @@ fn resume_agent_takes_the_first_session_offered_that_no_resume_was_opened_for(
         panes.pane.read_with(&cx, |pane, _| pane.notice()),
         Some("No session of this workspace is left to resume.".to_owned())
     );
+}
+
+#[gpui_kit::test]
+fn tab_close_button_closes_running_terminal_and_dismisses_ended_terminal_locally(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_naming(cx, vec![claude(), pi()]);
+    let (t1, t2) = (terminal('1'), terminal('2'));
+    assert!(drawn("terminal-tabs-bar", &mut cx).is_none());
+
+    panes.open_terminal(&t1, &mut cx);
+    panes.open_terminal(&t2, &mut cx);
+    let close_t1 = format!("terminal-tab-{t1}-close");
+    let close_t2 = format!("terminal-tab-{t2}-close");
+    wait_drawn(&mut cx, "the terminal tabs bar", |cx| {
+        drawn("terminal-tabs-bar", cx).is_some()
+            && drawn(&close_t1, cx).is_some()
+            && drawn(&close_t2, cx).is_some()
+    });
+
+    // Open terminal tabs sit in a dedicated row below the launchers row.
+    let launchers_row = bounds_of("terminal-launchers", &mut cx);
+    let tabs_bar = bounds_of("terminal-tabs-bar", &mut cx);
+    assert!(launchers_row.bottom() <= tabs_bar.top());
+    assert!(within(bounds_of(&close_t1, &mut cx), tabs_bar));
+
+    // Clicking the close button on a running terminal sends CloseTerminal and removes it.
+    click_in(&close_t1, &mut cx);
+    let (req_id, request) = panes.keeper.request(&mut cx);
+    assert_eq!(
+        request,
+        Request::CloseTerminal {
+            terminal: t1.clone(),
+        }
+    );
+    panes.keeper.reply(req_id, Ok(Reply::Done));
+    wait_until(&mut cx, "the closed terminal removed", |cx| {
+        panes.pane.read_with(cx, |pane, _| {
+            pane.terminals() == std::slice::from_ref(&t2)
+                && pane.shown() == std::slice::from_ref(&t2)
+        })
+    });
+
+    // An ended terminal stays until closed, and closing it dismisses it locally with no request.
+    panes.keeper.tell(Fact::TerminalEnded {
+        terminal: t2.clone(),
+        ending: Ending::Exited(0),
+    });
+    wait_for_ending(&panes, &t2, &mut cx);
+    assert_eq!(
+        panes.pane.read_with(&cx, |pane, _| pane.terminals()),
+        std::slice::from_ref(&t2)
+    );
+    click_in(&close_t2, &mut cx);
+    wait_drawn(
+        &mut cx,
+        "the empty state after dismissing the last tab",
+        |cx| {
+            panes.pane.read_with(cx, |pane, _| {
+                pane.terminals().is_empty() && pane.shown().is_empty()
+            }) && drawn("terminal-tabs-bar", cx).is_none()
+                && drawn("terminal-how-to-open", cx).is_some()
+        },
+    );
+
+    // Barrier: opening a new shell is the very next request the Keeper sees (no CloseTerminal was
+    // sent for the already-ended terminal).
+    panes.press_in_the_app::<NewTerminal>(&mut cx);
+    let (workspace, _) = panes.answer_open(&terminal('3'), Program::Shell, &mut cx);
+    assert_eq!(workspace, workspace_id('1'));
+
+    // CloseTerminal action closes the currently focused running terminal.
+    panes.press_in_the_app::<CloseTerminal>(&mut cx);
+    let (req_id, request) = panes.keeper.request(&mut cx);
+    assert_eq!(
+        request,
+        Request::CloseTerminal {
+            terminal: terminal('3'),
+        }
+    );
+    panes.keeper.reply(req_id, Ok(Reply::Done));
+    wait_until(&mut cx, "the terminal closed by action", |cx| {
+        panes
+            .pane
+            .read_with(cx, |pane, _| pane.terminals().is_empty())
+    });
+}
+
+#[gpui_kit::test]
+fn empty_state_launcher_button_opens_the_chosen_agent_cli(cx: &mut TestAppContext) {
+    let (mut panes, mut cx) = open_naming(cx, vec![claude(), pi()]);
+    wait_for_launchers(&panes, 2, &mut cx);
+    wait_drawn(&mut cx, "the empty-state agent launcher", |cx| {
+        drawn("terminal-empty-open-claude", cx).is_some()
+            && drawn("terminal-empty-open-pi", cx).is_some()
+            && drawn("terminal-empty-open-shell", cx).is_some()
+    });
+
+    click_in("terminal-empty-open-claude", &mut cx);
+    let (workspace, _) = panes.answer_open(&terminal('a'), agent("claude"), &mut cx);
+    assert_eq!(workspace, workspace_id('1'));
+    wait_drawn(&mut cx, "the agent terminal shown", |cx| {
+        panes.pane.read_with(cx, |pane, _| {
+            pane.shown() == std::slice::from_ref(&terminal('a'))
+        }) && drawn("terminal-how-to-open", cx).is_none()
+    });
 }

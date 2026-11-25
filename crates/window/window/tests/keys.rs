@@ -48,6 +48,7 @@ fn documented() -> BTreeSet<String> {
             "cmd-alt-n",
             "cmd-alt-q",
             "cmd-t",
+            "cmd-shift-w",
             "cmd-]",
             "cmd-[",
             "cmd-d",
@@ -363,6 +364,8 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
     // The quit that stops everything would stop this walk's Keeper, so this test leaves it out;
     // the test of the actions presses it.
     let stop = key_of("Quit and Stop Agents");
+    let close_terminal = key_of("Close Terminal");
+    let new_terminal = key_of("New Terminal");
     let kept = yaar_window::kept_keys();
     let kept_keys: BTreeSet<String> = kept.iter().map(Control::key).collect();
 
@@ -371,6 +374,43 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
         .iter()
         .filter(|control| control.key() != quit && control.key() != stop)
     {
+        if control.key() == close_terminal {
+            // Open a spare terminal so closing the focused terminal keeps the recorder running.
+            walk.click_into_the_review_pane();
+            walk.press(&new_terminal);
+            wait_until(&mut walk.cx, "the spare terminal to take focus", |cx| {
+                walk.window.focus_is_in(PROGRAM_CONTEXT, cx)
+            });
+            let before = walk
+                .window
+                .terminals
+                .read_with(&walk.cx, |pane, _| pane.terminals().len());
+            let ran = walk.press(&control.key());
+            let name = (control.action)().name();
+            if ran != [name] {
+                walk.differences.push(format!(
+                    "{}: the key {} ran {ran:?}, and not {name}",
+                    control.title,
+                    control.key()
+                ));
+            }
+            wait_until(&mut walk.cx, "the spare terminal to close", |cx| {
+                walk.window
+                    .terminals
+                    .read_with(cx, |pane, _| pane.terminals().len() < before)
+            });
+            walk.tidy();
+            walk.click_into_the_recorder();
+            let sent = walk.sentinel();
+            if !sent.is_empty() {
+                walk.differences.push(format!(
+                    "{}: the program received {sent:02x?}",
+                    control.title
+                ));
+            }
+            checked += 1;
+            continue;
+        }
         walk.click_into_the_recorder();
         if !walk.in_the_recorder() {
             walk.differences.push(format!(
@@ -480,14 +520,31 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
         .filter(|key| without_text(key) != quit && without_text(key) != stop)
         .filter(|key| seen.insert(without_text(key).to_owned()))
     {
-        walk.click_into_the_recorder();
+        let closing = without_text(key) == close_terminal;
+        if closing {
+            walk.click_into_the_review_pane();
+            walk.press(&new_terminal);
+        } else {
+            walk.click_into_the_recorder();
+        }
         walk.click_into_the_review_pane();
         if !walk.in_the_review_pane() {
             walk.differences.push(format!(
                 "{key}: the focus was not in the review pane before it"
             ));
         }
+        let before = walk
+            .window
+            .terminals
+            .read_with(&walk.cx, |pane, _| pane.terminals().len());
         walk.press(key);
+        if closing {
+            wait_until(&mut walk.cx, "the spare terminal to close", |cx| {
+                walk.window
+                    .terminals
+                    .read_with(cx, |pane, _| pane.terminals().len() < before)
+            });
+        }
         walk.tidy();
         checked += 1;
     }

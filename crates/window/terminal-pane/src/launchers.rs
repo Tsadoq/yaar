@@ -7,11 +7,14 @@ use yaar_link::{
     AgentCli, Fact, Program, Reply, Request, Session, SessionId, SessionState, Setting, TerminalId,
     TerminalPlace,
 };
-use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4};
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5};
 use yaar_ui::pieces::{Banner, Button, ButtonKind, Segmented, State, Tabs};
 use yaar_ui::themes::palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::{NewAgentTerminal, NextAgentCli, ResumeAgent, TerminalPane, ToggleSplit};
+
+pub(crate) const TABS_BAR_HEIGHT: Pixels = px(34.);
 
 const NO_CLI: &str = "The Keeper names no agent CLI to start.";
 
@@ -148,7 +151,7 @@ impl TerminalPane {
         }
     }
 
-    fn launch(&mut self, program: Program, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn launch(&mut self, program: Program, cx: &mut Context<Self>) -> bool {
         let Some(workspace) = self.models.workspaces.read(cx).selected().cloned() else {
             return false;
         };
@@ -235,57 +238,15 @@ impl TerminalPane {
         let focused = self.focused();
         let pane_entity = cx.entity();
 
-        let tabs = (!here.is_empty()).then(|| {
-            let mut row = Tabs::new("terminal-tabs").mono().selector("terminal-tab");
-            let mut selected = None;
-            for (index, id) in here.iter().enumerate() {
-                if focused.as_ref() == Some(id) {
-                    selected = Some(index);
-                }
-                row = row.tab(
-                    id.as_str().to_owned(),
-                    self.terminal_label(id, cx),
-                    None,
-                    self.terminal_state_dot(id, cx),
-                );
-            }
-            if let Some(index) = selected {
-                row = row.selected(index);
-            }
-            let ids = here.clone();
-            let entity = pane_entity.clone();
-            row.on_select(move |index, window, cx| {
-                if let Some(target) = ids.get(index).cloned() {
-                    entity.update(cx, |pane, cx| pane.show(target, window, cx));
-                }
-            })
-        });
-
-        let mut launchers = div()
-            .debug_selector(|| "terminal-launchers".to_owned())
-            .flex_none()
-            .w_full()
-            .min_h(px(40.))
-            .px(SPACE_4)
-            .py(SPACE_2)
-            .gap(SPACE_1)
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .bg(palette.pane)
-            .text_color(palette.text)
-            .border_b_1()
-            .border_color(palette.separator)
-            .children(tabs)
-            .child(
-                Button::new("terminal-launcher-shell", "+ Shell")
-                    .kind(ButtonKind::Ghost)
-                    .small()
-                    .selector("terminal-launcher-shell")
-                    .on_click(cx.listener(|pane, _: &ClickEvent, _, cx| {
-                        pane.launch(Program::Shell, cx);
-                    })),
-            );
+        let mut launcher_buttons = div().flex_none().flex().items_center().gap(SPACE_1).child(
+            Button::new("terminal-launcher-shell", "+ Shell")
+                .kind(ButtonKind::Ghost)
+                .small()
+                .selector("terminal-launcher-shell")
+                .on_click(cx.listener(|pane, _: &ClickEvent, _, cx| {
+                    pane.launch(Program::Shell, cx);
+                })),
+        );
         for cli in self.launchers(cx) {
             let agent = cli.agent.clone();
             let is_chosen = chosen.as_ref() == Some(&cli);
@@ -309,7 +270,7 @@ impl TerminalPane {
                 button =
                     button.indicator_selector(format!("terminal-launcher-chosen-{}", cli.agent));
             }
-            launchers = launchers.child(button);
+            launcher_buttons = launcher_buttons.child(button);
         }
 
         let place = self.models.settings.read(cx).terminal_place();
@@ -345,15 +306,87 @@ impl TerminalPane {
                 pane.toggle_split(&ToggleSplit, window, cx);
             }));
 
-        launchers = launchers.child(div().flex_1()).child(
+        let launchers = div()
+            .debug_selector(|| "terminal-launchers".to_owned())
+            .flex_none()
+            .w_full()
+            .min_h(px(40.))
+            .px(SPACE_5)
+            .py(SPACE_2)
+            .gap(SPACE_3)
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .bg(palette.pane)
+            .text_color(palette.text)
+            .border_b_1()
+            .border_color(palette.separator)
+            .child(
+                div()
+                    .flex_none()
+                    .typed(TypeRole::Strong)
+                    .text_color(palette.text)
+                    .child("Terminal"),
+            )
+            .child(launcher_buttons)
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_2)
+                    .child(split_button)
+                    .child(place_control),
+            );
+
+        let tabs_row = (!here.is_empty()).then(|| {
+            let mut row = Tabs::new("terminal-tabs").mono().selector("terminal-tab");
+            let mut selected = None;
+            for (index, id) in here.iter().enumerate() {
+                if focused.as_ref() == Some(id) {
+                    selected = Some(index);
+                }
+                row = row.tab(
+                    id.as_str().to_owned(),
+                    self.terminal_label(id, cx),
+                    None,
+                    self.terminal_state_dot(id, cx),
+                );
+            }
+            if let Some(index) = selected {
+                row = row.selected(index);
+            }
+            let ids_select = here.clone();
+            let entity_select = pane_entity.clone();
+            let ids_close = here.clone();
+            let entity_close = pane_entity;
+            let row = row
+                .on_select(move |index, window, cx| {
+                    if let Some(target) = ids_select.get(index).cloned() {
+                        entity_select.update(cx, |pane, cx| pane.show(target, window, cx));
+                    }
+                })
+                .on_close(move |index, window, cx| {
+                    if let Some(target) = ids_close.get(index).cloned() {
+                        entity_close.update(cx, |pane, cx| pane.close_terminal(target, window, cx));
+                    }
+                });
             div()
+                .debug_selector(|| "terminal-tabs-bar".to_owned())
                 .flex_none()
+                .w_full()
+                .min_h(TABS_BAR_HEIGHT)
+                .px(SPACE_4)
+                .py(SPACE_2)
                 .flex()
+                .flex_wrap()
                 .items_center()
-                .gap(SPACE_2)
-                .child(split_button)
-                .child(place_control),
-        );
+                .bg(palette.pane)
+                .border_b_1()
+                .border_color(palette.separator)
+                .child(row)
+        });
 
         let sessions = self.resumable_sessions(cx);
         let resume = (!sessions.is_empty()).then(|| {
@@ -383,6 +416,7 @@ impl TerminalPane {
                 .flex()
                 .flex_col()
                 .child(launchers)
+                .children(tabs_row)
                 .children(resume)
                 .into_any_element(),
         )
