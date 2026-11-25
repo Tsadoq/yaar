@@ -1183,6 +1183,33 @@ fn an_empty_state_centres_its_title_lines_and_action(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn an_empty_state_wraps_long_lines_inside_a_narrow_pane(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .w(px(300.))
+                .flex()
+                .flex_col()
+                .child(
+                    EmptyState::new("No terminal open")
+                        .line(
+                            "Start an agent CLI (Cmd-Shift-T) or a shell (Cmd-T) in this workspace.",
+                        )
+                        .action(Button::new("go", "Open Claude Code").selector("go"))
+                        .selector("empty"),
+                )
+                .into_any_element()
+        },
+        |shown| {
+            let empty = shown.bounds("empty");
+            assert!(empty.size.width <= px(300.), "{empty:?}");
+            assert!(inside(empty, shown.bounds("go")));
+        },
+    );
+}
+
+#[gpui_kit::test]
 fn a_strong_divider_is_painted_in_edge_and_a_plain_one_in_separator(cx: &mut TestAppContext) {
     in_both_themes(
         cx,

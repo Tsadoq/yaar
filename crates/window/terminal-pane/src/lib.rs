@@ -971,7 +971,7 @@ fn how_to_open() -> String {
     } else {
         ("Ctrl-Shift-T", "Ctrl-T")
     };
-    format!("Start an agent CLI ({agent}) or open a shell ({shell}) in the workspace on screen.")
+    format!("Start an agent CLI ({agent}) or a shell ({shell}) in this workspace.")
 }
 
 fn split_header_style(active_slot: bool, pane_focused: bool, palette: &Palette) -> (Hsla, Hsla) {
@@ -1178,6 +1178,8 @@ impl Render for TerminalPane {
             }
             div()
                 .flex_1()
+                .w_full()
+                .min_w_0()
                 .min_h_0()
                 .flex()
                 .items_center()
