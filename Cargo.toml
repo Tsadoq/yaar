@@ -34,6 +34,7 @@ yaar-adapter-pi = { path = "crates/keeper/adapter-pi" }
 yaar-system-tests = { path = "system-tests" }
 yaar-navigator = { path = "crates/window/navigator" }
 yaar-text-search = { path = "crates/window/text-search" }
+yaar-ui = { path = "crates/window/ui" }
 # Exact version, raised by hand with the patch script of patches/.
 # Without the kit's icon set: the app ships only the icons it uses.
 gpui-kit = { version = "=0.9.1", default-features = false, features = ["component"] }

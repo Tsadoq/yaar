@@ -1,0 +1,63 @@
+# The light theme, copied from the light theme of GitHub's Primer design system
+# (@primer/primitives 11.10.0, MIT). A value Primer gives that fails a readable pair is darkened
+# in steps of 5 lightness points until it passes, and its line says so.
+name = "Light"
+appearance = "light"
+
+[colors]
+window = "#f6f8fa"
+pane = "#ffffff"
+# Primer's neutral-muted wash (#818b981f) laid over the pane.
+raised = "#f0f1f2"
+overlay = "#c8d1da66"
+edge = "#d1d9e0"
+separator = "#d1d9e0b3"
+text = "#1f2328"
+text_muted = "#59636e"
+# The dimmest step of the muted text's hue that reads 4.5 to 1 on every ground it is drawn on
+# (4 lightness points above it; a fifth would fall short).
+text_dim = "#626d79"
+text_on_accent = "#ffffff"
+# White, where Primer's default text (#1f2328) reads only 3.2 to 1 on the amber: no step of
+# darkening the text reaches 4.5, as black reads 4.3.
+text_on_warn = "#ffffff"
+accent = "#0969da"
+# Primer's own hover is the green of its primary button; this is the next darker blue.
+accent_hover = "#0550ae"
+accent_text = "#0969da"
+link = "#0969da"
+focus = "#0969da"
+selection = "#ddf4ff"
+# Darkened 5 points from #1a7f37: it read 4.49 to 1 on the raised ground.
+ok = "#166a2e"
+# Darkened 5 points from #9a6700: it read 4.30 to 1 on the raised ground.
+warn = "#805600"
+danger = "#d1242f"
+info = "#0969da"
+add_text = "#1a7f37"
+add_ground = "#dafbe1"
+add_bar = "#aceebb"
+add_word = "#aceebb"
+del_text = "#d1242f"
+del_ground = "#ffebe9"
+del_bar = "#ffcecb"
+del_word = "#ffcecb"
+fold_ground = "#f6f8fa"
+gap_stripe = "#d1d9e0b3"
+syn_keyword = "#cf222e"
+syn_function = "#6639ba"
+syn_string = "#0a3069"
+syn_number = "#0550ae"
+syn_comment = "#59636e"
+
+[terminal]
+foreground = "#1f2328"
+background = "#ffffff"
+cursor = "#1f2328"
+selection = "#ddf4ff"
+ansi = [
+    "#1f2328", "#cf222e", "#116329", "#4d2d00",
+    "#0969da", "#8250df", "#1b7c83", "#59636e",
+    "#393f46", "#a40e26", "#1a7f37", "#633c01",
+    "#218bff", "#a475f9", "#3192aa", "#818b98",
+]

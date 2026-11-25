@@ -9183,6 +9183,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "yaar-ui"
+version = "0.1.0"
+dependencies = [
+ "gpui-kit",
+ "toml 1.2.1+spec-1.1.0",
+]
+
+[[package]]
 name = "yaar-window"
 version = "0.1.0"
 dependencies = [

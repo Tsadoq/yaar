@@ -1,0 +1,54 @@
+# The dark theme of the app's design mock.
+name = "Dark"
+appearance = "dark"
+
+[colors]
+window = "#131313"
+pane = "#171717"
+raised = "#262626"
+overlay = "#0000008c"
+edge = "#ffffff1a"
+separator = "#ffffff0e"
+text = "#fafafa"
+text_muted = "#a1a1a1"
+# The darkest grey that reads 4.5 to 1 on every ground it is drawn on.
+text_dim = "#8e8e8e"
+text_on_accent = "#ffffff"
+text_on_warn = "#1a1a1a"
+accent = "#1447e6"
+accent_hover = "#2a59ee"
+accent_text = "#8fb0ff"
+link = "#56b6f0"
+focus = "#8fb0ff"
+selection = "#1447e63d"
+ok = "#34d399"
+warn = "#f5c542"
+danger = "#f87171"
+info = "#56b6f0"
+add_text = "#34d399"
+add_ground = "#16281f"
+add_bar = "#86e0a0"
+add_word = "#1f4a35"
+del_text = "#f87171"
+del_ground = "#3a2023"
+del_bar = "#e8a0a0"
+del_word = "#5a2a2e"
+fold_ground = "#ffffff06"
+gap_stripe = "#ffffff09"
+syn_keyword = "#f092c0"
+syn_function = "#8ec5f4"
+syn_string = "#d9c48c"
+syn_number = "#e3a66f"
+syn_comment = "#8e8e8e"
+
+[terminal]
+foreground = "#fafafa"
+background = "#171717"
+cursor = "#fafafa"
+selection = "#1447e666"
+ansi = [
+    "#000000", "#f87171", "#4ade80", "#facc15",
+    "#60a5fa", "#c084fc", "#22d3ee", "#e5e5e5",
+    "#7f7f7f", "#fca5a5", "#86efac", "#fde047",
+    "#93c5fd", "#d8b4fe", "#67e8f9", "#ffffff",
+]
