@@ -10,30 +10,40 @@ impl ReviewPane {
     /// over a thread or comment) back at its exact vertical offset from the top of the viewport.
     pub(crate) fn rebuild_steady(&mut self, cx: &mut Context<Self>) {
         let in_view = self.rows_in_view();
-        let top: Vec<(PaneRow, Option<Pixels>)> = self
+        let top: Vec<(PaneRow, Option<Pixels>, Option<Pixels>)> = self
             .rows
             .iter()
             .enumerate()
             .take(in_view.end)
             .skip(in_view.start)
-            .map(|(index, row)| (row.clone(), self.row_offset_from_top(index)))
+            .map(|(index, row)| {
+                (
+                    row.clone(),
+                    self.row_offset_from_top(index),
+                    self.row_measured_height(index),
+                )
+            })
+            .collect();
+        let known: Vec<(PaneRow, Pixels)> = top
+            .iter()
+            .filter_map(|(row, _, height)| Some((row.clone(), (*height)?)))
             .collect();
         self.rebuild(cx);
         // A thread or comment keeps the view only when no diff row is in view, so a moving thread
         // does not scroll the diff.
         let diff_first = top
             .iter()
-            .filter(|(row, _)| !matches!(row, PaneRow::Thread { .. } | PaneRow::Comment { .. }));
+            .filter(|(row, _, _)| !matches!(row, PaneRow::Thread { .. } | PaneRow::Comment { .. }));
         let thread_first = top
             .iter()
-            .filter(|(row, _)| matches!(row, PaneRow::Thread { .. } | PaneRow::Comment { .. }));
-        let anchor = diff_first.chain(thread_first).find_map(|(row, delta)| {
+            .filter(|(row, _, _)| matches!(row, PaneRow::Thread { .. } | PaneRow::Comment { .. }));
+        let anchor = diff_first.chain(thread_first).find_map(|(row, delta, _)| {
             let delta = (*delta)?;
             let now = self.rows.iter().position(|held| held == row)?;
             Some((now, delta))
         });
         if let Some((now, delta)) = anchor {
-            self.scroll_row_to_offset(now, delta);
+            self.scroll_row_to_offset_with_heights(now, delta, &known);
         }
     }
 }

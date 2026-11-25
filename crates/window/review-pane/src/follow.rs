@@ -4,11 +4,11 @@
 
 use std::collections::HashSet;
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_link::{Fact, FlowForm, TurnId, WorkspaceAgents, WorkspaceId};
+use yaar_ui::metrics::{SPACE_4, SPACE_6};
+use yaar_ui::pieces::{Button, ButtonKind, Card, Pill};
 
-use crate::draw::ROW_HEIGHT;
 use crate::{ChangeShown, FlowAt, Following, ReviewPane, ToggleFollow, View};
 
 pub(crate) struct Follow {
@@ -149,79 +149,62 @@ impl ReviewPane {
         self.meet_turns(cx);
     }
 
-    pub(crate) fn follow_lines(&mut self, cx: &mut Context<Self>) -> Vec<Div> {
-        let theme = cx.theme();
-        let line = || {
+    pub(crate) fn follow_paused_pill(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let Following::Paused { missed } = self.following else {
+            return None;
+        };
+        let plural = if missed == 1 { "" } else { "s" };
+        let words = format!("Follow paused: {missed} step{plural} since");
+        let pill = Pill::new("flow-follow-paused", words.clone())
+            .selector("flow-follow-paused")
+            .text_selector(format!("flow-follow-paused-text:{words}"))
+            .action(
+                Button::new("flow-follow-resume", "Resume")
+                    .kind(ButtonKind::Primary)
+                    .small()
+                    .selector("flow-follow-resume")
+                    .on_click(cx.listener(|pane, _: &ClickEvent, _, cx| {
+                        pane.resume_follow(cx);
+                    })),
+            );
+        Some(
+            div()
+                .absolute()
+                .bottom(px(14.))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(pill)
+                .into_any_element(),
+        )
+    }
+
+    pub(crate) fn follow_offer_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.follow.offer.as_ref()?;
+        Some(
             div()
                 .flex_none()
-                .h(ROW_HEIGHT)
-                .w_full()
-                .flex()
-                .items_center()
-                .gap_3()
-                .px_2()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .border_b_1()
-                .border_color(theme.border)
-        };
-        let control = |label: &str| {
-            div()
-                .px_2()
-                .rounded_sm()
-                .cursor_pointer()
-                .bg(theme.secondary)
-                .text_color(theme.secondary_foreground)
-                .child(label.to_owned())
-        };
-        let mut lines = Vec::new();
-        if let Following::Paused { missed } = self.following {
-            let plural = if missed == 1 { "" } else { "s" };
-            // The words are in the selector: a test reads what was handed to the text system.
-            let words = format!("Follow paused: {missed} step{plural} since");
-            lines.push(
-                line()
-                    .debug_selector(|| "flow-follow-paused".to_owned())
-                    .child(
-                        div()
-                            .debug_selector({
-                                let words = words.clone();
-                                move || format!("flow-follow-paused-text:{words}")
-                            })
-                            .text_color(theme.muted_foreground)
-                            .child(words),
-                    )
-                    .child(
-                        control("Resume")
-                            .debug_selector(|| "flow-follow-resume".to_owned())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|pane, _: &MouseDownEvent, _, cx| {
-                                    pane.resume_follow(cx);
-                                }),
-                            ),
-                    ),
-            );
-        }
-        if self.follow.offer.is_some() {
-            lines.push(
-                line()
-                    .debug_selector(|| "flow-offer".to_owned())
-                    .child("A turn ended: what changed since your last review")
-                    .child(
-                        control("Show")
-                            .debug_selector(|| "flow-offer-take".to_owned())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|pane, _: &MouseDownEvent, window, cx| {
+                .px(SPACE_6)
+                .py(SPACE_4)
+                .child(
+                    Card::new()
+                        .dashed()
+                        .selector("flow-offer")
+                        .child("A turn ended: what changed since your last review")
+                        .child(
+                            Button::new("flow-offer-take", "Show")
+                                .kind(ButtonKind::Primary)
+                                .small()
+                                .selector("flow-offer-take")
+                                .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                                     pane.acted(cx);
                                     pane.take_flow_offer(window, cx);
-                                }),
-                            ),
-                    ),
-            );
-        }
-        lines
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     pub(crate) fn take_flow_offer(&mut self, window: &mut Window, cx: &mut Context<Self>) {

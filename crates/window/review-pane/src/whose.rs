@@ -1,9 +1,7 @@
-use gpui_kit::component::theme::ActiveTheme;
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use yaar_link::{Review, ReviewId, Session, SessionState, WorkspaceReviews};
+use yaar_ui::pieces::Chip;
 
-use crate::draw::ROW_HEIGHT;
 use crate::{NextReview, ReviewPane};
 
 /// The chosen review when it is there; else the review of no agent; else that of the first
@@ -136,54 +134,35 @@ impl ReviewPane {
         }
     }
 
-    pub(crate) fn session_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(crate) fn session_chips(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         if self.sessions.is_empty() {
-            return None;
+            return Vec::new();
         }
-        let theme = cx.theme();
         let cycle = self.cycle();
         let several = cycle.len() > 1;
         let shown = self.review().map(|review| &review.id);
-        let mut bar = div()
-            .flex_none()
-            .h(ROW_HEIGHT)
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .border_b_1()
-            .border_color(theme.border);
-        for (index, (review, session)) in cycle.iter().enumerate() {
-            let title =
-                session.map_or_else(|| "No agent".to_owned(), |session| session.title.clone());
-            let name = div()
-                .px_2()
-                .child(
-                    div()
-                        .debug_selector({
-                            let title = title.clone();
-                            move || format!("review-session-name-{index}:{title}")
-                        })
-                        .child(title),
-                )
-                .when(several && shown == Some(review), |name| {
-                    name.bg(theme.secondary)
-                });
-            bar = bar.child(if several {
-                name.debug_selector(|| format!("review-session-{index}"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |pane, _: &MouseDownEvent, window, cx| {
-                            pane.click_session(index, window, cx);
-                        }),
-                    )
-            } else {
-                name.debug_selector(|| "review-session".to_owned())
-            });
-        }
-        Some(bar)
+        cycle
+            .iter()
+            .enumerate()
+            .map(|(index, (review, session))| {
+                let title =
+                    session.map_or_else(|| "No agent".to_owned(), |session| session.title.clone());
+                let chip = Chip::new(title.clone())
+                    .selected(several && shown == Some(review))
+                    .label_selector(format!("review-session-name-{index}:{title}"));
+                if several {
+                    chip.selector(format!("review-session-{index}"))
+                        .on_click(
+                            ("review-session", index),
+                            cx.listener(move |pane, _: &ClickEvent, window, cx| {
+                                pane.click_session(index, window, cx);
+                            }),
+                        )
+                        .into_any_element()
+                } else {
+                    chip.selector("review-session").into_any_element()
+                }
+            })
+            .collect()
     }
 }

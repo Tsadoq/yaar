@@ -206,6 +206,7 @@ fn the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves
         thread('5', "story.txt", 5, ThreadState::Resolved),
     ];
     let (mut stage, mut cx) = open_on_story(review_of_a(threads, None), SessionState::Idle, cx);
+    cx.simulate_resize(gpui_kit::size(common::WINDOW.width, gpui_kit::px(1400.)));
 
     let rows = stage.pane.read_with(&cx, |pane, _| pane.rows().to_vec());
     for digit in ['1', '2', '3', '4', '5'] {
@@ -312,6 +313,7 @@ fn resolving_reopening_and_attaching_a_thread_need_the_reviewer_on_a_thread_that
         thread('5', "story.txt", 5, ThreadState::Resolved),
     ];
     let (mut stage, mut cx) = open_on_story(review_of_a(threads, None), SessionState::Idle, cx);
+    cx.simulate_resize(gpui_kit::size(common::WINDOW.width, gpui_kit::px(1400.)));
     // Line 1 of story.txt is no change: the first diff row after the file heading.
     let rows = stage.pane.read_with(&cx, |pane, _| pane.rows().to_vec());
     let bare = rows
@@ -425,6 +427,7 @@ fn what_is_attached_of_the_review_shown_is_drawn_from_the_reviews_the_keeper_hol
 fn an_attach_the_keeper_refuses_says_why_in_the_notice_and_draws_nothing(cx: &mut TestAppContext) {
     let threads = vec![thread('2', "story.txt", 3, ThreadState::Sent)];
     let (mut stage, mut cx) = open_on_story(review_of_a(threads, None), SessionState::Idle, cx);
+    cx.simulate_resize(gpui_kit::size(common::WINDOW.width, gpui_kit::px(1400.)));
     cx.update(|window, cx| stage.focus.focus(window, cx));
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(

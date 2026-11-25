@@ -443,6 +443,7 @@ fn a_thread_that_moved_to_rewritten_code_says_that_the_code_changed_and_shows_on
         "a\nb\nnew one\nnew two\ne\n",
         cx,
     );
+    cx.simulate_resize(gpui_kit::size(common::WINDOW.width, gpui_kit::px(760.)));
     let (the, other) = (thread_id('7'), thread_id('8'));
     let all_rows = |stage: &Stage, cx: &mut VisualTestContext| -> Vec<PaneRow> {
         stage.pane.read_with(cx, |pane, _| pane.rows().to_vec())

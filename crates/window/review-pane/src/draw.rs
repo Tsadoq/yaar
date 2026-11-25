@@ -1,28 +1,45 @@
+//! How the review pane is drawn: UI chrome uses `yaar-ui` pieces and Inter; code and paths use
+//! JetBrains Mono with syntax and word-diff highlights.
+
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
 
-use gpui_kit::component::input::{Input, Textarea};
-use gpui_kit::component::theme::ActiveTheme;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use yaar_diff::{Hunk, Row, Side};
-use yaar_frame::SetBase;
-use yaar_link::{Author, Base, BaseSource, Comparison, FileStatus, NoComparison};
+use yaar_link::{
+    Author, Base, BaseSource, CommentId, Comparison, FileStatus, NoComparison, ThreadId,
+};
+use yaar_ui::diff::{
+    DiffKind, DiffStats, GutterPlus, ViewedToggle, bar, gap_fill, ground, sign_colour, word,
+};
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_6, tabular};
+use yaar_ui::pieces::{
+    Avatar, Banner, Button, ButtonKind, Card, CardPart, Chip, Divider, EmptyState, Field, Tone,
+};
+use yaar_ui::syntax;
+use yaar_ui::themes::palette;
+use yaar_ui::tokens::Palette;
+use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::navigate::Spot;
 use crate::{ChangeShown, KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown, View};
-use yaar_link::{CommentId, ThreadId};
 
+/// Height of one code diff row, also used as the uniform height hint for unmeasured list items.
 pub(crate) const ROW_HEIGHT: Pixels = px(20.);
+pub(crate) const COMMIT_ROW_HEIGHT: Pixels = px(26.);
+pub(crate) const UNSHOWN_ROW_HEIGHT: Pixels = px(28.);
+pub(crate) const FILE_HEADER_HEIGHT: Pixels = px(34.);
 
-pub(crate) const NUMBER_WIDTH: Pixels = px(56.);
+const GUTTER_WIDTH: Pixels = px(22.);
+pub(crate) const NUMBER_WIDTH: Pixels = px(38.);
+pub(crate) const SIGN_WIDTH: Pixels = px(14.);
 
-pub(crate) const SIGN_WIDTH: Pixels = px(20.);
-
-/// A line is never wrapped and the overflow is cut off, so the rest of a megabyte line would be
-/// shaped for nothing in every frame.
+/// Longest line handed to the text system. A whole line is kept in memory for comments and
+/// diffs; drawing more than this on one row lays out glyphs the screen cannot show.
 pub(crate) const DRAWN_BYTES: usize = 1024;
 
 impl ShownDiff {
@@ -52,6 +69,7 @@ impl ShownDiff {
     }
 }
 
+/// Records the rows a uniform list paints (used by Flow's timeline and live diff).
 pub(crate) struct InView(pub(crate) Rc<RefCell<Range<usize>>>);
 
 impl UniformListDecoration for InView {
@@ -73,80 +91,115 @@ impl UniformListDecoration for InView {
 impl Render for ReviewPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.follow_cursor();
-        // Outside the element that holds the pane's key context: the keys of the tree are not the
-        // keys of the rows.
-        let tree = self.tree_view(window, cx);
-        let sessions = self.session_bar(cx);
-        let offer = self.offer_bar(cx);
+        let palette = palette(cx);
+        let left_column = self.render_left_column(window, cx);
+        let has_left = left_column.is_some();
+        let rounds = (!has_left).then(|| self.render_rounds(cx)).flatten();
         let start = self.render_offer_to_start(cx);
-        let rounds = self.render_rounds(cx);
+        let offer = self.offer_bar(cx);
         let bar = self.render_bar(cx);
         let servers = self.render_servers(cx);
-        let hover = self.render_hover(cx);
-        let references = self.render_references(cx);
+        let hover = self.render_hover(window, cx);
+        let references = self.render_references(window, cx);
         let file_view = self.render_file_view(cx);
         let flow = (self.view == View::Flow).then(|| self.render_flow(cx));
-        let theme = cx.theme();
         let pane = div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.background)
-            .text_color(theme.foreground)
-            .font_family(theme.mono_font_family.clone())
-            .text_size(theme.mono_font_size);
-        // A mouse button or the wheel here, or a key no action takes, pauses follow. The bar is
-        // left out: its controls choose what Flow shows.
+            .bg(palette.pane)
+            .typed(TypeRole::Body)
+            .text_color(palette.text);
+        // Anything inside `body` is what the reviewer reads: acting on it pauses follow.
         let body = div()
             .flex_1()
             .min_h_0()
             .flex()
             .flex_col()
-            .capture_any_mouse_down(cx.listener(|pane, _: &MouseDownEvent, _, cx| {
-                pane.touched(cx);
-            }))
+            .capture_any_mouse_down(cx.listener(|pane, _: &MouseDownEvent, _, cx| pane.touched(cx)))
             .capture_key_down(cx.listener(|pane, _: &KeyDownEvent, _, cx| pane.touched(cx)))
             .on_scroll(cx.listener(|pane, _: &ScrollEvent, _, cx| {
                 pane.scrolled();
                 pane.touched(cx);
             }));
-        // The notice and the comment box go below the rows, outside the element that sets the key
-        // context, so that letters typed in the box are text, not keys of the pane.
-        let notice = self.notice.as_ref().map(|notice| {
+        let notice = self.notice.as_ref().map(|words| {
             div()
-                .debug_selector(|| "review-notice".to_owned())
                 .flex_none()
-                .h(ROW_HEIGHT)
-                .px_2()
-                .flex()
-                .items_center()
-                .overflow_hidden()
-                .whitespace_nowrap()
                 .border_t_1()
-                .border_color(theme.border)
-                .text_color(theme.danger)
-                .child(notice.clone())
+                .border_color(palette.separator)
+                .child(
+                    Banner::new(words.clone())
+                        .tone(Tone::Danger)
+                        .selector("review-notice"),
+                )
         });
         let comment_box = self.open_box.as_ref().map(|open| {
+            let footer = div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(SPACE_3)
+                .child(
+                    div()
+                        .flex_1()
+                        .typed(TypeRole::Tiny)
+                        .text_color(palette.text_dim)
+                        .child("Draft saves as you type · Enter closes · Shift+Enter newline"),
+                )
+                .child(
+                    Button::new("review-comment-done", "Done")
+                        .kind(ButtonKind::Primary)
+                        .small()
+                        .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                            pane.close_box(window, cx);
+                        })),
+                );
             div()
-                .debug_selector(|| "review-comment-box".to_owned())
                 .flex_none()
-                .p_2()
+                .px(SPACE_6)
+                .py(SPACE_4)
                 .border_t_1()
-                .border_color(theme.border)
-                // The field lets Escape pass once it has nothing of its own to close.
+                .border_color(palette.separator)
                 .on_action(cx.listener(Self::escape))
-                .child(Textarea::new(&open.input))
+                .child(
+                    Field::textarea(&open.input)
+                        .footer(footer)
+                        .selector("review-comment-box"),
+                )
         });
         let commit_field = self.commit_field.as_ref().map(|field| {
+            let footer = div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(SPACE_3)
+                .child(
+                    div()
+                        .flex_1()
+                        .typed(TypeRole::Tiny)
+                        .text_color(palette.text_dim)
+                        .child("Enter commits · Esc cancels"),
+                )
+                .child(
+                    Button::new("review-commit-cancel", "Cancel")
+                        .kind(ButtonKind::Ghost)
+                        .small()
+                        .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                            pane.close_commit_field(window, cx);
+                        })),
+                );
             div()
-                .debug_selector(|| "review-commit-field".to_owned())
                 .flex_none()
-                .p_2()
+                .px(SPACE_6)
+                .py(SPACE_4)
                 .border_t_1()
-                .border_color(theme.border)
+                .border_color(palette.separator)
                 .on_action(cx.listener(Self::escape_commit))
-                .child(Input::new(&field.input))
+                .child(
+                    Field::input(&field.input)
+                        .footer(footer)
+                        .selector("review-commit-field"),
+                )
         });
         if let Some(file_view) = file_view {
             return pane.children(bar).children(servers).child(
@@ -168,20 +221,29 @@ impl Render for ReviewPane {
             );
         }
         if self.rows.is_empty() {
+            let (title, detail) = self.idle_lines(cx);
+            let mut empty = EmptyState::new(title);
+            if let Some(detail) = detail {
+                empty = empty.line(detail);
+            }
             let idle = div()
                 .flex_1()
+                .min_h_0()
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(theme.muted_foreground)
-                .child(self.idle_line(cx));
+                .child(empty);
+            let main_area = div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .children(left_column)
+                .child(self.with_keys(idle, cx));
             return pane.children(bar).children(servers).child(
-                body.children(sessions)
-                    .children(start)
+                body.children(start)
                     .children(rounds)
                     .children(offer)
-                    .children(tree)
-                    .child(self.with_keys(idle, cx))
+                    .child(main_area)
                     .children(notice)
                     .children(comment_box)
                     .children(commit_field),
@@ -196,24 +258,14 @@ impl Render for ReviewPane {
             self.first_diff_marked = true;
             window.on_next_frame(|_, _| yaar_frame::trace::mark_once("first_diff"));
         }
-        // The rows stay while the Keeper refuses to read the changes again, and may be out of date:
-        // the reviewer is told.
         let refused = self.models.changes.read(cx).refusal().map(|refusal| {
-            div()
-                .debug_selector(|| "review-refused".to_owned())
-                .flex_none()
-                .h(ROW_HEIGHT)
-                .px_2()
-                .flex()
-                .items_center()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_color(theme.danger)
-                .child(format!("The changes could not be read again: {refusal}"))
+            Banner::new(format!("The changes could not be read again: {refusal}"))
+                .tone(Tone::Danger)
+                .selector("review-refused")
         });
         let list_view = list(
             self.list.clone(),
-            cx.processor(|pane, index: usize, _, cx| pane.draw_row(index, cx).into_any_element()),
+            cx.processor(|pane, index: usize, _, cx| pane.draw_row(index, cx)),
         )
         .size_full();
         let current_width = self.list.viewport_bounds().size.width;
@@ -231,14 +283,21 @@ impl Render for ReviewPane {
                 }
             });
         }
+        let main_area = div().flex_1().min_h_0().flex().children(left_column).child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .children(refused)
+                .child(self.with_keys(div().flex_1().min_h_0().child(list_view), cx)),
+        );
         pane.children(bar).children(servers).child(
-            body.children(sessions)
-                .children(start)
+            body.children(start)
                 .children(rounds)
                 .children(offer)
-                .children(tree)
-                .children(refused)
-                .child(self.with_keys(div().flex_1().min_h_0().child(list_view), cx))
+                .child(main_area)
                 .children(hover)
                 .children(references)
                 .children(notice)
@@ -337,78 +396,57 @@ impl ReviewPane {
         }
     }
 
-    fn idle_line(&self, cx: &App) -> String {
+    fn idle_lines(&self, cx: &App) -> (String, Option<String>) {
         let changes = self.models.changes.read(cx);
-        match (changes.refusal(), changes.workspace()) {
-            (Some(refusal), _) => refusal.to_string(),
-            (None, Some(_)) => "Reading the changes".to_owned(),
-            (None, None) => {
-                "Open a folder that holds a git repository to see its changes".to_owned()
-            }
+        match (changes.refusal(), changes.workspace(), &self.changes) {
+            (Some(refusal), _, _) => (
+                "Could not read changes".to_owned(),
+                Some(refusal.to_string()),
+            ),
+            (None, Some(_), Some(_)) => (
+                "No changes to review".to_owned(),
+                Some("Edits and commits in this workspace will appear here.".to_owned()),
+            ),
+            (None, Some(_), None) => ("Reading the changes".to_owned(), None),
+            (None, None, _) => (
+                "Open a folder that holds a git repository".to_owned(),
+                Some("Changes, history, and review threads will appear here.".to_owned()),
+            ),
         }
     }
 
-    fn draw_row(&self, index: usize, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
-        let row = div()
-            .debug_selector(|| format!("review-row-{index}"))
-            .h(ROW_HEIGHT)
-            .w_full()
-            .flex()
-            .items_center()
-            .overflow_hidden()
-            .whitespace_nowrap();
+    fn draw_row(&self, index: usize, cx: &Context<Self>) -> AnyElement {
+        let palette = palette(cx);
         match &self.rows[index] {
-            PaneRow::Comparison {
-                comparison,
-                offers_base,
-            } => {
-                // The sentence gives way where the row is too narrow, so the offer is never pushed
-                // out.
-                let row = row.px_2().gap_3().bg(theme.muted).child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(comparison_sentence(comparison)),
-                );
-                let reviewed = self
-                    .review()
-                    .and_then(|review| review.reviewed.as_deref())
-                    .map(|state| format!("Reviewed at {}", short(state)));
-                let row = row.children(reviewed.map(|words| {
-                    div()
-                        .debug_selector(|| "review-reviewed".to_owned())
-                        .flex_none()
-                        .text_color(theme.success)
-                        .child(words)
-                }));
-                if !offers_base {
-                    return row;
-                }
-                row.child(
-                    div()
-                        .id("review-offer-base")
-                        .debug_selector(|| "review-offer-base".to_owned())
-                        .flex_none()
-                        .px_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .bg(theme.primary)
-                        .text_color(theme.primary_foreground)
-                        .on_click(|_, window, cx| window.dispatch_action(Box::new(SetBase), cx))
-                        .child("Set a base…"),
-                )
-            }
-            PaneRow::Commit { id, summary } => row
-                .px_2()
-                .gap_3()
+            PaneRow::Commit { id, summary } => div()
+                .debug_selector(|| format!("review-row-{index}"))
+                .h(COMMIT_ROW_HEIGHT)
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(SPACE_4)
+                .px(SPACE_6)
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .border_b_1()
+                .border_color(palette.separator)
                 .child(
                     div()
                         .flex_none()
-                        .text_color(theme.muted_foreground)
+                        .typed(TypeRole::CodeSmall)
+                        .text_color(palette.text_dim)
                         .child(short(id).to_owned()),
                 )
-                .child(summary.clone()),
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .typed(TypeRole::Meta)
+                        .text_color(palette.text_muted)
+                        .child(summary.clone()),
+                )
+                .into_any_element(),
             PaneRow::File { path, status } => {
                 let viewed = self
                     .reviews()
@@ -416,126 +454,401 @@ impl ReviewPane {
                 let no_agent =
                     self.tree.shown == ChangeShown::Uncommitted && self.made_by_no_agent(path);
                 let shared = self.shared_mark(index, path, cx);
-                row.px_2()
-                    .gap_3()
-                    .bg(theme.secondary)
-                    .text_color(theme.secondary_foreground)
-                    .child(path.display().to_string())
+                let stats = self.diff_of(path).map(|shown| {
+                    let added: usize = shown.diff.hunks().iter().map(|hunk| hunk.new.len()).sum();
+                    let removed: usize = shown.diff.hunks().iter().map(|hunk| hunk.old.len()).sum();
+                    DiffStats::new(added, removed)
+                });
+                let file_path = path.clone();
+                let mut header = div()
+                    .debug_selector(|| format!("review-row-{index}"))
+                    .min_h(FILE_HEADER_HEIGHT)
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_4)
+                    .px(SPACE_6)
+                    .py(SPACE_2)
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .bg(palette.pane)
+                    .border_t_1()
+                    .border_b_1()
+                    .border_color(palette.separator)
                     .child(
                         div()
-                            .flex_none()
-                            .text_color(theme.muted_foreground)
-                            .child(status_words(status)),
+                            .min_w_0()
+                            .truncate()
+                            .typed(TypeRole::Path)
+                            .text_color(palette.text)
+                            .child(path.display().to_string()),
                     )
-                    .children(no_agent.then(|| {
-                        div()
-                            .debug_selector(|| format!("review-no-agent-{index}"))
-                            .flex_none()
-                            .text_color(theme.warning)
-                            .child("no agent")
-                    }))
-                    .children(shared)
-                    .children(viewed.then(|| {
-                        div()
-                            .debug_selector(|| format!("review-viewed-{index}"))
-                            .flex_none()
-                            .text_color(theme.success)
-                            .child("viewed")
-                    }))
+                    .children(stats);
+                if !matches!(status, FileStatus::Modified) {
+                    header = header.child(Chip::new(status_words(status)));
+                }
+                if no_agent {
+                    header = header.child(
+                        Chip::new("no agent")
+                            .tone(Tone::Warn)
+                            .selector(format!("review-no-agent-{index}")),
+                    );
+                }
+                header = header.children(shared).child(div().flex_1());
+                let mut viewed_box = ViewedToggle::new(("review-viewed", index), viewed).on_click(
+                    cx.listener(move |pane, _: &ClickEvent, _, cx| {
+                        pane.toggle_viewed_path(file_path.clone(), cx);
+                    }),
+                );
+                if viewed {
+                    viewed_box = viewed_box.selector(format!("review-viewed-{index}"));
+                }
+                header.child(viewed_box).into_any_element()
             }
-            PaneRow::Unshown { why, .. } => row
-                .px_2()
-                .text_color(theme.muted_foreground)
-                .child(unshown_sentence(*why)),
-            PaneRow::Diff { path, row: shown } => self.draw_diff(row, index, path, shown, cx),
-            PaneRow::Thread { thread } => self.draw_thread(row, thread, cx),
+            PaneRow::Unshown { why, .. } => div()
+                .debug_selector(|| format!("review-row-{index}"))
+                .h(UNSHOWN_ROW_HEIGHT)
+                .w_full()
+                .flex()
+                .items_center()
+                .px(SPACE_6)
+                .typed(TypeRole::Meta)
+                .text_color(palette.text_muted)
+                .child(unshown_sentence(*why))
+                .into_any_element(),
+            PaneRow::Diff { path, row: shown } => {
+                let row = div()
+                    .debug_selector(|| format!("review-row-{index}"))
+                    .h(ROW_HEIGHT)
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .overflow_hidden()
+                    .whitespace_nowrap();
+                self.draw_diff(row, index, path, shown, cx)
+                    .into_any_element()
+            }
+            PaneRow::Thread { thread } => self.draw_thread_card(index, thread, cx),
             PaneRow::Comment { thread, comment } => {
-                self.draw_comment(row, thread, comment, "review")
+                self.draw_comment_card(index, thread, comment, cx)
             }
-            PaneRow::ThreadsElsewhere => row
-                .px_2()
-                .bg(theme.secondary)
-                .text_color(theme.secondary_foreground)
+            PaneRow::ThreadsElsewhere => div()
+                .debug_selector(|| format!("review-row-{index}"))
+                .w_full()
+                .px(SPACE_6)
+                .pt(SPACE_5)
+                .pb(SPACE_3)
+                .bg(palette.window)
+                .border_t_1()
+                .border_b_1()
+                .border_color(palette.separator)
                 .child(
                     div()
                         .debug_selector(|| "review-threads-elsewhere".to_owned())
+                        .typed(TypeRole::MetaStrong)
+                        .text_color(palette.text_muted)
                         .child("Threads elsewhere: their lines are in no row shown"),
-                ),
-            PaneRow::Read { path } => row
-                .px_2()
-                .text_color(theme.muted_foreground)
-                .child(path.display().to_string()),
+                )
+                .into_any_element(),
+            PaneRow::Read { path } => div()
+                .debug_selector(|| format!("review-row-{index}"))
+                .h(ROW_HEIGHT)
+                .w_full()
+                .flex()
+                .items_center()
+                .px(SPACE_6)
+                .typed(TypeRole::Path)
+                .text_color(palette.text_muted)
+                .child(path.display().to_string())
+                .into_any_element(),
         }
     }
 
-    pub(crate) fn draw_thread(&self, row: Div, thread: &ThreadId, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
+    fn thread_indent(&self) -> Pixels {
+        match self.layout {
+            Layout::Unified => px(60.),
+            Layout::Split => SPACE_6,
+        }
+    }
+
+    fn draw_thread_card(
+        &self,
+        index: usize,
+        thread_id: &ThreadId,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let palette = palette(cx);
         let Some(thread) = self
             .review()
-            .and_then(|review| review.threads.iter().find(|held| held.id == *thread))
+            .and_then(|review| review.threads.iter().find(|held| held.id == *thread_id))
         else {
-            return row;
+            return div()
+                .debug_selector(|| format!("review-row-{index}"))
+                .into_any_element();
         };
         let anchor = &thread.anchor;
         let side = match anchor.side {
             yaar_link::Side::Old => "old",
             yaar_link::Side::New => "new",
         };
-        let place = match anchor.lines.first == anchor.lines.last {
-            true => anchor.lines.last.to_string(),
-            false => format!("{}-{}", anchor.lines.first, anchor.lines.last),
+        let place = if anchor.lines.first == anchor.lines.last {
+            anchor.lines.last.to_string()
+        } else {
+            format!("{}-{}", anchor.lines.first, anchor.lines.last)
         };
         let id = thread.id.clone();
+        let resolved = thread.resolved;
+        let has_comments = matches!(
+            self.rows.get(index + 1),
+            Some(PaneRow::Comment { thread: next, .. }) if next == &thread.id
+        );
         let state = self.thread_state_mark(&thread.id, cx);
         let moved = self.thread_moved_marks(&thread.id, cx);
-        row.pl_6()
-            .pr_2()
-            .text_color(theme.muted_foreground)
+        let original = self.thread_original_block(&thread.id, cx);
+
+        let resolve_id = thread.id.clone();
+        let resolve_button = Button::new(
+            SharedString::from(format!("review-thread-resolve-{id}")),
+            if resolved { "Reopen" } else { "Resolve" },
+        )
+        .small()
+        .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
+            pane.resolve_or_reopen_thread(resolve_id.clone(), !resolved, cx);
+        }));
+
+        let header = div()
+            .w_full()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(SPACE_3)
             .child(
                 div()
                     .debug_selector(|| format!("review-thread-{id}"))
+                    .typed(TypeRole::CodeSmall)
+                    .text_color(palette.link)
                     .child(format!(
-                        "Thread on {}:{place} ({side}){}",
+                        "{}:{place} ({side}){}",
                         anchor.path.display(),
-                        if thread.resolved { ", resolved" } else { "" }
+                        if resolved { " · resolved" } else { "" }
                     )),
             )
             .children(state)
             .children(moved)
+            .child(div().flex_1())
+            .child(resolve_button);
+
+        let card = Card::new()
+            .part(if has_comments {
+                CardPart::Top
+            } else {
+                CardPart::Whole
+            })
+            .max_w(px(760.))
+            .header(header)
+            .children(original);
+
+        div()
+            .debug_selector(|| format!("review-row-{index}"))
+            .w_full()
+            .pl(self.thread_indent())
+            .pr(SPACE_6)
+            .pt(SPACE_4)
+            .when(!has_comments, |el| el.pb(SPACE_4))
+            .child(card)
+            .into_any_element()
     }
 
-    pub(crate) fn draw_comment(
+    fn draw_comment_card(
         &self,
-        row: Div,
-        thread: &ThreadId,
-        comment: &CommentId,
-        selector_prefix: &str,
-    ) -> Div {
-        let Some(comment) = self
+        index: usize,
+        thread_id: &ThreadId,
+        comment_id: &CommentId,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let palette = palette(cx);
+        let Some(thread) = self
             .review()
-            .and_then(|review| review.threads.iter().find(|held| held.id == *thread))
-            .and_then(|thread| thread.comments.iter().find(|held| held.id == *comment))
+            .and_then(|review| review.threads.iter().find(|held| held.id == *thread_id))
         else {
-            return row;
+            return div()
+                .debug_selector(|| format!("review-row-{index}"))
+                .into_any_element();
         };
+        let Some(comment) = thread.comments.iter().find(|held| held.id == *comment_id) else {
+            return div()
+                .debug_selector(|| format!("review-row-{index}"))
+                .into_any_element();
+        };
+        let is_first = thread
+            .comments
+            .first()
+            .is_some_and(|first| first.id == comment.id);
+        let is_last = !matches!(
+            self.rows.get(index + 1),
+            Some(PaneRow::Comment { thread: next, .. }) if next == &thread.id
+        );
+        let is_draft = comment.round.is_none();
         let state = match comment.round {
             Some(round) => format!("round-{round}"),
             None => "draft".to_owned(),
         };
-        let who = match (comment.author, comment.round) {
-            (Author::Agent, _) => "Agent".to_owned(),
-            (Author::Reviewer, Some(round)) => format!("You, round {round}"),
-            (Author::Reviewer, None) => "You, draft".to_owned(),
+        let (avatar, who_label, badge) = match (comment.author, comment.round) {
+            (Author::Agent, Some(round)) => (
+                Avatar::agent(),
+                "Agent".to_owned(),
+                Some(Chip::new(format!("Round {round}"))),
+            ),
+            (Author::Agent, None) => (Avatar::agent(), "Agent".to_owned(), None),
+            (Author::Reviewer, Some(round)) => (
+                Avatar::you(),
+                "You".to_owned(),
+                Some(Chip::new(format!("Round {round}"))),
+            ),
+            (Author::Reviewer, None) => (
+                Avatar::you(),
+                "You".to_owned(),
+                Some(Chip::new("Draft").tone(Tone::Warn)),
+            ),
         };
-        let mut lines = comment.text.lines();
-        let first = lines.next().unwrap_or_default();
-        let more = if lines.next().is_some() { " …" } else { "" };
-        let id = comment.id.clone();
-        row.pl_10().pr_2().child(
+
+        let edit_tid = thread.id.clone();
+        let edit_cid = comment.id.clone();
+        let del_cid = comment.id.clone();
+        let draft_actions = is_draft.then(|| {
             div()
-                .debug_selector(|| format!("{selector_prefix}-comment-{id}:{state}"))
-                .child(format!("{who}: {first}{more}")),
-        )
+                .flex()
+                .items_center()
+                .gap(SPACE_2)
+                .child(
+                    Button::new(
+                        SharedString::from(format!("comment-edit-{edit_cid}")),
+                        "Edit",
+                    )
+                    .kind(ButtonKind::Ghost)
+                    .small()
+                    .on_click(cx.listener(
+                        move |pane, _: &ClickEvent, window, cx| {
+                            pane.open_edit_draft(edit_tid.clone(), edit_cid.clone(), window, cx);
+                        },
+                    )),
+                )
+                .child(
+                    Button::new(
+                        SharedString::from(format!("comment-delete-{del_cid}")),
+                        "Delete",
+                    )
+                    .kind(ButtonKind::Ghost)
+                    .small()
+                    .on_click(cx.listener(
+                        move |pane, _: &ClickEvent, window, cx| {
+                            pane.delete_draft_by_id(del_cid.clone(), window, cx);
+                        },
+                    )),
+                )
+        });
+
+        let cid = comment.id.clone();
+        let body = div()
+            .flex()
+            .items_start()
+            .gap(SPACE_4)
+            .px(SPACE_5)
+            .py(SPACE_4)
+            .child(avatar)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_1)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(SPACE_3)
+                            .child(
+                                div()
+                                    .typed(TypeRole::Strong)
+                                    .text_color(palette.text)
+                                    .child(who_label),
+                            )
+                            .children(badge)
+                            .child(div().flex_1())
+                            .children(draft_actions),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| format!("review-comment-{cid}:{state}"))
+                            .w_full()
+                            .typed(TypeRole::Body)
+                            .text_color(palette.text)
+                            .child(comment.text.clone()),
+                    ),
+            );
+
+        let has_draft = thread.comments.iter().any(|c| c.round.is_none());
+        let has_sent = thread.comments.iter().any(|c| c.round.is_some());
+        let footer = (is_last && !thread.resolved).then(|| {
+            let reply_tid = thread.id.clone();
+            let attach_tid = thread.id.clone();
+            div()
+                .flex()
+                .items_center()
+                .gap(SPACE_3)
+                .px(SPACE_5)
+                .py(SPACE_3)
+                .border_t_1()
+                .border_color(palette.separator)
+                .when(!has_draft && has_sent, |row| {
+                    row.child(
+                        Button::new(
+                            SharedString::from(format!("thread-reply-{reply_tid}")),
+                            "Reply",
+                        )
+                        .small()
+                        .on_click(cx.listener(
+                            move |pane, _: &ClickEvent, window, cx| {
+                                pane.open_reply(reply_tid.clone(), window, cx);
+                            },
+                        )),
+                    )
+                })
+                .child(
+                    Button::new(
+                        SharedString::from(format!("thread-attach-{attach_tid}")),
+                        "Attach only this",
+                    )
+                    .small()
+                    .on_click(cx.listener(
+                        move |pane, _: &ClickEvent, _, cx| {
+                            pane.attach_only_thread(attach_tid.clone(), cx);
+                        },
+                    )),
+                )
+        });
+
+        let mut card = Card::new()
+            .part(if is_last {
+                CardPart::Bottom
+            } else {
+                CardPart::Middle
+            })
+            .max_w(px(760.));
+        if !is_first {
+            card = card.child(Divider::horizontal());
+        }
+        card = card.child(body).children(footer);
+
+        div()
+            .debug_selector(|| format!("review-row-{index}"))
+            .w_full()
+            .pl(self.thread_indent())
+            .pr(SPACE_6)
+            .when(is_last, |el| el.pb(SPACE_4))
+            .child(card)
+            .into_any_element()
     }
 
     fn draw_diff(
@@ -546,7 +859,7 @@ impl ReviewPane {
         shown: &Row,
         cx: &Context<Self>,
     ) -> Div {
-        let theme = cx.theme();
+        let palette = palette(cx);
         let Some(diff) = self.diff_of(path) else {
             return row;
         };
@@ -555,11 +868,9 @@ impl ReviewPane {
             .as_ref()
             .filter(|_| self.position_row == Some(index))
             .map(|position| position.side);
-        let removed = theme.danger.opacity(0.16);
-        let added = theme.success.opacity(0.16);
-        let bar = |here: bool| {
+        let focus_bar = |here: bool| {
             if here {
-                theme.primary
+                palette.focus
             } else {
                 transparent_black()
             }
@@ -568,19 +879,17 @@ impl ReviewPane {
             div()
                 .flex_none()
                 .w(NUMBER_WIDTH)
-                .px_1()
+                .pr(SPACE_4)
                 .flex()
                 .justify_end()
-                .text_color(theme.muted_foreground)
+                .typed(TypeRole::CodeSmall)
+                .font_features(tabular())
+                .text_color(palette.text_dim)
                 .child(line.map(|line| (line + 1).to_string()).unwrap_or_default())
         };
         let name = on.and_then(|_| self.name_range());
-        let text = |side: Side, line: u32, name: Option<Range<usize>>| {
-            let mark = match side {
-                Side::Old => theme.danger.opacity(0.4),
-                Side::New => theme.success.opacity(0.4),
-            };
-            line_text(diff, index, side, line, mark, name, theme.primary)
+        let text = |side: Side, line: u32, kind: DiffKind, name: Option<Range<usize>>| {
+            line_text(diff, path, (index, side, line), kind, name, &palette)
         };
         let go = |side: Side, layout: TextLayout| {
             cx.listener(move |pane, event: &MouseDownEvent, window, cx| {
@@ -592,37 +901,66 @@ impl ReviewPane {
                 pane.moved_over(Spot::Diff { index, side }, &layout, event, window, cx);
             })
         };
+        let gutter = |side: Side, active: bool| {
+            div()
+                .flex_none()
+                .w(GUTTER_WIDTH)
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    GutterPlus::new(("diff-plus", index * 2 + usize::from(side == Side::New)))
+                        .visible(active)
+                        .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
+                            pane.open_comment_at(index, side, window, cx);
+                        })),
+                )
+        };
 
         match (self.layout, shown) {
-            (_, Row::Skipped { old, .. }) => {
-                row.px_2()
-                    .text_color(theme.muted_foreground)
-                    .child(match old.len() {
-                        1 => "⋯ 1 unchanged line".to_owned(),
-                        lines => format!("⋯ {lines} unchanged lines"),
-                    })
-            }
+            (_, Row::Skipped { old, .. }) => row
+                .pl(px(98.))
+                .pr(SPACE_6)
+                .bg(palette.fold_ground)
+                .typed(TypeRole::Meta)
+                .text_color(palette.text_dim)
+                .child(match old.len() {
+                    1 => "⋯ 1 unchanged line".to_owned(),
+                    lines => format!("⋯ {lines} unchanged lines"),
+                }),
             (Layout::Unified, _) => {
                 // The sign repeats the colour, for a reader who cannot tell the two colours apart.
-                let (side, sign, tint) = match shown {
-                    Row::Removed { .. } => (Side::Old, "-", Some(removed)),
-                    Row::Added { .. } => (Side::New, "+", Some(added)),
-                    _ => (Side::New, "", None),
+                let (side, sign, kind) = match shown {
+                    Row::Removed { .. } => (Side::Old, "-", DiffKind::Removed),
+                    Row::Added { .. } => (Side::New, "+", DiffKind::Added),
+                    _ => (Side::New, "", DiffKind::Context),
                 };
                 let Some(line) = shown.line(side) else {
                     return row;
                 };
-                let (text, layout) = text(side, line, name);
+                let (text, layout) = text(side, line, kind, name);
                 let row = row
                     .border_l_2()
-                    .border_color(bar(on.is_some()))
+                    .border_color(focus_bar(on.is_some()))
                     .on_mouse_down(MouseButton::Left, go(side, layout.clone()))
                     .on_mouse_move(rest(side, layout))
+                    .child(gutter(side, on.is_some()))
                     .child(number(shown.line(Side::Old)))
                     .child(number(shown.line(Side::New)))
-                    .child(div().flex_none().w(SIGN_WIDTH).px_1().child(sign))
+                    .child(bar(kind, &palette))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(SIGN_WIDTH)
+                            .flex()
+                            .justify_center()
+                            .typed(TypeRole::Code)
+                            .text_color(sign_colour(kind, &palette))
+                            .child(sign),
+                    )
                     .child(text);
-                match tint {
+                match ground(kind, &palette) {
                     Some(tint) => row.bg(tint),
                     None => row,
                 }
@@ -631,7 +969,7 @@ impl ReviewPane {
                 // An unchanged line is on both sides and the reviewer is on it as a whole; a
                 // changed row holds two lines.
                 let unchanged = matches!(shown, Row::Context { .. });
-                let half = |side: Side, tint: Hsla| {
+                let half = |side: Side, kind: DiffKind| {
                     let half = div()
                         .debug_selector(|| format!("review-row-{index}-{}", side_name(side)))
                         .w_1_2()
@@ -643,27 +981,34 @@ impl ReviewPane {
                     let Some(line) = shown.line(side) else {
                         return half
                             .border_color(transparent_black())
-                            .bg(theme.muted.opacity(0.5));
+                            .child(gap_fill(&palette));
                     };
                     let (stop, here) = if unchanged {
                         (Side::New, on.is_some())
                     } else {
                         (side, on == Some(side))
                     };
+                    let line_kind = if unchanged { DiffKind::Context } else { kind };
                     let name = name
                         .clone()
                         .filter(|_| on == Some(stop) && (!unchanged || side == Side::New));
-                    let (text, layout) = text(side, line, name);
+                    let (text, layout) = text(side, line, line_kind, name);
                     let half = half
-                        .border_color(bar(here))
+                        .border_color(focus_bar(here))
                         .on_mouse_down(MouseButton::Left, go(stop, layout.clone()))
                         .on_mouse_move(rest(stop, layout))
+                        .child(gutter(stop, here && (!unchanged || side == Side::New)))
                         .child(number(Some(line)))
+                        .child(bar(line_kind, &palette))
                         .child(text);
-                    if unchanged { half } else { half.bg(tint) }
+                    match ground(line_kind, &palette) {
+                        Some(tint) => half.bg(tint),
+                        None => half,
+                    }
                 };
-                row.child(half(Side::Old, removed))
-                    .child(half(Side::New, added))
+                row.child(half(Side::Old, DiffKind::Removed))
+                    .child(Divider::vertical())
+                    .child(half(Side::New, DiffKind::Added))
             }
         }
     }
@@ -676,15 +1021,93 @@ pub(crate) fn side_name(side: Side) -> &'static str {
     }
 }
 
+/// Merges syntax-colour spans with optional word-diff background spans into sorted, disjoint
+/// highlight ranges for GPUI's `StyledText`.
+pub(crate) fn diff_highlights(
+    path: &Path,
+    drawn: &str,
+    word_marks: &[Range<usize>],
+    word_bg: Option<Hsla>,
+    palette: &Palette,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let end = drawn.len();
+    let syntax_spans = syntax::highlight_line(path, drawn);
+    let words: Vec<Range<usize>> = if word_bg.is_some() {
+        word_marks
+            .iter()
+            .filter(|mark| mark.start < end && mark.start < mark.end)
+            .map(|mark| mark.start..mark.end.min(end))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if syntax_spans.is_empty() && words.is_empty() {
+        return Vec::new();
+    }
+    if words.is_empty() {
+        return syntax_spans
+            .into_iter()
+            .map(|(range, kind)| {
+                (
+                    range,
+                    HighlightStyle {
+                        color: Some(syntax::colour(kind, palette)),
+                        ..HighlightStyle::default()
+                    },
+                )
+            })
+            .collect();
+    }
+    let mut cuts = Vec::with_capacity((syntax_spans.len() + words.len()) * 2);
+    for (range, _) in &syntax_spans {
+        cuts.push(range.start);
+        cuts.push(range.end);
+    }
+    for range in &words {
+        cuts.push(range.start);
+        cuts.push(range.end);
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out = Vec::new();
+    for pair in cuts.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if a >= b {
+            continue;
+        }
+        let in_word = words.iter().any(|mark| mark.start <= a && b <= mark.end);
+        let syn_kind = syntax_spans
+            .iter()
+            .find(|(range, _)| range.start <= a && b <= range.end)
+            .map(|(_, kind)| *kind);
+        let style = if in_word {
+            // Text on a word chip is always `palette.text`, never dim, for contrast.
+            HighlightStyle {
+                color: Some(palette.text),
+                background_color: word_bg,
+                ..HighlightStyle::default()
+            }
+        } else if let Some(kind) = syn_kind {
+            HighlightStyle {
+                color: Some(syntax::colour(kind, palette)),
+                ..HighlightStyle::default()
+            }
+        } else {
+            continue;
+        };
+        out.push((a..b, style));
+    }
+    out
+}
+
 /// The selector carries the text as handed to the text system: a test cannot read what is drawn.
 fn line_text(
     diff: &ShownDiff,
-    index: usize,
-    side: Side,
-    line: u32,
-    mark: Hsla,
+    path: &Path,
+    (index, side, line): (usize, Side, u32),
+    kind: DiffKind,
     name: Option<Range<usize>>,
-    name_mark: Hsla,
+    palette: &Palette,
 ) -> (Div, TextLayout) {
     let text = diff.text(side, line);
     // Marks count the bytes of the line as in the file. Where non-text bytes were replaced, the
@@ -694,25 +1117,16 @@ fn line_text(
         Cow::Owned(_) => Vec::new(),
     };
     let end = text.floor_char_boundary(DRAWN_BYTES);
-    let highlights = marks
-        .into_iter()
-        .filter(|mark| mark.start < end)
-        .map(|marked| {
-            let style = HighlightStyle {
-                background_color: Some(mark),
-                ..HighlightStyle::default()
-            };
-            (marked.start..marked.end.min(end), style)
-        })
-        .collect::<Vec<_>>();
     let drawn = text[..end].to_owned();
+    let highlights = diff_highlights(path, &drawn, &marks, word(kind, palette), palette);
     let name = name.filter(|name| name.end <= end);
     code_text(
         format!("review-text-{index}-{}:{drawn}", side_name(side)),
         &drawn,
         highlights,
         name,
-        name_mark,
+        palette.focus,
+        palette.text,
     )
 }
 
@@ -724,6 +1138,7 @@ pub(crate) fn code_text(
     highlights: Vec<(Range<usize>, HighlightStyle)>,
     name: Option<Range<usize>>,
     name_mark: Hsla,
+    text_colour: Hsla,
 ) -> (Div, TextLayout) {
     let styled = StyledText::new(text.to_owned()).with_highlights(highlights);
     let layout = styled.layout().clone();
@@ -751,13 +1166,15 @@ pub(crate) fn code_text(
         .relative()
         .flex_none()
         .whitespace_nowrap()
+        .typed(TypeRole::Code)
+        .text_color(text_colour)
         .child(styled)
         .children(over);
     (
         div()
             .flex_1()
             .min_w_0()
-            .px_1()
+            .px(SPACE_2)
             .flex()
             .overflow_hidden()
             .child(element),
@@ -765,7 +1182,7 @@ pub(crate) fn code_text(
     )
 }
 
-fn short(commit: &str) -> &str {
+pub(crate) fn short(commit: &str) -> &str {
     commit.get(..7).unwrap_or(commit)
 }
 
@@ -784,7 +1201,7 @@ fn base_words(base: &Base) -> String {
     }
 }
 
-fn comparison_sentence(comparison: &Comparison) -> String {
+pub(crate) fn comparison_sentence(comparison: &Comparison) -> String {
     const ONLY_UNCOMMITTED: &str =
         "nothing to compare with, so only the uncommitted changes are shown";
     match comparison {

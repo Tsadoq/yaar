@@ -2,11 +2,11 @@
 //! since the reviewer's last review and shows the review of the turn's session, or, set to
 //! keep the selection, only offers that change.
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_link::{ReviewId, SessionId, Setting, TurnEndSelects};
+use yaar_ui::metrics::SPACE_3;
+use yaar_ui::pieces::{Banner, Button, ButtonKind, Tone};
 
-use crate::draw::ROW_HEIGHT;
 use crate::tree::ListedFor;
 use crate::{ChangeShown, ReviewPane, TakeOffer, ToggleKeepSelection};
 
@@ -129,54 +129,43 @@ impl ReviewPane {
         cx.notify();
     }
 
-    pub(crate) fn offer_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(crate) fn offer_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.keep && self.tree.offer.is_none() {
             return None;
         }
-        let theme = cx.theme();
-        let mut bar = div()
-            .flex_none()
-            .h(ROW_HEIGHT)
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_2()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .border_b_1()
-            .border_color(theme.border);
+        let mut banner = Banner::custom().tone(if self.tree.offer.is_some() {
+            Tone::Info
+        } else {
+            Tone::Plain
+        });
         if self.keep {
-            bar = bar.child(
+            banner = banner.child(
                 div()
                     .debug_selector(|| "review-keeps-selection".to_owned())
-                    .text_color(theme.muted_foreground)
                     .child("Keeping the selection at a turn end"),
             );
         }
         if self.tree.offer.is_some() {
-            bar = bar.child(
+            banner = banner.child(
                 div()
                     .debug_selector(|| "review-offer".to_owned())
+                    .flex_1()
                     .flex()
-                    .gap_2()
+                    .items_center()
+                    .gap(SPACE_3)
                     .child("A turn ended: what changed since your last review")
                     .child(
-                        div()
-                            .debug_selector(|| "review-offer-take".to_owned())
-                            .px_2()
-                            .bg(theme.secondary)
-                            .child("Show")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|pane, _: &MouseDownEvent, window, cx| {
-                                    pane.acted(cx);
-                                    pane.take(window, cx);
-                                }),
-                            ),
+                        Button::new("review-offer-take", "Show")
+                            .kind(ButtonKind::Primary)
+                            .small()
+                            .selector("review-offer-take")
+                            .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                                pane.acted(cx);
+                                pane.take(window, cx);
+                            })),
                     ),
             );
         }
-        Some(bar)
+        Some(banner.into_any_element())
     }
 }

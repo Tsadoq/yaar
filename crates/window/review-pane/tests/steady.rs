@@ -537,7 +537,7 @@ fn another_review_shown_when_a_session_runs_brings_its_thread_above_the_view_and
             pane.review().map(|review| review.id.clone()) == Some(ra.clone())
         })
     });
-    assert_eq!(thread_row(&stage, &mut cx), 5);
+    assert_eq!(thread_row(&stage, &mut cx), 4);
 
     let after = reading(&stage, &mut cx);
     assert_eq!(after.first, held.first);
@@ -602,13 +602,12 @@ fn a_thread_that_moves_while_its_row_is_first_in_view_leaves_the_diff_where_it_i
     );
     let (diff, offset) = diff_in_view(&stage, &mut cx);
     assert_eq!(offset, 2, "the diff starts under the thread");
-    let offset = offset as isize;
+    let before = on_screen(&diff, &stage, &mut cx);
 
     tell_moved(&mut stage, thread_on(20, comments), 30, &mut cx);
-    assert_eq!(below_the_top(&diff, &stage, &mut cx), offset);
+    assert_eq!(on_screen(&diff, &stage, &mut cx), before);
     let after = reading(&stage, &mut cx);
     assert_eq!(after.view, View::Changes);
-    assert_eq!(after.start, held.start - 2, "the thread's two rows left");
     assert_eq!(after.position, held.position);
 }
 
@@ -623,13 +622,12 @@ fn a_thread_deleted_while_its_row_is_first_in_view_leaves_the_diff_where_it_is_o
         matches!(held.first, PaneRow::Comment { .. }),
         "a comment is first in view"
     );
-    let (diff, offset) = diff_in_view(&stage, &mut cx);
-    let offset = offset as isize;
+    let (diff, _) = diff_in_view(&stage, &mut cx);
+    let before = on_screen(&diff, &stage, &mut cx);
 
     tell_threads(&mut stage, Vec::new(), &mut cx);
-    assert_eq!(below_the_top(&diff, &stage, &mut cx), offset);
+    assert_eq!(on_screen(&diff, &stage, &mut cx), before);
     let after = reading(&stage, &mut cx);
-    assert_eq!(after.start, held.start - 3, "the thread's three rows left");
     assert_eq!(after.position, held.position);
 }
 
@@ -673,28 +671,29 @@ fn when_the_thread_first_in_view_goes_the_next_one_in_view_is_what_the_view_is_k
             .expect("the thread has a row")
     };
     let first_row = at('7', &stage, &mut cx);
-    scroll_until_first(&stage, first_row + 30, &mut cx);
+    scroll_until_first(&stage, first_row + 38, &mut cx);
     let held = reading(&stage, &mut cx);
     assert!(
         matches!(held.first, PaneRow::Comment { .. }),
         "a comment of the first thread is first in view"
     );
-    let second_row = rows_of(&stage, &mut cx)[at('8', &stage, &mut cx)].clone();
-    let offset = below_the_top(&second_row, &stage, &mut cx);
-    assert!(
-        offset > 0,
-        "the second thread starts in view, {offset} rows down"
-    );
+    let second_index = at('8', &stage, &mut cx);
+    let second_row = rows_of(&stage, &mut cx)[second_index].clone();
     let in_view = stage.pane.read_with(&cx, |pane, _| pane.rows_in_view());
+    assert!(
+        in_view.contains(&second_index),
+        "the second thread starts in view: {second_index} not in {in_view:?}"
+    );
     assert!(
         rows_of(&stage, &mut cx)[in_view.clone()]
             .iter()
             .all(|row| matches!(row, PaneRow::Thread { .. } | PaneRow::Comment { .. })),
         "only threads and comments are in view: {in_view:?}"
     );
+    let before = on_screen(&second_row, &stage, &mut cx);
 
     tell_threads(&mut stage, vec![second()], &mut cx);
-    assert_eq!(below_the_top(&second_row, &stage, &mut cx), offset);
+    assert_eq!(on_screen(&second_row, &stage, &mut cx), before);
     assert_eq!(reading(&stage, &mut cx).view, View::Changes);
 }
 

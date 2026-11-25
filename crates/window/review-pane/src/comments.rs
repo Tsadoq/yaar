@@ -390,6 +390,119 @@ impl ReviewPane {
         self.report(asked, cx);
     }
 
+    pub(crate) fn open_comment_at(
+        &mut self,
+        index: usize,
+        side: Side,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.go_to(index, side, cx);
+        self.comment(&Comment, window, cx);
+    }
+
+    pub(crate) fn open_edit_draft(
+        &mut self,
+        thread_id: ThreadId,
+        comment_id: CommentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.acted(cx);
+        let Some(review) = self.review() else {
+            return self.say("The reviews are not here yet", cx);
+        };
+        let review_id = review.id.clone();
+        let Some(thread) = review.threads.iter().find(|t| t.id == thread_id) else {
+            return;
+        };
+        let text = thread
+            .comments
+            .iter()
+            .find(|c| c.id == comment_id)
+            .map(|c| c.text.clone())
+            .unwrap_or_default();
+        let at = Position {
+            path: thread.anchor.path.clone(),
+            side: pane_side(thread.anchor.side),
+            line: thread.anchor.lines.last.saturating_sub(1),
+        };
+        self.open_box(
+            CommentBox {
+                review: review_id,
+                thread: thread_id,
+                comment: comment_id,
+                anchor: None,
+                at,
+                text,
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn open_reply(
+        &mut self,
+        thread_id: ThreadId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.acted(cx);
+        let Some(review) = self.review() else {
+            return self.say("The reviews are not here yet", cx);
+        };
+        let review_id = review.id.clone();
+        let Some(thread) = review.threads.iter().find(|t| t.id == thread_id) else {
+            return;
+        };
+        if thread.comments.iter().any(|c| c.round.is_none()) {
+            return self.say("This thread holds a draft already: edit it", cx);
+        }
+        let Ok(comment) = new_id() else {
+            return self.say("An id for the comment could not be drawn", cx);
+        };
+        let at = Position {
+            path: thread.anchor.path.clone(),
+            side: pane_side(thread.anchor.side),
+            line: thread.anchor.lines.last.saturating_sub(1),
+        };
+        self.open_box(
+            CommentBox {
+                review: review_id,
+                thread: thread_id,
+                comment: CommentId::new(comment),
+                anchor: None,
+                at,
+                text: String::new(),
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn delete_draft_by_id(
+        &mut self,
+        comment: CommentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.acted(cx);
+        let Some(review) = self.review().map(|review| review.id.clone()) else {
+            return;
+        };
+        if self
+            .open_box
+            .as_ref()
+            .is_some_and(|open| open.view.comment == comment)
+        {
+            self.close_box(window, cx);
+        }
+        let asked = self.models.link.update(cx, |link, cx| {
+            link.ask(Request::DeleteDraft { review, comment }, cx)
+        });
+        self.report(asked, cx);
+    }
+
     pub(crate) fn report(&mut self, asked: Task<Result<Reply, AskError>>, cx: &mut Context<Self>) {
         cx.spawn(async move |pane, cx| {
             let words = match asked.await {

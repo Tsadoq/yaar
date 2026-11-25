@@ -3,8 +3,8 @@
 
 use std::path::Path;
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
+use yaar_ui::pieces::{Chip, Tone};
 
 use crate::{ChangeShown, ReviewPane};
 
@@ -38,14 +38,12 @@ impl ReviewPane {
         &self,
         index: usize,
         path: &Path,
-        cx: &Context<Self>,
+        _cx: &Context<Self>,
     ) -> Option<AnyElement> {
         self.changed_by_another_too(path).then(|| {
-            div()
-                .debug_selector(|| format!("review-shared-{index}"))
-                .flex_none()
-                .text_color(cx.theme().warning)
-                .child("also changed by another agent")
+            Chip::new("also changed by another agent")
+                .tone(Tone::Warn)
+                .selector(format!("review-shared-{index}"))
                 .into_any_element()
         })
     }

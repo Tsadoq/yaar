@@ -60,8 +60,7 @@ fn reading(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<String> {
                     }
                     Row::Skipped { old, .. } => read.push(format!("… {}", old.len())),
                 },
-                PaneRow::Comparison { .. }
-                | PaneRow::Commit { .. }
+                PaneRow::Commit { .. }
                 | PaneRow::Unshown { .. }
                 | PaneRow::Thread { .. }
                 | PaneRow::Comment { .. }
@@ -174,7 +173,7 @@ fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppCont
     };
     let shown = rows(&stage.pane, &mut cx);
     assert_eq!(
-        shown[3..],
+        shown[2..],
         [
             PaneRow::File {
                 path: numbers.clone(),
@@ -236,7 +235,7 @@ fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppCont
     assert!(tops.is_sorted_by(|above, below| above < below), "{tops:?}");
     assert_lines_drawn_as_read(&stage.pane, &mut cx);
 
-    let first_line = bounds_of_row(4, &mut cx).center();
+    let first_line = bounds_of_row(3, &mut cx).center();
     cx.simulate_click(first_line, Modifiers::none());
     cx.simulate_keystrokes("s");
     assert_eq!(
@@ -245,7 +244,7 @@ fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppCont
     );
     let split = rows(&stage.pane, &mut cx);
     assert_eq!(
-        split[3..9],
+        split[2..8],
         [
             PaneRow::File {
                 path: numbers.clone(),
@@ -283,8 +282,8 @@ fn change(stage: &mut Stage, changes: &Changes, cx: &mut VisualTestContext) {
     let comparison = changes.comparison.clone();
     wait_until(cx, "the rows of the new changes", |cx| {
         stage.pane.read_with(cx, |pane, _| {
-            matches!(pane.rows().first(), Some(PaneRow::Comparison { comparison: shown, .. })
-                if *shown == comparison)
+            pane.comparison()
+                .is_some_and(|(shown, _)| *shown == comparison)
         })
     });
     wait_for_files(&stage.pane, cx);
@@ -358,17 +357,16 @@ fn above_the_changes_the_pane_shows_the_comparison_and_its_commits_and_offers_a_
         let shown = rows(&stage.pane, &mut cx);
         let commits = changes.commits.len();
         assert_eq!(
-            shown[0],
-            PaneRow::Comparison {
-                comparison: changes.comparison.clone(),
-                offers_base: false
-            }
+            stage.pane.read_with(&cx, |pane, _| pane
+                .comparison()
+                .map(|(c, o)| (c.clone(), o))),
+            Some((changes.comparison.clone(), false))
         );
         assert_eq!(
-            shown[1..=commits],
+            shown[..commits],
             changes.commits.iter().map(commit_row).collect::<Vec<_>>()[..]
         );
-        assert_eq!(shown[commits + 1], heading);
+        assert_eq!(shown[commits], heading);
         assert_eq!(
             drawn("review-offer-base", &mut cx),
             None,
@@ -388,15 +386,14 @@ fn above_the_changes_the_pane_shows_the_comparison_and_its_commits_and_offers_a_
         change(&mut stage, &changes, &mut cx);
         let shown = rows(&stage.pane, &mut cx);
         assert_eq!(
-            shown[0],
-            PaneRow::Comparison {
-                comparison: changes.comparison.clone(),
-                offers_base: true
-            }
+            stage.pane.read_with(&cx, |pane, _| pane
+                .comparison()
+                .map(|(c, o)| (c.clone(), o))),
+            Some((changes.comparison.clone(), true))
         );
-        assert_eq!(shown[1], heading, "{why:?}");
+        assert_eq!(shown[0], heading, "{why:?}");
         assert_eq!(
-            shown[2..],
+            shown[1..],
             [
                 PaneRow::Diff {
                     path: PathBuf::from("notes.txt"),
@@ -411,7 +408,7 @@ fn above_the_changes_the_pane_shows_the_comparison_and_its_commits_and_offers_a_
 
         let offer = drawn("review-offer-base", &mut cx)
             .unwrap_or_else(|| panic!("no base is offered for {why:?}"));
-        assert!(bounds_of_row(0, &mut cx).contains(&offer.center()));
+        assert!(offer.bottom() <= bounds_of_row(0, &mut cx).top());
         assert_eq!(asked_for_a_base.get(), clicks);
         cx.simulate_click(offer.center(), Modifiers::none());
         assert_eq!(asked_for_a_base.get(), clicks + 1, "{why:?}");
@@ -443,7 +440,7 @@ fn open_on_one_file(
     let changes = since_main(Vec::new(), vec![file("src/long.txt", FileStatus::Modified)]);
     stage.keeper.show(&changes, |_| texts(old, new), &mut cx);
     wait_for_files(&stage.pane, &mut cx);
-    let first_line = bounds_of_row(2, &mut cx).center();
+    let first_line = bounds_of_row(1, &mut cx).center();
     cx.simulate_click(first_line, Modifiers::none());
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     (stage, PathBuf::from("src/long.txt"), cx)
@@ -804,7 +801,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     assert_eq!(before.0, [lines(story.0), lines(story.1)]);
     assert_eq!(before.1, [Vec::new(), lines(fresh)]);
 
-    let a_line = bounds_of_row(6, &mut cx).center();
+    let a_line = bounds_of_row(5, &mut cx).center();
     cx.simulate_click(a_line, Modifiers::none());
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     cx.write_to_clipboard(ClipboardItem::new_string("pasted".to_owned()));
@@ -828,7 +825,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             line: 2,
         };
         if the_pane.read_with(&cx, |pane, _| pane.position().cloned()) != Some(on_the_line) {
-            let a_line = bounds_of_row(6, &mut cx).center();
+            let a_line = bounds_of_row(5, &mut cx).center();
             cx.simulate_click(a_line, Modifiers::none());
         }
         let effect = effect_of(control.keystroke);
@@ -1092,7 +1089,7 @@ fn j_and_k_walk_every_line_of_the_diff_in_one_order_whatever_the_layout(cx: &mut
 
     cx.simulate_keystrokes("j");
     assert_eq!(position(pane, &mut cx), order[1]);
-    let first = bounds_of_row(2, &mut cx).center();
+    let first = bounds_of_row(1, &mut cx).center();
     cx.simulate_click(first, Modifiers::none());
     assert_eq!(position(pane, &mut cx), order[0]);
 
@@ -1194,13 +1191,13 @@ fn unchanged_lines_far_from_any_change_are_one_row_that_the_reviewer_steps_over(
             line: 10
         }
     );
-    click(3, &mut cx);
+    click(2, &mut cx);
     assert_eq!(position(pane, &mut cx), at(7));
     cx.simulate_keystrokes("k");
     assert_eq!(position(pane, &mut cx), at(7));
-    click(10, &mut cx);
+    click(9, &mut cx);
     assert_eq!(position(pane, &mut cx), at(13));
-    click(11, &mut cx);
+    click(10, &mut cx);
     assert_eq!(position(pane, &mut cx), at(13));
     cx.simulate_keystrokes("j");
     assert_eq!(position(pane, &mut cx), at(17));
@@ -1227,21 +1224,20 @@ fn a_click_on_a_line_puts_the_reviewer_on_it(cx: &mut TestAppContext) {
         let middle = bounds_of_row(row, cx).center();
         cx.simulate_click(middle, Modifiers::none());
     };
-    // Rows: the comparison, the heading, then keep, -old, +new, end.
-    click(4, &mut cx);
-    assert_eq!(position(pane, &mut cx), at(Side::New, 1));
+    // Rows: the heading, then keep, -old, +new, end.
     click(3, &mut cx);
+    assert_eq!(position(pane, &mut cx), at(Side::New, 1));
+    click(2, &mut cx);
     assert_eq!(position(pane, &mut cx), at(Side::Old, 1));
-    click(5, &mut cx);
+    click(4, &mut cx);
     assert_eq!(position(pane, &mut cx), at(Side::New, 2));
-    click(1, &mut cx);
     click(0, &mut cx);
     assert_eq!(position(pane, &mut cx), at(Side::New, 2));
 
-    // Split view: the comparison, the heading, then keep, old beside new, end.
+    // Split view: the heading, then keep, old beside new, end.
     cx.simulate_keystrokes("s");
     assert_eq!(
-        rows(pane, &mut cx)[3],
+        rows(pane, &mut cx)[2],
         PaneRow::Diff {
             path: path.clone(),
             row: Row::Changed {
@@ -1251,14 +1247,14 @@ fn a_click_on_a_line_puts_the_reviewer_on_it(cx: &mut TestAppContext) {
         }
     );
     for (half, line) in [
-        ("review-row-3-old", at(Side::Old, 1)),
-        ("review-row-3-new", at(Side::New, 1)),
+        ("review-row-2-old", at(Side::Old, 1)),
+        ("review-row-2-new", at(Side::New, 1)),
     ] {
         let half = drawn(half, &mut cx).expect("the half of the row is laid out");
         cx.simulate_click(half.center(), Modifiers::none());
         assert_eq!(position(pane, &mut cx), line);
     }
-    for half in ["review-row-2-old", "review-row-2-new"] {
+    for half in ["review-row-1-old", "review-row-1-new"] {
         let half = drawn(half, &mut cx).expect("the half of the row is laid out");
         cx.simulate_click(half.center(), Modifiers::none());
         assert_eq!(position(pane, &mut cx), at(Side::New, 0));
@@ -1271,22 +1267,24 @@ fn of_a_long_diff_only_the_rows_in_view_are_laid_out_and_the_wheel_moves_the_vie
 ) {
     let new: String = (0..5000).map(|line| format!("line {line}\n")).collect();
     let (stage, path, mut cx) = open_on_one_file("", &new, cx);
-    // The rounds line takes one row: the window grows by it, so the rows in view are as before.
     let height = WINDOW.height + px(20.);
     cx.simulate_resize(size(WINDOW.width, height));
     let pane = &stage.pane;
-    assert_eq!(rows(pane, &mut cx).len(), 5002);
+    assert_eq!(rows(pane, &mut cx).len(), 5001);
 
     let in_view = |cx: &mut VisualTestContext| pane.read_with(cx, |pane, _| pane.rows_in_view());
     let at_first = in_view(&mut cx);
-    assert_eq!(
-        at_first,
-        0..20,
-        "a window of 420 px holds 20 rows of 20 px below the bar"
+    assert_eq!(at_first.start, 0);
+    assert!(
+        at_first.len() > 10 && at_first.len() < 30,
+        "only the viewport's rows are laid out: {at_first:?}"
     );
-    assert!(drawn("review-row-19", &mut cx).is_some());
-    assert_eq!(drawn("review-row-20", &mut cx), None);
-    assert_eq!(drawn("review-row-5001", &mut cx), None);
+    assert!(drawn(&format!("review-row-{}", at_first.end - 1), &mut cx).is_some());
+    assert_eq!(
+        drawn(&format!("review-row-{}", at_first.end), &mut cx),
+        None
+    );
+    assert_eq!(drawn("review-row-5000", &mut cx), None);
 
     let on = position(pane, &mut cx);
     let over_the_rows = bounds_of_row(5, &mut cx).center();
@@ -1296,9 +1294,16 @@ fn of_a_long_diff_only_the_rows_in_view_are_laid_out_and_the_wheel_moves_the_vie
         ..ScrollEvent::default()
     });
     cx.run_until_parked();
-    assert_eq!(in_view(&mut cx), 100..120);
-    assert_eq!(drawn("review-row-19", &mut cx), None);
-    assert!(drawn("review-row-100", &mut cx).is_some());
+    let scrolled = in_view(&mut cx);
+    assert!(
+        scrolled.start >= 95 && scrolled.start <= 105,
+        "{scrolled:?}"
+    );
+    assert_eq!(
+        drawn(&format!("review-row-{}", at_first.end - 1), &mut cx),
+        None
+    );
+    assert!(drawn(&format!("review-row-{}", scrolled.start), &mut cx).is_some());
     assert_eq!(position(pane, &mut cx), on);
     assert_eq!(
         on,
@@ -1319,8 +1324,8 @@ fn of_a_long_diff_only_the_rows_in_view_are_laid_out_and_the_wheel_moves_the_vie
         }
     );
     let row = pane.read_with(&cx, |pane, _| pane.position_row());
-    assert_eq!(row, Some(3));
-    assert!(in_view(&mut cx).contains(&3));
+    assert_eq!(row, Some(2));
+    assert!(in_view(&mut cx).contains(&2));
 
     for _ in 0..40 {
         cx.simulate_keystrokes("j");
@@ -1328,7 +1333,7 @@ fn of_a_long_diff_only_the_rows_in_view_are_laid_out_and_the_wheel_moves_the_vie
     let row = pane
         .read_with(&cx, |pane, _| pane.position_row())
         .expect("a row");
-    assert_eq!(row, 43);
+    assert_eq!(row, 42);
     assert!(in_view(&mut cx).contains(&row));
     let drawn = bounds_of_row(row, &mut cx);
     assert!(drawn.top() >= px(0.) && drawn.bottom() <= height);
@@ -1399,7 +1404,7 @@ fn a_file_with_no_lines_to_show_says_why_and_a_file_with_one_version_is_all_remo
         row,
     };
     assert_eq!(
-        rows(&stage.pane, &mut cx)[1..],
+        rows(&stage.pane, &mut cx),
         [
             heading("art.png", FileStatus::Modified),
             unshown("art.png", Unshown::Binary),
@@ -1456,7 +1461,8 @@ fn a_file_with_no_lines_to_show_says_why_and_a_file_with_one_version_is_all_remo
             line: 0
         }
     );
-    for row in 0..14 {
+    cx.simulate_resize(size(WINDOW.width, px(600.)));
+    for row in 0..13 {
         bounds_of_row(row, &mut cx);
     }
 }
@@ -1503,17 +1509,17 @@ fn a_line_is_held_as_the_file_has_it_whatever_its_bytes_and_however_long_it_is(
             format!("+{}", wide("日本語日本")).as_str(),
         ]
     );
-    for row in 0..8 {
+    for row in 0..7 {
         bounds_of_row(row, &mut cx);
     }
     // Of the long line only its start is drawn: up to the last whole character within 1,024 bytes.
-    assert!(drawn("review-text-2-new:caf\u{fffd}", &mut cx).is_some());
-    assert!(drawn("review-text-4-old:naïve ✓ 日本", &mut cx).is_some());
-    assert!(drawn("review-text-6-new:naïve ✗ 日本", &mut cx).is_some());
+    assert!(drawn("review-text-1-new:caf\u{fffd}", &mut cx).is_some());
+    assert!(drawn("review-text-3-old:naïve ✓ 日本", &mut cx).is_some());
+    assert!(drawn("review-text-5-new:naïve ✗ 日本", &mut cx).is_some());
     let start = format!("{} 日", "x".repeat(1019));
     assert_eq!(start.len(), 1023);
-    assert!(drawn(&format!("review-text-5-old:{start}"), &mut cx).is_some());
-    assert!(drawn(&format!("review-text-7-new:{start}"), &mut cx).is_some());
+    assert!(drawn(&format!("review-text-4-old:{start}"), &mut cx).is_some());
+    assert!(drawn(&format!("review-text-6-new:{start}"), &mut cx).is_some());
 }
 
 #[gpui_kit::test]
@@ -1528,7 +1534,7 @@ fn changes_read_again_stay_as_they_are_shown_until_the_new_versions_are_here(
         side: Side::Old,
         line: 1,
     };
-    let on_the_removed_line = bounds_of_row(3, &mut cx).center();
+    let on_the_removed_line = bounds_of_row(2, &mut cx).center();
     cx.simulate_click(on_the_removed_line, Modifiers::none());
     assert_eq!(position(&stage.pane, &mut cx), removed);
     let shown = rows(&stage.pane, &mut cx);
@@ -1559,7 +1565,7 @@ fn changes_read_again_stay_as_they_are_shown_until_the_new_versions_are_here(
     assert_eq!(position(&stage.pane, &mut cx), removed);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.position_row()),
-        Some(3)
+        Some(2)
     );
 
     let asked = read_again(&mut stage, &mut cx);
@@ -1594,11 +1600,13 @@ fn changes_the_keeper_refuses_to_read_again_stay_as_they_are_shown_and_the_pane_
     cx.simulate_resize(size(WINDOW.width, height));
     let changes = since_main(Vec::new(), vec![file("src/long.txt", FileStatus::Modified)]);
     let shown = rows(&stage.pane, &mut cx);
-    assert_eq!(shown.len(), 102);
+    assert_eq!(shown.len(), 101);
     let on = position(&stage.pane, &mut cx);
     let in_view =
         |cx: &mut VisualTestContext| stage.pane.read_with(cx, |pane, _| pane.rows_in_view());
-    assert_eq!(in_view(&mut cx), 0..20);
+    let before = in_view(&mut cx);
+    assert_eq!(before.start, 0);
+    assert!(before.len() > 10, "{before:?}");
     assert_eq!(drawn("review-refused", &mut cx), None);
 
     let ask_again = |keeper: &mut common::KeeperEnd, cx: &mut VisualTestContext| {
@@ -1624,8 +1632,13 @@ fn changes_the_keeper_refuses_to_read_again_stay_as_they_are_shown_and_the_pane_
     assert_eq!(position(&stage.pane, &mut cx), on);
     let said = drawn("review-refused", &mut cx).expect("the pane tells of the refusal");
     assert!(said.top() >= px(0.) && said.bottom() <= bounds_of_row(0, &mut cx).top());
-    assert_eq!(in_view(&mut cx), 0..19);
-    assert!(bounds_of_row(18, &mut cx).bottom() <= height);
+    let with_banner = in_view(&mut cx);
+    assert_eq!(with_banner.start, 0);
+    assert!(
+        with_banner.end < before.end,
+        "{with_banner:?} vs {before:?}"
+    );
+    assert!(bounds_of_row(with_banner.end - 1, &mut cx).top() < height);
 
     let asked = ask_again(&mut stage.keeper, &mut cx);
     stage
@@ -1638,11 +1651,11 @@ fn changes_the_keeper_refuses_to_read_again_stay_as_they_are_shown_and_the_pane_
         .keeper
         .reply(asked, texts("", &lines(101)).map(Reply::File));
     wait_until(&mut cx, "the file as it is now", |cx| {
-        rows(&stage.pane, cx).len() == 103
+        rows(&stage.pane, cx).len() == 102
     });
     assert!(!refused(&mut cx));
     assert_eq!(drawn("review-refused", &mut cx), None);
-    assert_eq!(in_view(&mut cx), 0..20);
+    assert_eq!(in_view(&mut cx), before);
 }
 
 #[gpui_kit::test]
@@ -1660,7 +1673,7 @@ fn another_workspace_on_screen_takes_the_place_of_the_one_before(cx: &mut TestAp
         .show(&first, |_| texts("", &first_text), &mut cx);
     wait_for_files(&stage.pane, &mut cx);
 
-    let a_line = bounds_of_row(2, &mut cx).center();
+    let a_line = bounds_of_row(1, &mut cx).center();
     cx.simulate_click(a_line, Modifiers::none());
     cx.simulate_keystrokes("s");
     for _ in 0..60 {
@@ -1699,9 +1712,9 @@ fn another_workspace_on_screen_takes_the_place_of_the_one_before(cx: &mut TestAp
         .show(&second, |_| texts("", "of the second\n"), &mut cx);
     wait_for_files(&stage.pane, &mut cx);
     stage.pane.read_with(&cx, |pane, _| {
-        assert_eq!(pane.rows().len(), 81);
+        assert_eq!(pane.rows().len(), 80);
         assert_eq!(
-            pane.rows()[1],
+            pane.rows()[0],
             PaneRow::File {
                 path: PathBuf::from("second-00.txt"),
                 status: FileStatus::Added
@@ -1750,10 +1763,10 @@ fn a_file_that_arrives_above_the_rows_in_view_leaves_them_where_they_are(cx: &mu
         .keeper
         .reply(below, texts("", &lines("below", 100)).map(Reply::File));
     wait_until(&mut cx, "the second file", |cx| {
-        rows(&stage.pane, cx).len() == 104
+        rows(&stage.pane, cx).len() == 103
     });
     assert_eq!(
-        rows(&stage.pane, &mut cx)[2],
+        rows(&stage.pane, &mut cx)[1],
         PaneRow::Unshown {
             path: PathBuf::from("above.txt"),
             why: Unshown::Loading
@@ -1779,17 +1792,17 @@ fn a_file_that_arrives_above_the_rows_in_view_leaves_them_where_they_are(cx: &mu
             (first, pane.rows()[first].clone())
         })
     };
-    let read_there = PaneRow::Diff {
-        path: PathBuf::from("below.txt"),
-        row: Row::Added { new: 46 },
-    };
-    assert_eq!(top(&mut cx), (50, read_there.clone()));
+    let (before_row, read_there) = top(&mut cx);
+    assert!(
+        matches!(&read_there, PaneRow::Diff { path, .. } if path == &PathBuf::from("below.txt")),
+        "scrolled into below.txt, got ({before_row}, {read_there:?})"
+    );
 
     stage
         .keeper
         .reply(above, texts("", &lines("above", 30)).map(Reply::File));
     wait_for_files(&stage.pane, &mut cx);
-    assert_eq!(top(&mut cx), (79, read_there));
+    assert_eq!(top(&mut cx), (before_row + 29, read_there));
     assert_eq!(
         position(&stage.pane, &mut cx),
         Position {
