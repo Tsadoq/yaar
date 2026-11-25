@@ -24,6 +24,8 @@ pub const READABLE: &[(&str, &str)] = &[
     ("text_on_warn", "warn"),
     ("link", "pane"),
     ("link", "raised"),
+    ("info", "pane"),
+    ("info", "raised"),
     ("accent_text", "pane"),
     ("accent_text", "raised"),
     ("ok", "pane"),

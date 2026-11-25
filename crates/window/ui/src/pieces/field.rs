@@ -57,11 +57,15 @@ impl RenderOnce for Field {
         let palette = palette(cx);
         let (input, height) = match self.kind {
             Kind::Input(state) => (
-                Input::new(&state).typed(TypeRole::Body).into_any_element(),
+                Input::new(&state)
+                    .appearance(false)
+                    .typed(TypeRole::Body)
+                    .into_any_element(),
                 px(0.),
             ),
             Kind::Textarea(state) => (
                 Textarea::new(&state)
+                    .appearance(false)
                     .typed(TypeRole::Body)
                     .into_any_element(),
                 px(62.),

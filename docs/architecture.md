@@ -46,7 +46,7 @@ One Cargo workspace. The folder of a crate gives its group.
 | Window | `yaar-review-pane` (`crates/window/review-pane`) | Changes and Flow, the diff views, threads and comment boxes, file views, follow |
 | Window | `yaar-terminal-pane` (`crates/window/terminal-pane`) | The terminal emulator and its drawing, launchers, the attachment at the agent's terminal |
 | Window | `yaar-navigator` (`crates/window/navigator`) | Language servers: registry, search, downloader, driver, the old side |
-| Window | `yaar-ui` (`crates/window/ui`) | The colours, fonts and themes of the Window, and what maps them onto the toolkit |
+| Window | `yaar-ui` (`crates/window/ui`) | The colours, fonts, themes and shared visual pieces of the Window, and what maps them onto the toolkit |
 | Window | `yaar-text-search` (`crates/window/text-search`) | Whole-word search of a worktree, while no language server is ready |
 | Companion | `yaar-companion-claude` (`companions/claude`) | Claude Code's hook program `yaar-claude-hook` and tool server `yaar-claude-tools` |
 | Companion | none (`companions/pi`) | pi's extension, `yaar.ts`, in TypeScript |

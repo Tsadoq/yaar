@@ -1,4 +1,4 @@
-# The dark theme of the app's design mock.
+# A dark theme: near-black grounds, white text and a blue accent.
 name = "Dark"
 appearance = "dark"
 

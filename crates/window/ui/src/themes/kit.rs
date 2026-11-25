@@ -91,7 +91,7 @@ mod tests {
 
     use super::{KIT_ROLES, kit_role};
     use crate::colour::{composited, hex};
-    use crate::themes::{Appearance, ThemeDefinition, Themes};
+    use crate::themes::{ThemeDefinition, Themes};
     use crate::tokens::Palette;
 
     fn kit_of(theme: &ThemeDefinition) -> Theme {
@@ -205,8 +205,7 @@ mod tests {
         let mut kit = Theme::default();
         kit.colors.accordion = hex(0x010203);
         kit.shadow = false;
-        let mut definition = Themes::built_in().all()[0].clone();
-        definition.appearance = Appearance::Dark;
+        let definition = Themes::built_in().all()[0].clone();
         definition.apply_to_kit(&mut kit);
         assert_eq!(kit.colors.accordion, hex(0x010203));
         assert!(!kit.shadow);

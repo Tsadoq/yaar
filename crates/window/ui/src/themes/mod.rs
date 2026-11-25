@@ -173,6 +173,8 @@ mod tests {
             .map(|theme| theme.name.as_str())
             .collect();
         assert_eq!(names, [LIGHT, DARK]);
+        let appearances: Vec<_> = themes.all().iter().map(|theme| theme.appearance).collect();
+        assert_eq!(appearances, [Appearance::Light, Appearance::Dark]);
     }
 
     #[test]

@@ -129,6 +129,20 @@ impl Shown {
         quads.into_iter().filter(|quad| quad.bounds == at).collect()
     }
 
+    /// The quads painted anywhere inside the element's bounds that draw a border.
+    fn bordered_quads_within(&mut self, selector: &str) -> Vec<gpui_kit::Quad> {
+        let bounds = self.bounds(selector);
+        let (scale, quads) = self
+            .cx
+            .update(|window, _| (window.scale_factor(), window.painted_quads()));
+        let at = bounds.scale(scale);
+        quads
+            .into_iter()
+            .filter(|quad| at.union(&quad.bounds) == at)
+            .filter(|quad| quad.border_widths != Default::default())
+            .collect()
+    }
+
     /// The solid colour the element's own quad is filled with, or `None` when it is not filled.
     fn ground(&mut self, selector: &str) -> Option<Hsla> {
         let quads = self.quads_at(selector);
@@ -429,19 +443,64 @@ fn a_tab_row_draws_what_is_given_to_trail_it_after_the_last_tab(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn a_tab_row_draws_every_element_given_to_trail_it_in_the_order_given(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            Tabs::new("tabs")
+                .tab("changes", "Changes", None, None)
+                .trailing(Button::new("more", "More").selector("more"))
+                .trailing(Button::new("less", "Less").selector("less"))
+                .selector("tabs")
+                .into_any_element()
+        },
+        |shown| {
+            let (tab, more, less) = (
+                shown.bounds("tabs-changes"),
+                shown.bounds("more"),
+                shown.bounds("less"),
+            );
+            assert!(tab.right() <= more.left(), "{tab:?} {more:?}");
+            assert!(more.right() <= less.left(), "{more:?} {less:?}");
+            assert!(inside(shown.bounds("tabs"), less));
+        },
+    );
+}
+
+#[gpui_kit::test]
 fn a_mono_tab_row_is_still_one_row_of_tabs_that_report_their_index(cx: &mut TestAppContext) {
     let picked = counter();
     let heard = picked.clone();
     let mut shown = Shown::open(LIGHT, cx, move || {
         let heard = heard.clone();
-        Tabs::new("tabs")
-            .mono()
-            .tab("zsh", "zsh", None, None)
-            .tab("claude", "claude", None, Some(State::Working))
-            .selector("tabs")
-            .on_select(move |index, _, _| heard.set(index + 10))
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(20.))
+            .child(
+                Tabs::new("plain")
+                    .tab("zsh", "zsh", None, None)
+                    .tab("claude", "claude", None, Some(State::Working))
+                    .selector("plain"),
+            )
+            .child(
+                Tabs::new("tabs")
+                    .mono()
+                    .tab("zsh", "zsh", None, None)
+                    .tab("claude", "claude", None, Some(State::Working))
+                    .selector("tabs")
+                    .on_select(move |index, _, _| heard.set(index + 10)),
+            )
             .into_any_element()
     });
+    let (first, second) = (shown.bounds("tabs-zsh"), shown.bounds("tabs-claude"));
+    assert_eq!(first.top(), second.top(), "one row");
+    assert!(first.right() <= second.left(), "side by side");
+    let plain = shown.bounds("plain-zsh");
+    assert!(
+        first.size.height < plain.size.height,
+        "the mono tab is lower than a plain one: {first:?} {plain:?}"
+    );
     shown.click("tabs-claude");
     assert_eq!(picked.get(), 11);
 }
@@ -489,8 +548,10 @@ fn the_selected_segment_moves_with_the_index_it_is_given(cx: &mut TestAppContext
     let raised = shown.palette().raised;
     assert_eq!(shown.ground("place-left"), Some(raised));
     assert_eq!(shown.ground("place-right"), None);
-    // Without a handler a click is harmless.
+    // Without a handler a click is harmless: the selection stays where it was given.
     shown.click("place-right");
+    assert_eq!(shown.ground("place-left"), Some(raised));
+    assert_eq!(shown.ground("place-right"), None);
 }
 
 #[gpui_kit::test]
@@ -1124,11 +1185,9 @@ fn open_with_state<S: 'static>(
         Some(state) => piece(state),
         None => div().into_any_element(),
     });
-    let state = shown.cx.update(|window, app| {
-        let state = app.new(|cx| make(window, cx));
-        state.update(app, |_, _| {});
-        state
-    });
+    let state = shown
+        .cx
+        .update(|window, app| app.new(|cx| make(window, cx)));
     *cell.borrow_mut() = Some(state.clone());
     shown.redraw();
     (shown, state)
@@ -1150,6 +1209,10 @@ fn a_field_holds_the_kits_input_and_typing_into_it_changes_its_text(cx: &mut Tes
         let (field, input) = (shown.bounds("field"), shown.bounds("field-input"));
         assert!(inside(field, input), "{field:?} {input:?}");
         assert!(input.size.width > px(100.) && input.size.height > px(10.));
+        assert!(
+            shown.bordered_quads_within("field-input").is_empty(),
+            "{theme}: the input draws no box inside the field's"
+        );
         let (footer, save) = (shown.bounds("field-footer"), shown.bounds("save"));
         assert!(input.bottom() <= footer.top() && inside(footer, save));
 
@@ -1180,6 +1243,10 @@ fn a_textarea_field_takes_several_lines(cx: &mut TestAppContext) {
     let (field, input) = (shown.bounds("field"), shown.bounds("field-input"));
     assert!(inside(field, input), "{field:?} {input:?}");
     assert!(input.size.height >= px(40.), "{input:?}");
+    assert!(
+        shown.bordered_quads_within("field-input").is_empty(),
+        "the textarea draws no box inside the field's"
+    );
     shown.cx.update(|window, app| {
         state.update(app, |state, cx| state.focus(window, cx));
     });

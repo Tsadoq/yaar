@@ -28,7 +28,7 @@ pub struct Tabs {
     tabs: Vec<Tab>,
     selected: Option<usize>,
     mono: bool,
-    trailing: Option<AnyElement>,
+    trailing: Vec<AnyElement>,
     selector: Option<SharedString>,
     on_select: Option<OnSelect>,
 }
@@ -40,7 +40,7 @@ impl Tabs {
             tabs: Vec::new(),
             selected: None,
             mono: false,
-            trailing: None,
+            trailing: Vec::new(),
             selector: None,
             on_select: None,
         }
@@ -73,9 +73,9 @@ impl Tabs {
         self
     }
 
-    /// Placed after the last tab.
+    /// Placed after the last tab, after those given before it.
     pub fn trailing(mut self, element: impl IntoElement) -> Self {
-        self.trailing = Some(element.into_any_element());
+        self.trailing.push(element.into_any_element());
         self
     }
 
@@ -137,9 +137,11 @@ impl RenderOnce for Tabs {
             .gap(SPACE_1)
             .children(tabs)
             // The gap of two and these six make the eight between a row and its buttons.
-            .when_some(self.trailing, |row, trailing| {
-                row.child(div().ml(SPACE_3).child(trailing))
-            });
+            .children(
+                self.trailing
+                    .into_iter()
+                    .map(|trailing| div().ml(SPACE_3).child(trailing)),
+            );
         marked(row, selector)
     }
 }
