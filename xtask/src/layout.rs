@@ -2,7 +2,8 @@
 //! or companion has GPUI among its dependencies. 3. No Window crate depends on a Keeper crate, nor
 //! the reverse. 4. Only `yaar-keeper` depends on an Adapter, and an Adapter depends on shared
 //! crates only. 5. The programs the packages ship hold no GPUI test support and no `harness`
-//! feature. "Depends" means through normal and build dependencies, direct or not.
+//! feature. 6. `yaar-ui` depends on no crate of the workspace. "Depends" means through normal and
+//! build dependencies, direct or not.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -144,6 +145,12 @@ pub fn check(graph: &Graph) -> Vec<String> {
             }
         }
 
+        if name == "yaar-ui" {
+            for other in needs.iter().filter(|n| graph.members.contains_key(**n)) {
+                breaches.push(format!("rule 6: yaar-ui depends on {other}"));
+            }
+        }
+
         if name != "yaar-keeper" {
             for adapter in needs.iter().filter(|n| is_adapter(n)) {
                 breaches.push(format!(
@@ -207,6 +214,7 @@ mod tests {
             ("yaar-frame", Group::Window),
             ("yaar-review-pane", Group::Window),
             ("yaar-terminal-pane", Group::Window),
+            ("yaar-ui", Group::Window),
             ("yaar-companion-claude", Group::Companion),
         ] {
             graph.members.insert(name.to_owned(), group);
@@ -225,6 +233,9 @@ mod tests {
             ("yaar-terminal-pane", "yaar-frame"),
             ("yaar-frame", "yaar-link"),
             ("yaar-frame", "gpui-kit"),
+            ("yaar-frame", "yaar-ui"),
+            ("yaar-terminal-pane", "yaar-ui"),
+            ("yaar-ui", "gpui-kit"),
             ("gpui-kit", "gpui-pre"),
         ] {
             plant(&mut graph, from, to);
@@ -298,6 +309,20 @@ mod tests {
         let found = breaches_of("yaar-adapter-claude", "yaar-store");
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].starts_with("rule 4: the Adapter "), "{found:?}");
+    }
+
+    #[test]
+    fn a_window_crate_beneath_ui_is_a_breach() {
+        let found = breaches_of("yaar-ui", "yaar-link");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("rule 6"), "{found:?}");
+        let through = breaches_of("yaar-ui", "yaar-keeper");
+        assert!(
+            through
+                .iter()
+                .any(|b| b == "rule 6: yaar-ui depends on yaar-dock"),
+            "{through:?}"
+        );
     }
 
     #[test]

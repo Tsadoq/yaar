@@ -17,7 +17,6 @@ use yaar_frame::settings_screen::{
     SettingRow, SettingsScreen, TITLES, TOTAL_STATES, WHAT_CHANGED, controls, keep_states_label,
     stop_after_label,
 };
-use yaar_frame::theme::{self, Appearance, DARK, LIGHT};
 use yaar_frame::{
     Asks, BuildPane, CleanUpStates, CloseSettings, NextSetting, NextValue, OpenSetting,
     OpenSettings, Pane, Place, PreviousSetting, PreviousValue, Sends, bind,
@@ -28,6 +27,7 @@ use yaar_link::{
     Setting, StateSize, StateSizes, TerminalPlace, ThemeChoice, TurnEndSelects,
 };
 use yaar_navigator::{Ask, RepositoryConsent, Told, port};
+use yaar_ui::themes::{Appearance, DARK, LIGHT, Themes};
 
 use common::{
     DEADLINE, Shown, drawn, id, open_frame_staged, pressed, repository, wait_until, workspace,
@@ -809,7 +809,14 @@ fn the_theme_row_applies_dark_at_once_and_a_click_on_light_brings_light_back(
     window.cx.run_until_parked();
     assert_eq!(mode(&mut window), ThemeMode::Dark);
     let background = window.cx.update(|_, app| app.theme().background);
-    assert_eq!(background, theme::dark().colors.background);
+    assert_eq!(
+        background,
+        Themes::built_in()
+            .named(DARK)
+            .expect("built in")
+            .palette
+            .pane
+    );
     window.assert_chosen_drawn(&SettingRow::Theme);
 
     window.click(&Window9::value(row, 1, LIGHT));
@@ -817,7 +824,14 @@ fn the_theme_row_applies_dark_at_once_and_a_click_on_light_brings_light_back(
     window.cx.run_until_parked();
     assert_eq!(mode(&mut window), ThemeMode::Light);
     let background = window.cx.update(|_, app| app.theme().background);
-    assert_eq!(background, theme::light().colors.background);
+    assert_eq!(
+        background,
+        Themes::built_in()
+            .named(LIGHT)
+            .expect("built in")
+            .palette
+            .pane
+    );
     window.assert_chosen_drawn(&SettingRow::Theme);
 
     window.click(&Window9::value(row, 0, SYSTEM));

@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use yaar_frame::theme::light;
+use yaar_ui::themes::KIT_ROLES;
 
 macro_rules! sources {
     ($($folder:literal => [$($file:literal),+ $(,)?]),+ $(,)?) => {
@@ -230,12 +230,7 @@ fn roles_unknown(
 }
 
 fn roles() -> BTreeSet<&'static str> {
-    light()
-        .colors
-        .roles()
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect()
+    KIT_ROLES.into_iter().collect()
 }
 
 fn rust_files(folder: &Path, below: &str, out: &mut Vec<String>) {
@@ -256,7 +251,7 @@ fn rust_files(folder: &Path, below: &str, out: &mut Vec<String>) {
 }
 
 #[test]
-fn the_list_of_sources_is_every_file_of_the_crates_that_draw_but_the_theme_definitions() {
+fn the_list_of_sources_is_every_file_of_the_crates_that_draw() {
     for folder in ["frame", "review-pane", "terminal-pane", "window"] {
         let mut on_disk = Vec::new();
         let src = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -264,7 +259,6 @@ fn the_list_of_sources_is_every_file_of_the_crates_that_draw_but_the_theme_defin
             .join(folder)
             .join("src");
         rust_files(&src, "", &mut on_disk);
-        on_disk.retain(|path| !(folder == "frame" && path.starts_with("theme/")));
         on_disk.sort();
         let listed: Vec<&str> = SOURCES
             .iter()

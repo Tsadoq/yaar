@@ -7,6 +7,7 @@ use gpui_kit::*;
 use std::time::Duration;
 
 use yaar_link::{Age, Fact, Head, Hello, SessionId, Setting, TerminalPlace, WorkspaceId};
+use yaar_ui::themes::Appearance;
 
 use crate::agents::Wanted;
 use crate::controls::{
@@ -19,7 +20,6 @@ use crate::link_model::{KeeperLink, LinkStatus};
 use crate::models::Models;
 use crate::settings_screen::SettingsScreen;
 use crate::sidebar::{Sidebar, workspace_name};
-use crate::theme::Appearance;
 use crate::trace;
 
 pub struct Pane {

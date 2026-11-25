@@ -1,6 +1,5 @@
 # The light theme, copied from the light theme of GitHub's Primer design system
-# (@primer/primitives 11.10.0, MIT). A value Primer gives that fails a readable pair is darkened
-# in steps of 5 lightness points until it passes, and its line says so.
+# (@primer/primitives 11.10.0, MIT). Every value that is not Primer's own says why on its line.
 name = "Light"
 appearance = "light"
 
@@ -18,8 +17,8 @@ text_muted = "#59636e"
 # (4 lightness points above it; a fifth would fall short).
 text_dim = "#626d79"
 text_on_accent = "#ffffff"
-# White, where Primer's default text (#1f2328) reads only 3.2 to 1 on the amber: no step of
-# darkening the text reaches 4.5, as black reads 4.3.
+# White, where Primer's default text (#1f2328) reads only 3.2 to 1 on Primer's amber (#9a6700):
+# no step of darkening the text reaches 4.5, as black reads 4.3.
 text_on_warn = "#ffffff"
 accent = "#0969da"
 # Primer's own hover is the green of its primary button; this is the next darker blue.

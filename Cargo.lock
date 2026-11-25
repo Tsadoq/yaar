@@ -9062,6 +9062,7 @@ dependencies = [
  "libc",
  "yaar-link",
  "yaar-navigator",
+ "yaar-ui",
 ]
 
 [[package]]
@@ -9170,6 +9171,7 @@ dependencies = [
  "libc",
  "yaar-frame",
  "yaar-link",
+ "yaar-ui",
 ]
 
 [[package]]
@@ -9202,6 +9204,7 @@ dependencies = [
  "yaar-review-pane",
  "yaar-system-tests",
  "yaar-terminal-pane",
+ "yaar-ui",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
 use alacritty_terminal::vte::ansi::NamedColor;
 use gpui_kit::*;
-use yaar_frame::theme::{TerminalColors, indexed, rgb24};
+use yaar_ui::colour::{indexed, rgb24};
+use yaar_ui::tokens::TerminalColors;
 
 use crate::emulator::{CellPlace, Color, Screen, Style};
 

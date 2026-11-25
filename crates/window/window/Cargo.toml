@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 yaar-frame.workspace = true
 yaar-link.workspace = true
+yaar-ui.workspace = true
 gpui-kit.workspace = true
 libc.workspace = true
 yaar-review-pane.workspace = true

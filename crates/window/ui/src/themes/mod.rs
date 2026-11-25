@@ -1,4 +1,5 @@
 mod file;
+mod kit;
 mod readable;
 
 use std::sync::OnceLock;
@@ -6,7 +7,8 @@ use std::sync::OnceLock;
 use gpui_kit::*;
 
 pub use file::ThemeFileError;
-pub use readable::{DISTINCT, READABLE};
+pub use kit::{KIT_ROLES, kit_role};
+pub use readable::{DISTINCT, KIT_DISTINCT, KIT_READABLE, READABLE};
 
 use crate::tokens::{Palette, TerminalColors};
 
@@ -112,7 +114,8 @@ struct Applied(ThemeDefinition);
 
 impl Global for Applied {}
 
-fn built_in_light() -> &'static ThemeDefinition {
+/// What is applied until a theme is.
+pub fn built_in_light() -> &'static ThemeDefinition {
     static LIGHT_THEME: OnceLock<ThemeDefinition> = OnceLock::new();
     LIGHT_THEME.get_or_init(|| Themes::built_in().resolve(None, Appearance::Light).clone())
 }
@@ -199,6 +202,23 @@ mod tests {
     }
 
     #[test]
+    fn the_terminal_of_a_built_in_theme_takes_its_ground_and_marks_from_its_tokens() {
+        for theme in [light(), dark()] {
+            let (palette, terminal) = (&theme.palette, &theme.terminal);
+            assert_eq!(terminal.foreground, palette.text, "{}", theme.name);
+            assert_eq!(terminal.background, palette.pane, "{}", theme.name);
+            assert_eq!(terminal.cursor, palette.text, "{}", theme.name);
+        }
+        let light = light();
+        assert_eq!(light.terminal.selection, light.palette.selection);
+        // The dark terminal's selection is stronger (40% against 24%): text selected on the terminal's
+        // ground must still show.
+        let dark = dark();
+        assert_ne!(dark.terminal.selection, dark.palette.selection);
+        assert_eq!(dark.terminal.selection, hexa(0x1447e666));
+    }
+
+    #[test]
     fn a_third_theme_written_as_one_definition_is_accepted_and_applied_by_name() {
         let themes = Themes::built_in().with(sepia()).expect("a new name");
         assert_eq!(
@@ -280,6 +300,14 @@ mod tests {
         };
         let themes = themes.with(night).expect("a new name");
         assert_eq!(themes.resolve(None, Appearance::Dark), &dark());
+    }
+
+    #[test]
+    fn a_choice_saved_under_the_old_names_resolves_to_the_same_theme() {
+        let themes = Themes::built_in();
+        assert_eq!(themes.resolve(Some("Dark"), Appearance::Light), &dark());
+        assert_eq!(themes.resolve(Some("dark"), Appearance::Light), &dark());
+        assert_eq!(themes.resolve(Some("Light"), Appearance::Dark), &light());
     }
 
     #[gpui_kit::test]

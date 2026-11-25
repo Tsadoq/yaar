@@ -69,19 +69,76 @@ pub const DISTINCT: &[(&str, &str)] = &[
     ("ok", "warn"),
 ];
 
+/// Pairs of a toolkit text role and the toolkit role it is drawn on, for the panes that still read
+/// the toolkit's colours. Each reads at least 4.5 to 1, with a translucent ground laid over
+/// `background` first.
+pub const KIT_READABLE: &[(&str, &str)] = &[
+    ("foreground", "background"),
+    ("muted_foreground", "background"),
+    ("muted_foreground", "sidebar"),
+    ("muted_foreground", "sidebar_accent"),
+    ("muted_foreground", "secondary"),
+    ("muted_foreground", "list_hover"),
+    ("sidebar_foreground", "list_hover"),
+    ("primary_foreground", "primary"),
+    ("secondary_foreground", "secondary"),
+    ("accent_foreground", "accent"),
+    ("warning_foreground", "warning"),
+    ("sidebar_foreground", "sidebar"),
+    ("sidebar_accent_foreground", "sidebar_accent"),
+    ("foreground", "secondary"),
+    ("foreground", "list_hover"),
+    ("danger", "background"),
+    ("foreground", "muted"),
+    ("danger", "muted"),
+    ("success", "background"),
+    ("success", "muted"),
+    ("success", "secondary"),
+    ("warning", "background"),
+    ("warning", "muted"),
+    ("warning", "secondary"),
+];
+
+/// Pairs of toolkit roles that must not look the same once laid over `background`.
+pub const KIT_DISTINCT: &[(&str, &str)] = &[
+    ("background", "secondary"),
+    ("background", "selection"),
+    ("background", "list_hover"),
+    ("background", "border"),
+    ("background", "primary"),
+    ("secondary", "list_hover"),
+    ("success", "danger"),
+    ("warning", "danger"),
+    ("success", "warning"),
+    ("foreground", "muted_foreground"),
+    ("sidebar", "sidebar_accent"),
+];
+
 #[cfg(test)]
 mod tests {
     use gpui_kit::Hsla;
 
-    use super::{DISTINCT, READABLE};
+    use gpui_kit::component::theme::{Theme, ThemeColor};
+
+    use super::{DISTINCT, KIT_DISTINCT, KIT_READABLE, READABLE};
     use crate::colour::{composited, contrast, hex};
-    use crate::themes::{Appearance, LIGHT, Themes};
+    use crate::themes::{Appearance, KIT_ROLES, LIGHT, Themes, kit_role};
     use crate::tokens::{Palette, TOKEN_NAMES};
 
     fn token(palette: &Palette, name: &str) -> Hsla {
         palette
             .get(name)
             .unwrap_or_else(|| panic!("`{name}` is no token"))
+    }
+
+    fn kit_colours(theme: &crate::themes::ThemeDefinition) -> ThemeColor {
+        let mut kit = Theme::default();
+        theme.apply_to_kit(&mut kit);
+        kit.colors
+    }
+
+    fn kit(colors: &ThemeColor, name: &str) -> Hsla {
+        kit_role(colors, name).unwrap_or_else(|| panic!("`{name}` is no kit role"))
     }
 
     fn channels(colour: Hsla) -> [u8; 3] {
@@ -165,6 +222,106 @@ mod tests {
             assert!(
                 !shown[..number].contains(colour),
                 "colour {number} repeats an earlier one"
+            );
+        }
+    }
+
+    #[test]
+    fn every_kit_pair_names_a_kit_role() {
+        for (first, second) in KIT_READABLE.iter().chain(KIT_DISTINCT) {
+            for name in [first, second] {
+                assert!(KIT_ROLES.contains(name), "`{name}` is no kit role");
+            }
+        }
+    }
+
+    #[test]
+    fn in_each_built_in_theme_the_kit_roles_the_panes_read_are_readable() {
+        for theme in Themes::built_in().all() {
+            let colors = kit_colours(theme);
+            for (text, ground) in KIT_READABLE {
+                let ratio = contrast(kit(&colors, text), kit(&colors, ground), colors.background);
+                assert!(
+                    ratio >= 4.5,
+                    "{}: kit `{text}` on `{ground}` reads {ratio:.2} to 1",
+                    theme.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn in_each_built_in_theme_the_kit_roles_the_panes_read_are_distinct() {
+        let mut alike = Vec::new();
+        for theme in Themes::built_in().all() {
+            let colors = kit_colours(theme);
+            for (first, second) in KIT_DISTINCT {
+                let shown =
+                    |name: &str| channels(composited(kit(&colors, name), colors.background));
+                if shown(first) == shown(second) {
+                    alike.push(format!("{}: kit `{first}` and `{second}`", theme.name));
+                }
+            }
+        }
+        assert!(alike.is_empty(), "these look the same: {alike:?}");
+    }
+
+    #[test]
+    fn the_sidebars_pairs_of_a_text_role_and_a_ground_are_all_listed_as_readable() {
+        for pair in [
+            ("sidebar_foreground", "sidebar"),
+            ("sidebar_accent_foreground", "sidebar_accent"),
+            ("muted_foreground", "sidebar"),
+            ("muted_foreground", "sidebar_accent"),
+            ("muted_foreground", "list_hover"),
+            ("sidebar_foreground", "list_hover"),
+            ("muted_foreground", "secondary"),
+        ] {
+            assert!(
+                KIT_READABLE.contains(&pair),
+                "{pair:?} is drawn and not listed"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pairs_the_panes_and_the_settings_screen_draw_are_all_listed_as_readable() {
+        for pair in [
+            ("foreground", "background"),
+            ("muted_foreground", "background"),
+            ("danger", "background"),
+            ("foreground", "muted"),
+            ("danger", "muted"),
+            ("primary_foreground", "primary"),
+            ("secondary_foreground", "secondary"),
+            ("warning_foreground", "warning"),
+            ("success", "background"),
+            ("success", "muted"),
+            ("success", "secondary"),
+            ("warning", "background"),
+            ("warning", "muted"),
+            ("warning", "secondary"),
+            ("muted_foreground", "secondary"),
+            ("foreground", "secondary"),
+            ("foreground", "list_hover"),
+            ("accent_foreground", "accent"),
+        ] {
+            assert!(
+                KIT_READABLE.contains(&pair),
+                "{pair:?} is drawn and not listed"
+            );
+        }
+    }
+
+    #[test]
+    fn in_each_built_in_theme_the_terminal_draws_its_text_apart_from_its_ground() {
+        for theme in Themes::built_in().all() {
+            let terminal = &theme.terminal;
+            assert_ne!(
+                channels(terminal.foreground),
+                channels(terminal.background),
+                "{}",
+                theme.name
             );
         }
     }

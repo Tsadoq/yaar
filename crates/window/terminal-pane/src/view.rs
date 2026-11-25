@@ -8,9 +8,10 @@ use std::rc::Rc;
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
-use yaar_frame::theme::{self, TerminalColors};
 use yaar_frame::{KeeperLink, PROGRAM_CONTEXT, SettingList, TerminalOutput};
 use yaar_link::{Ending, Request, TerminalId, TerminalSize};
+use yaar_ui::themes;
+use yaar_ui::tokens::TerminalColors;
 
 use crate::MouseButton as ReportedButton;
 use crate::draw::{self, Grid};
@@ -95,7 +96,7 @@ impl TerminalView {
         });
         let mut emulator = Emulator::new(size);
         // A program may ask for its colours before the first frame is drawn.
-        let colours = theme::applied(cx).terminal;
+        let colours = themes::applied(cx).terminal;
         emulator.set_colours(colours);
         if cut {
             emulator.advance(CUT_NOTICE.as_bytes());
@@ -527,7 +528,7 @@ impl Render for TerminalView {
         );
         // A program asks for its colours with a question the emulator answers at once, so a theme
         // change is handed on at the frame that draws with the new definition.
-        let colours = theme::applied(cx).terminal;
+        let colours = themes::applied(cx).terminal;
         if colours != self.colours {
             self.colours = colours;
             self.emulator.set_colours(colours);
