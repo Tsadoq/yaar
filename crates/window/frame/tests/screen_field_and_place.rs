@@ -148,7 +148,7 @@ fn the_key_of_settings_draws_the_screen_in_the_place_of_the_panes_and_gives_it_t
     assert!(!is_drawn("frame-pane-second", &mut cx), "no pane is drawn");
     let sidebar = drawn("sidebar", &mut cx).expect("the sidebar is drawn");
     assert!(screen.left() >= sidebar.right());
-    assert_eq!(screen.right(), WINDOW.width);
+    assert_eq!(screen.right(), WINDOW.width - yaar_ui::metrics::GUTTER);
     let screen_focus = shown.frame.read_with(&cx, |frame, cx| {
         frame
             .settings_screen()

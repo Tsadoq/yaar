@@ -90,6 +90,7 @@ pub struct WorkspaceList {
     wanted: Option<WorkspaceId>,
     listing: Option<Task<()>>,
     awaits_list: bool,
+    loaded: bool,
     asked_by_user: u64,
     told_shown: Option<Option<WorkspaceId>>,
 }
@@ -132,6 +133,7 @@ impl WorkspaceList {
             wanted: None,
             listing: None,
             awaits_list: false,
+            loaded: false,
             asked_by_user: 0,
             told_shown: None,
         };
@@ -140,6 +142,11 @@ impl WorkspaceList {
             list.tell_shown(true, cx);
         }
         list
+    }
+
+    /// True once the Keeper has answered or sent a workspace list at least once.
+    pub fn loaded(&self) -> bool {
+        self.loaded
     }
 
     pub fn repositories(&self) -> &[Repository] {
@@ -238,6 +245,8 @@ impl WorkspaceList {
     }
 
     fn take(&mut self, repositories: Vec<Repository>, cx: &mut Context<Self>) {
+        let first_load = !self.loaded;
+        self.loaded = true;
         let held = |id: &&WorkspaceId| workspaces(&repositories).any(|held| held.id == **id);
         let selected = self
             .wanted
@@ -253,7 +262,7 @@ impl WorkspaceList {
         if self.wanted.is_some() && self.wanted == selected {
             self.wanted = None;
         }
-        if repositories != self.repositories || selected != self.selected {
+        if first_load || repositories != self.repositories || selected != self.selected {
             self.repositories = repositories;
             self.selected = selected;
             self.tell_shown(false, cx);

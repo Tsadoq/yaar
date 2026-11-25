@@ -348,6 +348,10 @@ fn a_turn_that_ends_in_a_workspace_not_on_screen_changes_its_state_in_the_sideba
     assert_eq!(notice.session, session('2', '2', SessionState::Works).id);
     assert_eq!(notice.text, "Claude Code 2 finished a turn in feature");
     let drawn_notice = drawn("frame-turn-notice", &mut cx).expect("the notice is drawn");
+    assert!(
+        drawn_notice.right() > WIDE.width / 2. && drawn_notice.bottom() > WIDE.height / 2.,
+        "the turn toast floats in the bottom-right corner: {drawn_notice:?}"
+    );
     let control = drawn("frame-turn-notice-show", &mut cx).expect("its control is drawn");
     assert!(
         drawn_notice.left() <= control.left()
@@ -466,6 +470,16 @@ fn a_notice_goes_when_its_workspace_comes_on_screen_by_any_means_and_does_not_co
     assert_eq!(on_screen(&shown, &mut cx), Some(id('1')));
     assert_eq!(notice_text(&shown, &mut cx), None);
     assert_eq!(drawn("frame-turn-notice", &mut cx), None);
+
+    shown.keeper.tell(turn_ended('2', '2', 'b'));
+    wait_until(&mut cx, "a toast to dismiss", |cx| {
+        notice_text(&shown, cx).is_some()
+    });
+    let dismiss = drawn("frame-turn-notice-dismiss", &mut cx).expect("the dismiss button is drawn");
+    cx.simulate_click(dismiss.center(), Modifiers::none());
+    assert_eq!(notice_text(&shown, &mut cx), None);
+    assert_eq!(drawn("frame-turn-notice", &mut cx), None);
+    assert_eq!(on_screen(&shown, &mut cx), Some(id('1')));
 }
 
 #[gpui_kit::test]
