@@ -4,9 +4,11 @@ use std::process::Command;
 use gpui_kit::App;
 
 pub mod colour;
+pub mod diff;
 pub mod fonts;
 pub mod metrics;
 pub mod pieces;
+pub mod syntax;
 pub mod themes;
 pub mod tokens;
 pub mod typography;

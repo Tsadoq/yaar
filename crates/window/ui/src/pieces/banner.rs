@@ -43,7 +43,8 @@ impl Look {
 /// A line of notice across the top of a pane, with buttons at its end.
 #[derive(IntoElement)]
 pub struct Banner {
-    text: SharedString,
+    text: Option<SharedString>,
+    children: Vec<AnyElement>,
     look: Look,
     card: bool,
     actions: Vec<AnyElement>,
@@ -53,7 +54,20 @@ pub struct Banner {
 impl Banner {
     pub fn new(text: impl Into<SharedString>) -> Self {
         Banner {
-            text: text.into(),
+            text: Some(text.into()),
+            children: Vec::new(),
+            look: Look::Tone(Tone::Plain),
+            card: false,
+            actions: Vec::new(),
+            selector: None,
+        }
+    }
+
+    /// A banner whose content is supplied as child elements.
+    pub fn custom() -> Self {
+        Banner {
+            text: None,
+            children: Vec::new(),
             look: Look::Tone(Tone::Plain),
             card: false,
             actions: Vec::new(),
@@ -90,11 +104,18 @@ impl Banner {
     }
 }
 
+impl ParentElement for Banner {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
 impl RenderOnce for Banner {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = palette(cx);
         let (text, ground) = self.look.colours(&palette);
         let banner = div()
+            .flex_none()
             .flex()
             .items_center()
             .gap(SPACE_4)
@@ -112,7 +133,10 @@ impl RenderOnce for Banner {
             .bg(ground)
             .typed(TypeRole::Meta)
             .text_color(text)
-            .child(div().flex_1().min_w_0().child(self.text))
+            .when_some(self.text, |banner, words| {
+                banner.child(div().flex_1().min_w_0().child(words))
+            })
+            .children(self.children)
             .children(self.actions);
         marked(banner, self.selector)
     }

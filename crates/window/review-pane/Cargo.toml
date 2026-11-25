@@ -10,6 +10,7 @@ publish.workspace = true
 yaar-frame.workspace = true
 yaar-link.workspace = true
 yaar-diff.workspace = true
+yaar-ui.workspace = true
 gpui-kit.workspace = true
 yaar-navigator.workspace = true
 

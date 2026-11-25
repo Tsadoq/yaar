@@ -25,7 +25,7 @@ use gpui_kit::{App, ClickEvent, Hsla, InteractiveElement, SharedString, Window};
 pub use avatar::Avatar;
 pub use banner::Banner;
 pub use button::{Button, ButtonKind};
-pub use card::Card;
+pub use card::{Card, CardPart};
 pub use chip::Chip;
 pub use count_badge::CountBadge;
 pub use divider::Divider;
