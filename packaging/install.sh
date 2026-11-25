@@ -44,7 +44,7 @@ usage: install.sh [--uninstall [--purge] [--stop-agents]] [--dry-run] [--help]
   --stop-agents   with --uninstall: stop YAAR if it runs (the agents in its terminals end)
   --dry-run       print the detected system and the steps, change nothing
 Environment: YAAR_BASE_URL, YAAR_APT_URL, YAAR_RELEASES_URL, YAAR_DOWNLOAD_URL, YAAR_METHOD,
-             YAAR_PREFIX, YAAR_INSTALL_DIR
+             YAAR_PREFIX, YAAR_INSTALL_DIR, YAAR_SKIP_SERVERS
 USAGE
 }
 
@@ -184,6 +184,7 @@ install_apt() {
     die "apt did not install $PKG (its messages are above). The key and the source file are as they were before."
   fi
   say "installed: $(dpkg-query -W -f='${Package} ${Version}' "$PKG")"
+  install_language_servers "/usr/bin/$PKG"
   say "start it with: $PKG    Later versions arrive with: sudo apt-get update && sudo apt-get upgrade"
 }
 
@@ -266,6 +267,7 @@ install_archive() {
     done
   fi
   say "installed under $prefix"
+  install_language_servers "$prefix/bin/$PKG"
   case ":$PATH:" in *":$prefix/bin:"*) ;; *) say "note: $prefix/bin is not on your PATH; start it as $prefix/bin/$PKG" ;; esac
   if have ldd; then
     missing=$(ldd "$prefix/bin/$PKG" 2> /dev/null | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')
@@ -325,6 +327,26 @@ EOF
 is_loopback_url() { # <url>
   local re='^http://(127\.0\.0\.1|localhost):[0-9]+(/|$)'
   [[ "$1" =~ $re ]]
+}
+
+is_local_url() { # <url>
+  local re='^https?://(127\.0\.0\.1|localhost)(:[0-9]+)?(/|$)'
+  case "$1" in file://*) return 0 ;; esac
+  [[ "$1" =~ $re ]]
+}
+
+is_local_install() {
+  is_local_url "$BASE_URL" || is_local_url "$DOWNLOAD_URL" || is_local_url "$APT_URL"
+}
+
+install_language_servers() { # <binary>
+  local bin="$1"
+  if [ "${YAAR_SKIP_SERVERS:-}" = 1 ] || is_local_install; then
+    return 0
+  fi
+  [ -x "$bin" ] || return 0
+  say "installing built-in language servers (skip with YAAR_SKIP_SERVERS=1)"
+  "$bin" --install-servers || warn "could not install all language servers (they will download on demand)"
 }
 
 # Sets MAC_STRICT (1 checked, 0 skipped for the rehearsal app) before anything is downloaded.
@@ -411,6 +433,7 @@ install_macos() {
   fi
   rm -rf "${old:?}"
   say "installed: version $ver in $dest/$APP_NAME"
+  install_language_servers "$dest/$APP_NAME/Contents/MacOS/$PKG"
   say "this script does not start it. Open it from Finder or Launchpad."
 }
 

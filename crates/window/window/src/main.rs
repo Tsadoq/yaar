@@ -1,5 +1,6 @@
 //! `yaar-review`: the Window program behind a command line.
 //! `--keeper-status` finds or starts the Keeper, says who answered, and opens no window.
+//! `--install-servers` downloads any missing pinned built-in language servers and exits.
 
 use std::process::ExitCode;
 
@@ -18,8 +19,9 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         ["--keeper-status"] => keeper_status(),
+        ["--install-servers"] => install_servers(),
         _ => {
-            eprintln!("usage: yaar-review [--version | --keeper-status]");
+            eprintln!("usage: yaar-review [--version | --keeper-status | --install-servers]");
             ExitCode::from(2)
         }
     }
@@ -30,6 +32,28 @@ fn open_window() {
         yaar_window::init(cx);
         yaar_window::open(yaar_link::socket_path(), cx).expect("open the window");
     });
+}
+
+fn install_servers() -> ExitCode {
+    let config = yaar_navigator::NavigatorConfig::for_this_user();
+    match yaar_navigator::download::install_builtin_servers(&config) {
+        Ok(installed) => {
+            if installed.is_empty() {
+                eprintln!("yaar-review: language servers already installed");
+            } else {
+                for name in installed {
+                    eprintln!("yaar-review: installed language server {name}");
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(failures) => {
+            for (name, reason) in failures {
+                eprintln!("yaar-review: failed to install {name}: {reason}");
+            }
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn keeper_status() -> ExitCode {
