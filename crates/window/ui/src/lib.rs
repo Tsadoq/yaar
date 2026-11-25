@@ -5,6 +5,7 @@ use gpui_kit::App;
 pub mod colour;
 pub mod fonts;
 pub mod metrics;
+pub mod pieces;
 pub mod themes;
 pub mod tokens;
 pub mod typography;
