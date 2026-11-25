@@ -7,7 +7,7 @@ use std::path::Path;
 use gpui_kit::*;
 use yaar_diff::{Row, Side};
 use yaar_link::{Step, ThreadId};
-use yaar_ui::diff::{DiffKind, bar, gap_fill, ground, sign_colour, word};
+use yaar_ui::diff::{DiffKind, DiffStats, bar, gap_fill, ground, sign_colour, word};
 use yaar_ui::metrics::{SPACE_2, SPACE_4, SPACE_6, tabular};
 use yaar_ui::pieces::{Banner, Chip, Divider, EmptyState};
 use yaar_ui::themes::palette;
@@ -17,6 +17,7 @@ use crate::draw::{
     DRAWN_BYTES, InView, NUMBER_WIDTH, ROW_HEIGHT, SIGN_WIDTH, diff_highlights, side_name,
     status_words, unshown_sentence,
 };
+use crate::flow_draw::format_line_ranges;
 use crate::{Layout, PaneRow, ReviewPane, ShownDiff};
 
 impl ReviewPane {
@@ -39,7 +40,14 @@ impl ReviewPane {
                 Some(Step::Command { command }) => {
                     format!("Run {}", command.lines().next().unwrap_or_default())
                 }
-                Some(Step::Edit { path, .. }) => format!("Edit {}", path.display()),
+                Some(Step::Edit { path, lines }) => {
+                    let spans = format_line_ranges(lines.as_deref());
+                    if spans.is_empty() {
+                        format!("Editing {}", path.display())
+                    } else {
+                        format!("Editing {} lines {spans}", path.display())
+                    }
+                }
                 Some(Step::Write { path }) => format!("Write {}", path.display()),
                 Some(Step::Read { path }) => format!("Read {}", path.display()),
                 None => "The newest step".to_owned(),
@@ -82,20 +90,29 @@ impl ReviewPane {
             .overflow_hidden()
             .whitespace_nowrap();
         match &self.live.rows()[index] {
-            PaneRow::File { path, status } => row
-                .px(SPACE_6)
-                .gap(SPACE_4)
-                .bg(palette.raised)
-                .border_t_1()
-                .border_b_1()
-                .border_color(palette.separator)
-                .child(
-                    div()
-                        .typed(TypeRole::Path)
-                        .text_color(palette.text)
-                        .child(path.display().to_string()),
-                )
-                .child(Chip::new(status_words(status))),
+            PaneRow::File { path, status } => {
+                let stats = self.live.diff_of(path).map(|shown| {
+                    let added: usize = shown.diff.hunks().iter().map(|hunk| hunk.new.len()).sum();
+                    let removed: usize = shown.diff.hunks().iter().map(|hunk| hunk.old.len()).sum();
+                    DiffStats::new(added, removed).small()
+                });
+                row.px(SPACE_6)
+                    .gap(SPACE_4)
+                    .bg(palette.raised)
+                    .border_t_1()
+                    .border_b_1()
+                    .border_color(palette.separator)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .typed(TypeRole::Path)
+                            .text_color(palette.text)
+                            .child(path.display().to_string()),
+                    )
+                    .child(Chip::new(status_words(status)))
+                    .children(stats)
+            }
             PaneRow::Unshown { why, .. } => row
                 .px(SPACE_6)
                 .typed(TypeRole::Meta)

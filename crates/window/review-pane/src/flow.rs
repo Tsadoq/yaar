@@ -97,6 +97,14 @@ impl Timeline {
         self.held(&at.turn)?.steps.get(&at.number)
     }
 
+    pub(crate) fn step_count(&self, turn: &TurnId) -> usize {
+        self.held(turn).map_or(0, |held| held.steps.len())
+    }
+
+    pub(crate) fn is_running(&self, turn: &TurnId) -> bool {
+        self.held(turn).is_some_and(|held| held.ended.is_none())
+    }
+
     /// None until an answer or a refusal was taken; then `Some(None)` when it gave none or was
     /// refused.
     pub(crate) fn start_of(&self, turn: &TurnId) -> Option<Option<&str>> {
