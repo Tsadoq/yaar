@@ -28,9 +28,9 @@ accent_text = "#0964d0"
 link = "#0964d0"
 focus = "#0969da"
 selection = "#ddf4ff"
-# Darkened 5 points from #1a7f37: it read 4.49 to 1 on the raised ground.
+# Darkened 5 points from #1a7f37: it read 4.02 to 1 on the raised ground.
 ok = "#166a2e"
-# Darkened 5 points from #9a6700: it read 4.30 to 1 on the raised ground.
+# Darkened 5 points from #9a6700: it read 3.85 to 1 on the raised ground.
 warn = "#805600"
 # Darkened 2 points from #d1242f: it read 4.26 to 1 on the raised ground.
 danger = "#c8232d"

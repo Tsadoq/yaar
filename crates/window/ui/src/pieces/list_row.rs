@@ -5,7 +5,7 @@ use gpui_kit::{
 };
 
 use super::{OnClick, marked};
-use crate::metrics::{RADIUS_CONTROL, SPACE_5};
+use crate::metrics::{RADIUS_CONTROL, SPACE_4, SPACE_5};
 use crate::themes::palette;
 
 /// One row of the sidebar, the file list or the history: raised while it is selected or under
@@ -16,6 +16,7 @@ pub struct ListRow {
     children: Vec<AnyElement>,
     selected: bool,
     nested: bool,
+    rail: bool,
     selector: Option<SharedString>,
     on_click: Option<OnClick>,
 }
@@ -27,8 +28,17 @@ impl ListRow {
             children: Vec::new(),
             selected: false,
             nested: false,
+            rail: false,
             selector: None,
             on_click: None,
+        }
+    }
+
+    /// Compact centred tile for the collapsed sidebar rail.
+    pub fn rail(id: impl Into<ElementId>) -> Self {
+        ListRow {
+            rail: true,
+            ..ListRow::new(id)
         }
     }
 
@@ -66,19 +76,25 @@ impl ParentElement for ListRow {
 impl RenderOnce for ListRow {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = palette(cx);
-        let indent = if self.nested { px(22.) } else { SPACE_5 };
         let row = div()
             .id(self.id)
             .flex()
             .w_full()
             .min_w(px(0.))
-            .gap(px(9.))
-            .py(px(8.))
-            .pr(SPACE_5)
-            .pl(indent)
             .rounded(RADIUS_CONTROL)
             .hover(move |style| style.bg(palette.raised))
             .when(self.selected, |row| row.bg(palette.raised))
+            .when(self.rail, |row| {
+                row.relative().items_center().justify_center().py(SPACE_4)
+            })
+            .when(!self.rail, |row| {
+                let indent = if self.nested { px(22.) } else { SPACE_5 };
+                row.items_start()
+                    .gap(px(9.))
+                    .py(px(8.))
+                    .pr(SPACE_5)
+                    .pl(indent)
+            })
             .when_some(self.on_click, |row, handler| {
                 row.cursor_pointer()
                     .on_click(move |event, window, cx| handler(event, window, cx))

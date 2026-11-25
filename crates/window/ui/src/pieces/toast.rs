@@ -52,8 +52,9 @@ impl Toast {
 }
 
 impl RenderOnce for Toast {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = palette(cx);
+        let cap = (window.viewport_size().width - px(40.)).clamp(px(160.), px(380.));
         let on_dismiss = self.on_dismiss;
         let dismiss = Button::new(
             ElementId::NamedChild(Arc::new(self.id.clone()), "dismiss".into()),
@@ -72,7 +73,7 @@ impl RenderOnce for Toast {
             .flex()
             .items_center()
             .gap(SPACE_4)
-            .max_w(px(380.))
+            .max_w(cap)
             .px(SPACE_6)
             .py(SPACE_4)
             .bg(palette.raised)

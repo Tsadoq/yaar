@@ -11,6 +11,7 @@ pub enum TypeRole {
     /// The label piece uppercases its text; the role does not.
     Label,
     Meta,
+    MetaStrong,
     Small,
     Tiny,
     Code,
@@ -35,6 +36,7 @@ impl TypeRole {
             TypeRole::Display => (UI, 17., FontWeight::SEMIBOLD, relative(1.3)),
             TypeRole::Label => (UI, 11., FontWeight::MEDIUM, relative(1.3)),
             TypeRole::Meta => (UI, 12., FontWeight::NORMAL, relative(1.3)),
+            TypeRole::MetaStrong => (UI, 12., FontWeight::SEMIBOLD, relative(1.3)),
             TypeRole::Small => (UI, 11.5, FontWeight::NORMAL, relative(1.3)),
             TypeRole::Tiny => (UI, 11., FontWeight::NORMAL, relative(1.3)),
             TypeRole::Code => (CODE, 13., FontWeight::NORMAL, px(20.).into()),

@@ -1,3 +1,4 @@
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Hsla, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window,
     div,
@@ -5,7 +6,7 @@ use gpui_kit::{
 
 use super::{Button, Tone, marked};
 use crate::colour::composited;
-use crate::metrics::{SPACE_3, SPACE_4, SPACE_6};
+use crate::metrics::{RADIUS_CARD, SPACE_3, SPACE_4, SPACE_6};
 use crate::themes::palette;
 use crate::tokens::Palette;
 use crate::typography::{TypeRole, Typed};
@@ -44,6 +45,7 @@ impl Look {
 pub struct Banner {
     text: SharedString,
     look: Look,
+    card: bool,
     actions: Vec<AnyElement>,
     selector: Option<SharedString>,
 }
@@ -53,6 +55,7 @@ impl Banner {
         Banner {
             text: text.into(),
             look: Look::Tone(Tone::Plain),
+            card: false,
             actions: Vec::new(),
             selector: None,
         }
@@ -66,6 +69,12 @@ impl Banner {
     /// For what is happening now: the text in the link colour, on the plain wash.
     pub fn live(mut self) -> Self {
         self.look = Look::Live;
+        self
+    }
+
+    /// Framed as a rounded card for notices that sit on the window ground above the panes.
+    pub fn card(mut self) -> Self {
+        self.card = true;
         self
     }
 
@@ -91,12 +100,19 @@ impl RenderOnce for Banner {
             .gap(SPACE_4)
             .px(SPACE_6)
             .py(SPACE_3)
-            .border_b_1()
-            .border_color(palette.separator)
+            .when(self.card, |banner| {
+                banner
+                    .border_1()
+                    .border_color(palette.edge)
+                    .rounded(RADIUS_CARD)
+            })
+            .when(!self.card, |banner| {
+                banner.border_b_1().border_color(palette.separator)
+            })
             .bg(ground)
             .typed(TypeRole::Meta)
             .text_color(text)
-            .child(div().flex_1().child(self.text))
+            .child(div().flex_1().min_w_0().child(self.text))
             .children(self.actions);
         marked(banner, self.selector)
     }

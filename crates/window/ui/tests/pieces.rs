@@ -499,7 +499,7 @@ fn a_mono_tab_row_is_still_one_row_of_tabs_that_report_their_index(cx: &mut Test
     let plain = shown.bounds("plain-zsh");
     assert!(
         first.size.height < plain.size.height,
-        "the mono tab is lower than a plain one: {first:?} {plain:?}"
+        "the mono tab is shorter than a plain one: {first:?} {plain:?}"
     );
     shown.click("tabs-claude");
     assert_eq!(picked.get(), 11);
@@ -1409,4 +1409,129 @@ fn a_second_action_is_shown_beside_the_first_on_each_piece_that_takes_one(cx: &m
             );
         }
     }
+}
+
+#[gpui_kit::test]
+fn a_list_row_aligns_multi_line_children_at_the_top_and_a_rail_row_centres_them(
+    cx: &mut TestAppContext,
+) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .w(px(220.))
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(
+                    ListRow::new("full")
+                        .selector("full")
+                        .child(div().debug_selector(|| "dot".into()).size(px(8.)))
+                        .child(
+                            div()
+                                .debug_selector(|| "lines".into())
+                                .flex()
+                                .flex_col()
+                                .child("line one")
+                                .child("line two"),
+                        ),
+                )
+                .child(
+                    div().w(px(54.)).child(
+                        ListRow::rail("rail")
+                            .selected(true)
+                            .selector("rail")
+                            .child(div().debug_selector(|| "mark".into()).size(px(12.))),
+                    ),
+                )
+                .into_any_element()
+        },
+        |shown| {
+            let (dot, lines) = (shown.bounds("dot"), shown.bounds("lines"));
+            assert_eq!(dot.top(), lines.top(), "dot aligns with the first line");
+            let (rail, mark) = (shown.bounds("rail"), shown.bounds("mark"));
+            assert_eq!(shown.ground("rail"), Some(shown.palette().raised));
+            let (left, right) = (mark.left() - rail.left(), rail.right() - mark.right());
+            assert!((left - right).abs() <= px(1.), "{left:?} {right:?}");
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_pulsing_working_dot_draws_in_its_colour_and_holds_steady_under_reduced_motion(
+    cx: &mut TestAppContext,
+) {
+    for reduce in [false, true] {
+        cx.update(|cx| cx.set_reduce_motion(reduce));
+        let mut shown = Shown::open(DARK, cx, || {
+            StateDot::new(State::Working)
+                .pulsing("pulse-test")
+                .selector("dot")
+                .into_any_element()
+        });
+        let link = shown.palette().link;
+        assert_eq!(shown.ground("dot"), Some(link), "reduce={reduce}");
+    }
+    cx.update(|cx| cx.set_reduce_motion(false));
+}
+
+#[gpui_kit::test]
+fn a_card_banner_and_selected_card_paint_their_borders_and_grounds(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .w(px(400.))
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(
+                    Banner::new("Notice")
+                        .tone(Tone::Danger)
+                        .card()
+                        .selector("banner"),
+                )
+                .child(
+                    Card::new()
+                        .selected(true)
+                        .selector("card")
+                        .child("Selected"),
+                )
+                .child(
+                    EmptyState::new("Open a repository")
+                        .display()
+                        .line("Pick a folder")
+                        .selector("welcome"),
+                )
+                .into_any_element()
+        },
+        |shown| {
+            let palette = shown.palette();
+            assert_eq!(shown.border("banner"), palette.edge);
+            assert_eq!(shown.radius("banner"), 10.);
+            assert_eq!(shown.border("card"), palette.focus);
+            assert_eq!(shown.ground("card"), Some(palette.raised));
+            assert!(shown.is_drawn("welcome"));
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_toast_clamps_its_width_to_a_narrow_viewport(cx: &mut TestAppContext) {
+    let mut shown = Shown::open(DARK, cx, || {
+        Toast::new(
+            "narrow",
+            "A very long toast message that would otherwise stretch past a narrow window edge",
+        )
+        .selector("narrow")
+        .into_any_element()
+    });
+    shown.cx.simulate_resize(size(px(260.), px(400.)));
+    shown.redraw();
+    let toast = shown.bounds("narrow");
+    assert!(
+        toast.size.width <= px(220.5),
+        "toast width {:?} exceeds viewport - 40",
+        toast.size.width
+    );
 }
