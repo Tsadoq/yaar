@@ -227,6 +227,30 @@ mod tests {
     }
 
     #[test]
+    fn the_light_terminals_greys_keep_the_order_light_themes_use_and_stay_apart() {
+        let themes = Themes::built_in();
+        let terminal = &themes.named(LIGHT).expect("built in").terminal;
+        let (ansi, ground) = (&terminal.ansi, terminal.background);
+        // The contrast against black rises with the lightness of what it is laid on.
+        let lightness = |colour: Hsla| contrast(composited(colour, ground), hex(0x000000), ground);
+        assert!(
+            lightness(ansi[8]) < lightness(ansi[7]),
+            "bright black is darker than white"
+        );
+        assert!(
+            lightness(ansi[7]) < lightness(ansi[15]),
+            "white is darker than bright white"
+        );
+        for (darker, lighter) in [(8, 7), (7, 15)] {
+            let apart = contrast(ansi[darker], ansi[lighter], ground);
+            assert!(
+                apart >= 1.3,
+                "colours {darker} and {lighter} are {apart:.2} to 1 apart"
+            );
+        }
+    }
+
+    #[test]
     fn every_kit_pair_names_a_kit_role() {
         for (first, second) in KIT_READABLE.iter().chain(KIT_DISTINCT) {
             for name in [first, second] {
