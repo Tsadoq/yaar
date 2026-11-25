@@ -438,7 +438,7 @@ impl ReviewPane {
             _ => side,
         };
         self.go_to(index, side, cx);
-        self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
+        self.list.scroll_to_reveal_item(index);
     }
 
     pub(crate) fn next_thread(&mut self, _: &NextThread, _: &mut Window, cx: &mut Context<Self>) {

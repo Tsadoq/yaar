@@ -515,8 +515,8 @@ pub struct ReviewPane {
     by_path: HashMap<PathBuf, usize>,
     reading: Vec<Task<()>>,
     unread: Range<usize>,
-    scroll: UniformListScrollHandle,
-    in_view: Rc<RefCell<Range<usize>>>,
+    list: ListState,
+    list_width: Pixels,
     reviews_of: Option<WorkspaceId>,
     reviews: Option<WorkspaceReviews>,
     saves: Vec<Save>,
@@ -585,8 +585,8 @@ impl ReviewPane {
             by_path: HashMap::new(),
             reading: Vec::new(),
             unread: 0..0,
-            scroll: UniformListScrollHandle::new(),
-            in_view: Rc::new(RefCell::new(0..0)),
+            list: ListState::new(0, ListAlignment::Top, px(200.)),
+            list_width: px(0.),
             reviews_of: None,
             reviews: None,
             saves: Vec::new(),
@@ -651,7 +651,31 @@ impl ReviewPane {
     }
 
     pub fn rows_in_view(&self) -> Range<usize> {
-        self.in_view.borrow().clone()
+        let len = self.rows.len();
+        if len == 0 {
+            return 0..0;
+        }
+        let viewport = self.list.viewport_bounds();
+        if viewport.size.height <= px(0.) {
+            return 0..0;
+        }
+        let mut start = self.list.logical_scroll_top().item_ix.min(len);
+        while start < len
+            && self
+                .list
+                .bounds_for_item(start)
+                .is_some_and(|bounds| bounds.bottom() <= viewport.top())
+        {
+            start += 1;
+        }
+        let mut end = start;
+        while end < len {
+            match self.list.bounds_for_item(end) {
+                Some(bounds) if bounds.top() < viewport.bottom() => end += 1,
+                _ => break,
+            }
+        }
+        start..end
     }
 
     /// A save of a draft is told to nobody, so the pane puts each saved text into its copy and
@@ -979,6 +1003,7 @@ impl ReviewPane {
     }
 
     fn loaded(&mut self, index: usize, content: FileContent, cx: &mut Context<Self>) {
+        let top = self.list.logical_scroll_top();
         let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
         let shown = self.new_side_shown();
         let file = &mut self.files[index];
@@ -995,13 +1020,20 @@ impl ReviewPane {
         self.rows
             .truncate(self.files.last().map_or(0, |last| last.rows.end));
         self.rows.extend(threads::elsewhere(&self.files, review));
-        if was.end <= self.in_view.borrow().start {
-            self.shift_view(now as f32 - was.end as f32);
-        }
+        let next_top = if was.end <= top.item_ix {
+            ListOffset {
+                item_ix: top.item_ix - was.end + now,
+                offset_in_item: top.offset_in_item,
+            }
+        } else {
+            top
+        };
+        self.sync_list(Some(next_top));
         self.settle(cx);
     }
 
     pub(crate) fn rebuild(&mut self, cx: &mut Context<Self>) {
+        let top = self.list.logical_scroll_top();
         let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
         let shown = self.new_side_shown();
         let mut rows = Vec::new();
@@ -1024,6 +1056,15 @@ impl ReviewPane {
         }
         rows.extend(threads::elsewhere(&self.files, review));
         self.rows = rows;
+        let clamped = ListOffset {
+            item_ix: top.item_ix.min(self.rows.len()),
+            offset_in_item: if top.item_ix < self.rows.len() {
+                top.offset_in_item
+            } else {
+                px(0.)
+            },
+        };
+        self.sync_list(Some(clamped));
         self.settle(cx);
         self.tell_old_side(cx);
         self.live_rebuild(cx);
@@ -1034,9 +1075,6 @@ impl ReviewPane {
         if self.position_row.is_none() {
             self.position = self.first_change();
             self.position_row = self.position.as_ref().and_then(|at| self.locate(at));
-        }
-        if self.rows.is_empty() {
-            *self.in_view.borrow_mut() = 0..0;
         }
         cx.notify();
     }
@@ -1123,15 +1161,19 @@ impl ReviewPane {
         cx: &mut Context<Self>,
     ) {
         self.acted(cx);
-        let was = self.position_row;
+        let was_delta = self
+            .position_row
+            .and_then(|row| self.row_offset_from_top(row));
         self.layout = match self.layout {
             Layout::Unified => Layout::Split,
             Layout::Split => Layout::Unified,
         };
         self.rebuild(cx);
-        if let (Some(was), Some(now)) = (was, self.position_row) {
-            self.shift_view(now as f32 - was as f32);
-            self.scroll.scroll_to_item(now, ScrollStrategy::Nearest);
+        if let Some(now) = self.position_row {
+            match was_delta {
+                Some(delta) => self.scroll_row_to_offset(now, delta),
+                None => self.list.scroll_to_reveal_item(now),
+            }
         }
     }
 
@@ -1147,7 +1189,7 @@ impl ReviewPane {
             return;
         };
         self.go_to(row, side, cx);
-        self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+        self.list.scroll_to_reveal_item(row);
     }
 
     pub(crate) fn go_to(&mut self, index: usize, side: Side, cx: &mut Context<Self>) {
@@ -1168,16 +1210,40 @@ impl ReviewPane {
     }
 
     fn to_top(&self) {
-        let handle = self.scroll.0.borrow().base_handle.clone();
-        handle.set_offset(point(px(0.), px(0.)));
+        self.list.scroll_to(ListOffset::default());
     }
 
-    fn shift_view(&self, rows: f32) {
-        let handle = self.scroll.0.borrow().base_handle.clone();
-        let mut offset = handle.offset();
-        // The offset of a list scrolled down is negative.
-        offset.y = (offset.y - draw::ROW_HEIGHT * rows).min(px(0.));
-        handle.set_offset(offset);
+    pub(crate) fn sync_list(&self, anchor: Option<ListOffset>) {
+        self.list
+            .reset_with_uniform_height(self.rows.len(), draw::ROW_HEIGHT);
+        if let Some(offset) = anchor {
+            self.list.scroll_to(offset);
+        }
+    }
+
+    pub(crate) fn row_offset_from_top(&self, index: usize) -> Option<Pixels> {
+        let viewport = self.list.viewport_bounds();
+        if viewport.size.height <= px(0.) {
+            return None;
+        }
+        let bounds = self.list.bounds_for_item(index)?;
+        (bounds.bottom() > viewport.top() && bounds.top() < viewport.bottom())
+            .then_some(bounds.top() - viewport.top())
+    }
+
+    pub(crate) fn scroll_row_to_offset(&self, row: usize, delta_from_top: Pixels) {
+        if delta_from_top <= px(0.) {
+            self.list.scroll_to(ListOffset {
+                item_ix: row,
+                offset_in_item: -delta_from_top,
+            });
+        } else {
+            self.list.scroll_to(ListOffset {
+                item_ix: row,
+                offset_in_item: px(0.),
+            });
+            self.list.scroll_by(-delta_from_top);
+        }
     }
 }
 

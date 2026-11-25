@@ -211,17 +211,26 @@ impl Render for ReviewPane {
                 .text_color(theme.danger)
                 .child(format!("The changes could not be read again: {refusal}"))
         });
-        let list = uniform_list(
-            "review-rows",
-            self.rows.len(),
-            cx.processor(|pane, rows: Range<usize>, _, cx| {
-                rows.map(|index| pane.draw_row(index, cx))
-                    .collect::<Vec<_>>()
-            }),
+        let list_view = list(
+            self.list.clone(),
+            cx.processor(|pane, index: usize, _, cx| pane.draw_row(index, cx).into_any_element()),
         )
-        .track_scroll(&self.scroll)
-        .with_decoration(InView(self.in_view.clone()))
         .size_full();
+        let current_width = self.list.viewport_bounds().size.width;
+        if current_width != self.list_width || (self.list_width == px(0.) && !self.rows.is_empty())
+        {
+            cx.defer_in(window, |pane, _, cx| {
+                let width = pane.list.viewport_bounds().size.width;
+                if width > px(0.) && width != pane.list_width {
+                    pane.list_width = width;
+                    if !pane.rows.is_empty() {
+                        let top = pane.list.logical_scroll_top();
+                        pane.sync_list(Some(top));
+                        cx.notify();
+                    }
+                }
+            });
+        }
         pane.children(bar).children(servers).child(
             body.children(sessions)
                 .children(start)
@@ -229,7 +238,7 @@ impl Render for ReviewPane {
                 .children(offer)
                 .children(tree)
                 .children(refused)
-                .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
+                .child(self.with_keys(div().flex_1().min_h_0().child(list_view), cx))
                 .children(hover)
                 .children(references)
                 .children(notice)
