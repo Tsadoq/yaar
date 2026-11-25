@@ -146,6 +146,13 @@ impl RenderOnce for Tabs {
                 .whitespace_nowrap()
                 .cursor_pointer()
                 .when(on, |button| button.bg(palette.raised))
+                .when(!on, |button| {
+                    button.hover(move |style| {
+                        style
+                            .bg(palette.raised.opacity(0.55))
+                            .text_color(palette.text)
+                    })
+                })
                 .when_some(handler, |button, handler| {
                     button.on_click(move |_, window, cx| handler(index, window, cx))
                 })

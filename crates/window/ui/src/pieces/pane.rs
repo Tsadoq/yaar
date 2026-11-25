@@ -1,11 +1,12 @@
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, IntoElement, ParentElement, Refineable as _, RenderOnce, SharedString,
     StyleRefinement, Styled, Window, div, px,
 };
 
-use super::marked;
-use crate::metrics::RADIUS_CARD;
-use crate::themes::palette;
+use super::{marked, part};
+use crate::metrics::{RADIUS_CARD, shadow_pane};
+use crate::themes::{Appearance, applied, palette};
 
 /// One of the window's columns: the pane ground inside an edge border, clipping what it holds.
 /// Its place in the layout is the caller's: it takes the layout methods of `Styled`.
@@ -13,6 +14,7 @@ use crate::themes::palette;
 pub struct Pane {
     children: Vec<AnyElement>,
     style: StyleRefinement,
+    focused: bool,
     selector: Option<SharedString>,
 }
 
@@ -21,8 +23,15 @@ impl Pane {
         Pane {
             children: Vec::new(),
             style: StyleRefinement::default(),
+            focused: false,
             selector: None,
         }
+    }
+
+    /// Highlights the pane's border and draws a top focus rule while it holds keyboard focus.
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
     }
 
     pub fn selector(mut self, selector: impl Into<SharedString>) -> Self {
@@ -52,6 +61,22 @@ impl Styled for Pane {
 impl RenderOnce for Pane {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = palette(cx);
+        let dark = applied(cx).appearance == Appearance::Dark;
+        let border = if self.focused {
+            palette.focus.opacity(0.55)
+        } else {
+            palette.edge
+        };
+        let focus_bar = self.focused.then(|| {
+            let bar = div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(2.))
+                .bg(palette.focus.opacity(0.85));
+            marked(bar, part(&self.selector, "focus"))
+        });
         let mut pane = div()
             .flex()
             .flex_col()
@@ -61,9 +86,11 @@ impl RenderOnce for Pane {
             .overflow_hidden()
             .bg(palette.pane)
             .border_1()
-            .border_color(palette.edge)
+            .border_color(border)
             .rounded(RADIUS_CARD)
-            .children(self.children);
+            .shadow(shadow_pane(dark))
+            .children(self.children)
+            .when_some(focus_bar, |pane, bar| pane.child(bar));
         pane.style().refine(&self.style);
         marked(pane, self.selector)
     }

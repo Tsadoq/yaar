@@ -4,7 +4,7 @@ use gpui_kit::{
     RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use super::{OnClick, marked};
+use super::{OnClick, marked, part};
 use crate::metrics::{RADIUS_CONTROL, SPACE_2, SPACE_3, SPACE_4, SPACE_5};
 use crate::themes::palette;
 
@@ -16,6 +16,7 @@ pub struct ListRow {
     children: Vec<AnyElement>,
     selected: bool,
     focused: bool,
+    accent_bar: bool,
     accent_selected: bool,
     nested: bool,
     rail: bool,
@@ -31,6 +32,7 @@ impl ListRow {
             children: Vec::new(),
             selected: false,
             focused: false,
+            accent_bar: false,
             accent_selected: false,
             nested: false,
             rail: false,
@@ -62,6 +64,12 @@ impl ListRow {
     /// Draws the focus bar on the left edge when the keyboard cursor stands on this row.
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self
+    }
+
+    /// Draws a two-pixel accent bar on the left edge to mark an active workspace row.
+    pub fn accent_bar(mut self, on: bool) -> Self {
+        self.accent_bar = on;
         self
     }
 
@@ -105,6 +113,13 @@ impl RenderOnce for ListRow {
         } else {
             palette.raised
         };
+        let left_bar = if self.focused {
+            Some(palette.focus)
+        } else if self.accent_bar {
+            Some(palette.accent_text)
+        } else {
+            None
+        };
         let row = div()
             .id(self.id)
             .relative()
@@ -115,16 +130,15 @@ impl RenderOnce for ListRow {
             .rounded(RADIUS_CONTROL)
             .hover(move |style| style.bg(palette.raised))
             .when(self.selected, |row| row.bg(selected_bg))
-            .when(self.focused, |row| {
-                row.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(2.))
-                        .bg(palette.focus),
-                )
+            .when_some(left_bar, |row, colour| {
+                let bar = div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(2.))
+                    .bg(colour);
+                row.child(marked(bar, part(&self.selector, "bar")))
             })
             .when(self.rail, |row| {
                 row.relative().items_center().justify_center().py(SPACE_4)

@@ -6,7 +6,7 @@ use gpui_kit::{
 
 use super::state_dot::dot;
 use super::{OnClick, marked, part};
-use crate::metrics::{RADIUS_CONTROL, SPACE_3};
+use crate::metrics::{RADIUS_CONTROL, SPACE_3, tooltip_element};
 use crate::themes::palette;
 use crate::typography::{TypeRole, Typed};
 
@@ -18,6 +18,7 @@ pub struct Toggle {
     label: SharedString,
     on: bool,
     paused: bool,
+    tooltip: Option<SharedString>,
     selector: Option<SharedString>,
     on_click: Option<OnClick>,
 }
@@ -29,6 +30,7 @@ impl Toggle {
             label: label.into(),
             on: false,
             paused: false,
+            tooltip: None,
             selector: None,
             on_click: None,
         }
@@ -42,6 +44,12 @@ impl Toggle {
     /// Shows the lamp in the warning colour while follow is paused.
     pub fn paused(mut self, paused: bool) -> Self {
         self.paused = paused;
+        self
+    }
+
+    /// Shown in a floating tooltip when the pointer rests over the toggle.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
         self
     }
 
@@ -83,6 +91,10 @@ impl RenderOnce for Toggle {
             .text_color(text)
             .whitespace_nowrap()
             .cursor_pointer()
+            .hover(move |style| style.bg(palette.raised).text_color(palette.text))
+            .when_some(self.tooltip, |toggle, tip| {
+                toggle.tooltip(move |_, cx| tooltip_element(tip.clone(), cx))
+            })
             .when_some(self.on_click, |toggle, handler| {
                 toggle.on_click(move |event, window, cx| handler(event, window, cx))
             })

@@ -5,7 +5,7 @@ use gpui_kit::{
 };
 
 use super::{OnClick, Tone, marked};
-use crate::metrics::{SPACE_2, SPACE_4};
+use crate::metrics::{SPACE_2, SPACE_4, tooltip_element};
 use crate::themes::palette;
 use crate::typography::{TypeRole, Typed};
 
@@ -15,6 +15,7 @@ pub struct Chip {
     tone: Tone,
     mono: bool,
     selected: bool,
+    tooltip: Option<SharedString>,
     selector: Option<SharedString>,
     label_selector: Option<SharedString>,
     click: Option<(ElementId, OnClick)>,
@@ -28,6 +29,7 @@ impl Chip {
             tone: Tone::Plain,
             mono: false,
             selected: false,
+            tooltip: None,
             selector: None,
             label_selector: None,
             click: None,
@@ -53,6 +55,12 @@ impl Chip {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Shown in a floating tooltip when the pointer rests over the chip.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
         self
     }
 
@@ -84,10 +92,17 @@ impl RenderOnce for Chip {
         } else {
             self.tone.colour(&palette)
         };
-        let border = match (self.selected, self.tone) {
-            (true, Tone::Plain) => palette.focus,
-            (false, Tone::Plain) => palette.edge,
-            _ => colour.opacity(0.35),
+        let border = if self.tone == Tone::Plain {
+            palette.edge
+        } else {
+            colour.opacity(0.35)
+        };
+        let ground = if self.selected {
+            Some(palette.raised)
+        } else if self.tone != Tone::Plain {
+            Some(colour.opacity(0.10))
+        } else {
+            None
         };
         let role = if self.mono {
             TypeRole::CodeSmall
@@ -118,7 +133,7 @@ impl RenderOnce for Chip {
             .border_1()
             .border_color(border)
             .rounded_full()
-            .when(self.selected, |chip| chip.bg(palette.raised))
+            .when_some(ground, |chip, ground| chip.bg(ground))
             .typed(role)
             .line_height(px(19.))
             .text_color(colour)
@@ -130,10 +145,25 @@ impl RenderOnce for Chip {
                     .id(id)
                     .cursor_pointer()
                     .hover(move |style| style.bg(palette.raised).text_color(palette.text))
-                    .on_click(move |event, window, cx| handler(event, window, cx));
+                    .on_click(move |event, window, cx| handler(event, window, cx))
+                    .when_some(self.tooltip, |chip, tip| {
+                        chip.tooltip(move |_, cx| tooltip_element(tip.clone(), cx))
+                    });
                 marked(clickable, self.selector).into_any_element()
             }
-            None => marked(base, self.selector).into_any_element(),
+            None => match self.tooltip {
+                Some(tip) => {
+                    let id = self
+                        .selector
+                        .clone()
+                        .unwrap_or_else(|| SharedString::from(format!("chip-tip:{tip}")));
+                    let with_tip = base
+                        .id(ElementId::Name(id))
+                        .tooltip(move |_, cx| tooltip_element(tip.clone(), cx));
+                    marked(with_tip, self.selector).into_any_element()
+                }
+                None => marked(base, self.selector).into_any_element(),
+            },
         }
     }
 }

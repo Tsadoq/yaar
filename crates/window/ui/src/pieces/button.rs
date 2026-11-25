@@ -5,8 +5,9 @@ use gpui_kit::{
     transparent_black,
 };
 
+use super::state_dot::dot;
 use super::{CountBadge, OnClick, marked};
-use crate::metrics::{RADIUS_CONTROL, SPACE_2, SPACE_3, SPACE_4, SPACE_5};
+use crate::metrics::{RADIUS_CONTROL, SPACE_2, SPACE_3, SPACE_4, SPACE_5, tooltip_element};
 use crate::themes::palette;
 use crate::typography::{TypeRole, Typed};
 
@@ -26,8 +27,10 @@ pub struct Button {
     small: bool,
     disabled: bool,
     selected: bool,
+    chosen_dot: bool,
     leading: Option<SharedString>,
     count: Option<usize>,
+    tooltip: Option<SharedString>,
     selector: Option<SharedString>,
     label_selector: Option<SharedString>,
     indicator_selector: Option<SharedString>,
@@ -43,8 +46,10 @@ impl Button {
             small: false,
             disabled: false,
             selected: false,
+            chosen_dot: false,
             leading: None,
             count: None,
+            tooltip: None,
             selector: None,
             label_selector: None,
             indicator_selector: None,
@@ -74,6 +79,12 @@ impl Button {
         self
     }
 
+    /// Draws a small accent dot before the label to mark an active toggle or filter.
+    pub fn chosen_dot(mut self, on: bool) -> Self {
+        self.chosen_dot = on;
+        self
+    }
+
     /// A Unicode glyph before the label.
     pub fn leading(mut self, glyph: impl Into<SharedString>) -> Self {
         self.leading = Some(glyph.into());
@@ -83,6 +94,12 @@ impl Button {
     /// A count badge shown after the label.
     pub fn count(mut self, count: usize) -> Self {
         self.count = Some(count);
+        self
+    }
+
+    /// Shown in a floating tooltip when the pointer rests over the button.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
         self
     }
 
@@ -172,6 +189,14 @@ impl RenderOnce for Button {
                 .bg(palette.accent);
             marked(bar, self.indicator_selector)
         });
+        let chosen_dot = self.chosen_dot.then(|| {
+            let colour = if kind == ButtonKind::Primary {
+                palette.text_on_accent
+            } else {
+                palette.accent_text
+            };
+            dot(colour, px(5.))
+        });
         let button = div()
             .id(self.id)
             .relative()
@@ -207,6 +232,10 @@ impl RenderOnce for Button {
                         button.on_click(move |event, window, cx| handler(event, window, cx))
                     })
             })
+            .when_some(self.tooltip, |button, tip| {
+                button.tooltip(move |_, cx| tooltip_element(tip.clone(), cx))
+            })
+            .children(chosen_dot)
             .children(self.leading)
             .child(label)
             .when_some(self.count, |button, count| {

@@ -5,7 +5,7 @@ use gpui_kit::{
     transparent_black,
 };
 
-use crate::metrics::{RADIUS_INLINE, RADIUS_SMALL, SPACE_2, SPACE_3, tabular};
+use crate::metrics::{RADIUS_INLINE, RADIUS_SMALL, SPACE_2, SPACE_3, tabular, tooltip_element};
 use crate::themes::palette;
 use crate::tokens::Palette;
 use crate::typography::{TypeRole, Typed};
@@ -119,6 +119,8 @@ type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 pub struct GutterPlus {
     id: ElementId,
     visible: bool,
+    group_name: Option<SharedString>,
+    tooltip: Option<SharedString>,
     selector: Option<SharedString>,
     on_click: Option<OnClick>,
 }
@@ -128,6 +130,8 @@ impl GutterPlus {
         GutterPlus {
             id: id.into(),
             visible: false,
+            group_name: None,
+            tooltip: None,
             selector: None,
             on_click: None,
         }
@@ -135,6 +139,18 @@ impl GutterPlus {
 
     pub fn visible(mut self, visible: bool) -> Self {
         self.visible = visible;
+        self
+    }
+
+    /// Reveals the button in a muted raised state whenever the named parent group is hovered.
+    pub fn reveal_on_group_hover(mut self, group: impl Into<SharedString>) -> Self {
+        self.group_name = Some(group.into());
+        self
+    }
+
+    /// Shown in a floating tooltip when the pointer rests over the button.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
         self
     }
 
@@ -155,6 +171,7 @@ impl GutterPlus {
 impl RenderOnce for GutterPlus {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = palette(cx);
+        let group_name = self.group_name;
         let button = div()
             .id(self.id)
             .flex_none()
@@ -172,7 +189,15 @@ impl RenderOnce for GutterPlus {
             .when(!self.visible, |el| {
                 el.bg(transparent_black())
                     .text_color(transparent_black())
+                    .when_some(group_name, |el, group| {
+                        el.group_hover(group, move |style| {
+                            style.bg(palette.raised).text_color(palette.text)
+                        })
+                    })
                     .hover(move |style| style.bg(palette.accent).text_color(palette.text_on_accent))
+            })
+            .when_some(self.tooltip, |el, tip| {
+                el.tooltip(move |_, cx| tooltip_element(tip.clone(), cx))
             })
             .when_some(self.on_click, |el, handler| {
                 el.on_click(move |event, window, cx| handler(event, window, cx))
@@ -190,6 +215,7 @@ impl RenderOnce for GutterPlus {
 pub struct ViewedToggle {
     id: ElementId,
     viewed: bool,
+    tooltip: Option<SharedString>,
     selector: Option<SharedString>,
     on_click: Option<OnClick>,
 }
@@ -199,9 +225,16 @@ impl ViewedToggle {
         ViewedToggle {
             id: id.into(),
             viewed,
+            tooltip: None,
             selector: None,
             on_click: None,
         }
+    }
+
+    /// Shown in a floating tooltip when the pointer rests over the control.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
+        self
     }
 
     pub fn selector(mut self, selector: impl Into<SharedString>) -> Self {
@@ -258,6 +291,9 @@ impl RenderOnce for ViewedToggle {
             })
             .cursor_pointer()
             .hover(move |style| style.bg(palette.raised).text_color(palette.text))
+            .when_some(self.tooltip, |el, tip| {
+                el.tooltip(move |_, cx| tooltip_element(tip.clone(), cx))
+            })
             .when_some(self.on_click, |el, handler| {
                 el.on_click(move |event, window, cx| handler(event, window, cx))
             })
