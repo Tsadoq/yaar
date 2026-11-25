@@ -416,20 +416,17 @@ pub fn highlight_line(path: &Path, line: &str) -> Vec<(Range<usize>, SyntaxKind)
             if is_keyword(lang, word) {
                 expect_fn = matches!(word, "fn" | "function" | "def" | "func");
                 out.push((start..i, SyntaxKind::Keyword));
-            } else if expect_fn
-                || (i < len && (bytes[i] == b'(' || (lang == Language::Rust && bytes[i] == b'!')))
-            {
-                expect_fn = false;
-                out.push((start..i, SyntaxKind::Function));
-            } else if matches!(
-                lang,
-                Language::Rust | Language::Script | Language::Go | Language::C
-            ) && b.is_ascii_uppercase()
-                && word.bytes().any(|c| c.is_ascii_lowercase())
-            {
-                expect_fn = false;
-                out.push((start..i, SyntaxKind::Function));
             } else {
+                let is_call =
+                    i < len && (bytes[i] == b'(' || (lang == Language::Rust && bytes[i] == b'!'));
+                let is_type = matches!(
+                    lang,
+                    Language::Rust | Language::Script | Language::Go | Language::C
+                ) && b.is_ascii_uppercase()
+                    && word.bytes().any(|c| c.is_ascii_lowercase());
+                if expect_fn || is_call || is_type {
+                    out.push((start..i, SyntaxKind::Function));
+                }
                 expect_fn = false;
             }
             continue;
@@ -475,7 +472,10 @@ mod tests {
 
     #[test]
     fn highlights_rust_lines_without_treating_lifetimes_as_strings() {
-        let got = kinds("src/lib.rs", "pub fn parse<'a>(n: usize) -> &'a str { 0xff }");
+        let got = kinds(
+            "src/lib.rs",
+            "pub fn parse<'a>(n: usize) -> &'a str { 0xff }",
+        );
         assert_eq!(
             got,
             [

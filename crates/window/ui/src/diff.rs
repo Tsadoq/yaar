@@ -48,7 +48,10 @@ pub fn bar(kind: DiffKind, palette: &Palette) -> Div {
     match kind {
         DiffKind::Context => base,
         DiffKind::Added => base.bg(palette.add_bar),
-        DiffKind::Removed => base.border_l_2().border_dashed().border_color(palette.del_bar),
+        DiffKind::Removed => base
+            .border_l_2()
+            .border_dashed()
+            .border_color(palette.del_bar),
     }
 }
 

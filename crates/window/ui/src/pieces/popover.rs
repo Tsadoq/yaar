@@ -1,3 +1,4 @@
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Anchor, AnyElement, App, Bounds, Edges, InteractiveElement, IntoElement, ParentElement, Pixels,
     RenderOnce, SharedString, Styled, Window, anchored, deferred, div, point, px,
@@ -17,6 +18,7 @@ const WIDTH: Pixels = px(460.);
 pub struct Popover {
     anchor: Bounds<Pixels>,
     children: Vec<AnyElement>,
+    pass_through: bool,
     selector: Option<SharedString>,
 }
 
@@ -25,8 +27,15 @@ impl Popover {
         Popover {
             anchor,
             children: Vec::new(),
+            pass_through: false,
             selector: None,
         }
+    }
+
+    /// Lets pointer clicks pass through to the content underneath (for read-only hover cards).
+    pub fn pass_through(mut self) -> Self {
+        self.pass_through = true;
+        self
     }
 
     pub fn selector(mut self, selector: impl Into<SharedString>) -> Self {
@@ -45,7 +54,7 @@ impl RenderOnce for Popover {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = palette(cx);
         let card = div()
-            .occlude()
+            .when(!self.pass_through, |el| el.occlude())
             .flex()
             .flex_col()
             .w(WIDTH)

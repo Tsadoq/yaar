@@ -30,6 +30,7 @@ pub struct Button {
     count: Option<usize>,
     selector: Option<SharedString>,
     label_selector: Option<SharedString>,
+    indicator_selector: Option<SharedString>,
     on_click: Option<OnClick>,
 }
 
@@ -46,6 +47,7 @@ impl Button {
             count: None,
             selector: None,
             label_selector: None,
+            indicator_selector: None,
             on_click: None,
         }
     }
@@ -91,6 +93,12 @@ impl Button {
 
     pub fn label_selector(mut self, selector: impl Into<SharedString>) -> Self {
         self.label_selector = Some(selector.into());
+        self
+    }
+
+    /// Drawn as a two-pixel bottom accent bar inside the button while `selected` is true.
+    pub fn indicator_selector(mut self, selector: impl Into<SharedString>) -> Self {
+        self.indicator_selector = Some(selector.into());
         self
     }
 
@@ -149,8 +157,20 @@ impl RenderOnce for Button {
                 .into_any_element(),
             None => self.label.into_any_element(),
         };
+        let indicator = self.selected.then(|| {
+            let bar = div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .w_full()
+                .h(px(2.))
+                .bg(palette.accent);
+            marked(bar, self.indicator_selector)
+        });
         let button = div()
             .id(self.id)
+            .relative()
+            .overflow_hidden()
             .flex_none()
             .flex()
             .items_center()
@@ -185,8 +205,23 @@ impl RenderOnce for Button {
             .children(self.leading)
             .child(label)
             .when_some(self.count, |button, count| {
-                button.child(CountBadge::new(count))
-            });
+                if kind == ButtonKind::Primary {
+                    button.child(
+                        div()
+                            .flex_none()
+                            .px(SPACE_2)
+                            .rounded_full()
+                            .bg(palette.text_on_accent.opacity(0.22))
+                            .typed(TypeRole::Small)
+                            .font_features(crate::metrics::tabular())
+                            .text_color(palette.text_on_accent)
+                            .child(count.to_string()),
+                    )
+                } else {
+                    button.child(CountBadge::new(count))
+                }
+            })
+            .children(indicator);
         marked(button, self.selector)
     }
 }

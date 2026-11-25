@@ -15,6 +15,7 @@ pub struct ListRow {
     id: ElementId,
     children: Vec<AnyElement>,
     selected: bool,
+    focused: bool,
     accent_selected: bool,
     nested: bool,
     rail: bool,
@@ -29,6 +30,7 @@ impl ListRow {
             id: id.into(),
             children: Vec::new(),
             selected: false,
+            focused: false,
             accent_selected: false,
             nested: false,
             rail: false,
@@ -54,6 +56,12 @@ impl ListRow {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Draws the focus bar on the left edge when the keyboard cursor stands on this row.
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
         self
     }
 
@@ -99,20 +107,30 @@ impl RenderOnce for ListRow {
         };
         let row = div()
             .id(self.id)
+            .relative()
+            .overflow_hidden()
             .flex()
             .w_full()
             .min_w(px(0.))
             .rounded(RADIUS_CONTROL)
             .hover(move |style| style.bg(palette.raised))
             .when(self.selected, |row| row.bg(selected_bg))
+            .when(self.focused, |row| {
+                row.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(2.))
+                        .bg(palette.focus),
+                )
+            })
             .when(self.rail, |row| {
                 row.relative().items_center().justify_center().py(SPACE_4)
             })
             .when(!self.rail && self.compact, |row| {
-                row.items_center()
-                    .gap(SPACE_3)
-                    .py(SPACE_2)
-                    .px(SPACE_3)
+                row.items_center().gap(SPACE_3).py(SPACE_2).px(SPACE_3)
             })
             .when(!self.rail && !self.compact, |row| {
                 let indent = if self.nested { px(22.) } else { SPACE_5 };

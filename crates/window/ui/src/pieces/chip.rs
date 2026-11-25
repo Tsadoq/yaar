@@ -1,6 +1,6 @@
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 
@@ -18,6 +18,7 @@ pub struct Chip {
     selector: Option<SharedString>,
     label_selector: Option<SharedString>,
     click: Option<(ElementId, OnClick)>,
+    max_width: Option<Pixels>,
 }
 
 impl Chip {
@@ -30,7 +31,13 @@ impl Chip {
             selector: None,
             label_selector: None,
             click: None,
+            max_width: None,
         }
+    }
+
+    pub fn max_width(mut self, width: Pixels) -> Self {
+        self.max_width = Some(width);
+        self
     }
 
     pub fn tone(mut self, tone: Tone) -> Self {
@@ -87,15 +94,23 @@ impl RenderOnce for Chip {
         } else {
             TypeRole::Small
         };
+        let truncate = self.max_width.is_some();
         let label = match self.label_selector {
             Some(selector) => div()
+                .when(truncate, |el| el.min_w_0().truncate())
                 .debug_selector(move || selector.to_string())
+                .child(self.label)
+                .into_any_element(),
+            None if truncate => div()
+                .min_w_0()
+                .truncate()
                 .child(self.label)
                 .into_any_element(),
             None => self.label.into_any_element(),
         };
         let base = div()
             .flex_none()
+            .when_some(self.max_width, |chip, width| chip.max_w(width))
             .flex()
             .items_center()
             .gap(SPACE_2)
