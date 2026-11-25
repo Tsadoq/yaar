@@ -137,7 +137,7 @@ pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut 
             } else {
                 let mut font = grid.font.clone();
                 if cell.style.bold {
-                    font.weight = FontWeight::BOLD;
+                    font = yaar_ui::typography::bold_font(font);
                 }
                 if cell.style.italic {
                     font.style = FontStyle::Italic;

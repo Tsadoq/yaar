@@ -6,12 +6,13 @@ use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_frame::{KeeperLink, PROGRAM_CONTEXT, SettingList, TerminalOutput};
 use yaar_link::{Ending, Request, TerminalId, TerminalSize};
-use yaar_ui::themes;
+use yaar_ui::metrics::{SPACE_2, SPACE_4, ibeam};
+use yaar_ui::themes::{self, palette};
 use yaar_ui::tokens::TerminalColors;
+use yaar_ui::typography::{TypeRole, Typed, terminal_font};
 
 use crate::MouseButton as ReportedButton;
 use crate::draw::{self, Grid};
@@ -478,10 +479,8 @@ impl TerminalView {
         cx.notify();
     }
 
-    pub(crate) fn metrics(window: &Window, cx: &App) -> (Font, Pixels, Size<Pixels>) {
-        let theme = cx.theme();
-        let font = font(theme.mono_font_family.clone());
-        let font_size = theme.mono_font_size;
+    pub(crate) fn metrics(window: &Window, _cx: &App) -> (Font, Pixels, Size<Pixels>) {
+        let (font, font_size) = terminal_font();
         let system = window.text_system();
         let id = system.resolve_font(&font);
         let width = system
@@ -519,13 +518,7 @@ impl Render for TerminalView {
 
         let (font, font_size, cell) = Self::metrics(window, cx);
         self.geometry.cell.set(cell);
-        let theme = cx.theme();
-        let (background, foreground, muted, border) = (
-            theme.background,
-            theme.foreground,
-            theme.muted_foreground,
-            theme.border,
-        );
+        let palette = palette(cx);
         // A program asks for its colours with a question the emulator answers at once, so a theme
         // change is handed on at the frame that draws with the new definition.
         let colours = themes::applied(cx).terminal;
@@ -552,10 +545,9 @@ impl Render for TerminalView {
                 .left(cell.width * at.1 as f32)
                 .top(cell.height * at.0 as f32)
                 .h(cell.height)
-                .bg(background)
-                .text_color(foreground)
-                .font_family(font.family.clone())
-                .text_size(font_size)
+                .bg(colours.background)
+                .text_color(colours.foreground)
+                .typed(TypeRole::Terminal)
                 .whitespace_nowrap()
                 .underline()
                 .child(text)
@@ -567,96 +559,95 @@ impl Render for TerminalView {
                 .bottom_0()
                 .left_0()
                 .right_0()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .text_color(muted)
-                .bg(background)
+                .px(SPACE_4)
+                .py(SPACE_2)
+                .typed(TypeRole::Meta)
+                .text_color(palette.text_muted)
+                .bg(palette.window)
                 .border_t_1()
-                .border_color(border)
+                .border_color(palette.separator)
                 .child(format!("The program {ending}."))
         });
 
-        div()
-            .size_full()
-            .relative()
-            .overflow_hidden()
-            // The terminal theme's background, which a program is told when it asks, not the
-            // window's.
-            .bg(colours.background)
-            // While a terminal has the focus no Frame key fires but Cmd and kept keys, and the
-            // toolkit's window-wide keys reach the program.
-            .key_context(PROGRAM_CONTEXT)
-            .track_focus(&self.focus)
-            .cursor(CursorStyle::IBeam)
-            .on_key_down(cx.listener(Self::key_down))
-            .on_key_up(cx.listener(Self::key_up))
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(|view, _: &ScrollPageUp, _, cx| view.scroll_page(true, cx)))
-            .on_action(cx.listener(|view, _: &ScrollPageDown, _, cx| view.scroll_page(false, cx)))
-            .on_action(cx.listener(Self::clear))
-            .on_action(cx.listener(Self::select_all))
-            .on_action(cx.listener(|view, _: &ScrollToTop, _, cx| {
+        ibeam(
+            div()
+                .size_full()
+                .relative()
+                .overflow_hidden()
+                // The terminal theme's background, which a program is told when it asks, not the
+                // window's.
+                .bg(colours.background)
+                // While a terminal has the focus no Frame key fires but Cmd and kept keys, and the
+                // toolkit's window-wide keys reach the program.
+                .key_context(PROGRAM_CONTEXT)
+                .track_focus(&self.focus),
+        )
+        .on_key_down(cx.listener(Self::key_down))
+        .on_key_up(cx.listener(Self::key_up))
+        .on_action(cx.listener(Self::copy))
+        .on_action(cx.listener(Self::paste))
+        .on_action(cx.listener(|view, _: &ScrollPageUp, _, cx| view.scroll_page(true, cx)))
+        .on_action(cx.listener(|view, _: &ScrollPageDown, _, cx| view.scroll_page(false, cx)))
+        .on_action(cx.listener(Self::clear))
+        .on_action(cx.listener(Self::select_all))
+        .on_action(
+            cx.listener(|view, _: &ScrollToTop, _, cx| {
                 view.scroll_with(Emulator::scroll_to_top, cx)
-            }))
-            .on_action(cx.listener(|view, _: &ScrollToBottom, _, cx| {
-                view.scroll_with(Emulator::scroll_to_bottom, cx)
-            }))
-            .on_action(cx.listener(|view, _: &ScrollLineUp, _, cx| view.scroll_by(1, cx)))
-            .on_action(cx.listener(|view, _: &ScrollLineDown, _, cx| view.scroll_by(-1, cx)))
-            .on_mouse_down(gpui_kit::MouseButton::Left, cx.listener(Self::mouse_down))
-            .on_mouse_down(gpui_kit::MouseButton::Middle, cx.listener(Self::mouse_down))
-            .on_mouse_down(gpui_kit::MouseButton::Right, cx.listener(Self::mouse_down))
-            .on_mouse_up(gpui_kit::MouseButton::Left, cx.listener(Self::mouse_up))
-            .on_mouse_up(gpui_kit::MouseButton::Middle, cx.listener(Self::mouse_up))
-            .on_mouse_up(gpui_kit::MouseButton::Right, cx.listener(Self::mouse_up))
-            .on_mouse_up_out(gpui_kit::MouseButton::Left, cx.listener(Self::mouse_up))
-            .on_mouse_up_out(gpui_kit::MouseButton::Middle, cx.listener(Self::mouse_up))
-            .on_mouse_up_out(gpui_kit::MouseButton::Right, cx.listener(Self::mouse_up))
-            .on_mouse_move(cx.listener(Self::mouse_move))
-            .on_scroll(cx.listener(Self::scroll))
-            .child(
-                canvas(
-                    |bounds, _, _| bounds,
-                    move |_, bounds, window, cx| {
-                        geometry.bounds.set(bounds);
-                        let columns = (f32::from(bounds.size.width) / f32::from(cell.width))
-                            .floor()
-                            .max(1.) as u16;
-                        let rows = (f32::from(bounds.size.height) / f32::from(cell.height))
-                            .floor()
-                            .max(1.) as u16;
-                        let fitted = (TerminalSize { columns, rows }, cell);
-                        let known = geometry.fitted.get().unwrap_or((initial, Size::default()));
-                        if known != fitted {
-                            geometry.fitted.set(Some(fitted));
-                            let view = view.clone();
-                            window.defer(cx, move |_, cx| {
-                                view.update(cx, |view, cx| view.fit(fitted.0, fitted.1, cx));
-                            });
-                        }
-                        window.handle_input(
-                            &focus,
-                            ElementInputHandler::new(bounds, view.clone()),
-                            cx,
-                        );
-                        let grid = Grid {
-                            origin: bounds.origin,
-                            cell,
-                            font,
-                            font_size,
-                            colours: &colours,
-                            focused,
-                            selection,
-                        };
-                        draw::paint(&screen, &grid, window, cx);
-                    },
-                )
-                .size_full(),
+            }),
+        )
+        .on_action(cx.listener(|view, _: &ScrollToBottom, _, cx| {
+            view.scroll_with(Emulator::scroll_to_bottom, cx)
+        }))
+        .on_action(cx.listener(|view, _: &ScrollLineUp, _, cx| view.scroll_by(1, cx)))
+        .on_action(cx.listener(|view, _: &ScrollLineDown, _, cx| view.scroll_by(-1, cx)))
+        .on_mouse_down(gpui_kit::MouseButton::Left, cx.listener(Self::mouse_down))
+        .on_mouse_down(gpui_kit::MouseButton::Middle, cx.listener(Self::mouse_down))
+        .on_mouse_down(gpui_kit::MouseButton::Right, cx.listener(Self::mouse_down))
+        .on_mouse_up(gpui_kit::MouseButton::Left, cx.listener(Self::mouse_up))
+        .on_mouse_up(gpui_kit::MouseButton::Middle, cx.listener(Self::mouse_up))
+        .on_mouse_up(gpui_kit::MouseButton::Right, cx.listener(Self::mouse_up))
+        .on_mouse_up_out(gpui_kit::MouseButton::Left, cx.listener(Self::mouse_up))
+        .on_mouse_up_out(gpui_kit::MouseButton::Middle, cx.listener(Self::mouse_up))
+        .on_mouse_up_out(gpui_kit::MouseButton::Right, cx.listener(Self::mouse_up))
+        .on_mouse_move(cx.listener(Self::mouse_move))
+        .on_scroll(cx.listener(Self::scroll))
+        .child(
+            canvas(
+                |bounds, _, _| bounds,
+                move |_, bounds, window, cx| {
+                    geometry.bounds.set(bounds);
+                    let columns = (f32::from(bounds.size.width) / f32::from(cell.width))
+                        .floor()
+                        .max(1.) as u16;
+                    let rows = (f32::from(bounds.size.height) / f32::from(cell.height))
+                        .floor()
+                        .max(1.) as u16;
+                    let fitted = (TerminalSize { columns, rows }, cell);
+                    let known = geometry.fitted.get().unwrap_or((initial, Size::default()));
+                    if known != fitted {
+                        geometry.fitted.set(Some(fitted));
+                        let view = view.clone();
+                        window.defer(cx, move |_, cx| {
+                            view.update(cx, |view, cx| view.fit(fitted.0, fitted.1, cx));
+                        });
+                    }
+                    window.handle_input(&focus, ElementInputHandler::new(bounds, view.clone()), cx);
+                    let grid = Grid {
+                        origin: bounds.origin,
+                        cell,
+                        font,
+                        font_size,
+                        colours: &colours,
+                        focused,
+                        selection,
+                    };
+                    draw::paint(&screen, &grid, window, cx);
+                },
             )
-            .children(marked)
-            .children(ended)
+            .size_full(),
+        )
+        .children(marked)
+        .children(ended)
     }
 }
 

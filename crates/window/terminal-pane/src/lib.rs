@@ -16,13 +16,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place, Sends};
 use yaar_link::{
     Ending, Fact, Program, Reply, Request, RequestKind, SessionState, TerminalId, TerminalInfo,
-    TerminalSize, WorkspaceId,
+    TerminalPlace, TerminalSize, WorkspaceId,
 };
+use yaar_ui::metrics::{SPACE_2, SPACE_3, SPACE_4, SPACE_5};
+use yaar_ui::pieces::{Banner, Chip, Divider, EmptyState, SectionLabel, Tone};
+use yaar_ui::themes::palette;
 
 pub use attachment::ADDRESS_EACH_COMMENT;
 pub use consent::{NO_LABEL, NOTHING_TO_INSTALL, YES_LABEL};
@@ -312,7 +314,9 @@ pub struct TerminalPane {
     /// changes.
     slot: Option<TerminalSize>,
     room: Option<TerminalSize>,
+    room_pixels: Option<(Size<Pixels>, Size<Pixels>)>,
     room_seen: Rc<std::cell::Cell<Option<TerminalSize>>>,
+    header_height: Rc<std::cell::Cell<Option<Pixels>>>,
     notice: Option<String>,
     terminals: Vec<Entry>,
     on_screen: Option<WorkspaceId>,
@@ -361,6 +365,10 @@ impl TerminalPane {
         });
         let agents = cx.observe(&models.agents, |_, _, cx| cx.notify());
         let consents = cx.observe(&models.consents, |_, _, cx| cx.notify());
+        let settings = cx.observe(&models.settings, |pane, _, cx| {
+            pane.slot = None;
+            cx.notify();
+        });
         let terminals = cx.observe(&models.terminals, |pane, _, cx| pane.attach_missing(cx));
         let wanted = cx.subscribe_in(
             &models.terminals,
@@ -377,7 +385,9 @@ impl TerminalPane {
             size: FIRST_SIZE,
             slot: None,
             room: None,
+            room_pixels: None,
             room_seen: Rc::default(),
+            header_height: Rc::default(),
             notice: None,
             terminals: Vec::new(),
             on_screen,
@@ -389,7 +399,7 @@ impl TerminalPane {
             attachments: attachment::Attachments::default(),
             launchers: launchers::Launchers::default(),
             _subscriptions: vec![
-                handed_on, keys, facts, workspaces, agents, consents, terminals, wanted,
+                handed_on, keys, facts, workspaces, agents, consents, settings, terminals, wanted,
             ],
         };
         pane.attach_missing(cx);
@@ -593,7 +603,7 @@ impl TerminalPane {
 
     // The size a terminal of `workspace` is attached at: the room, or the fitted slot or half the
     // room when split, never what another workspace's view fitted. None until the pane is laid out.
-    fn attach_size(&self, workspace: &WorkspaceId) -> Option<TerminalSize> {
+    fn attach_size(&self, workspace: &WorkspaceId, stacked: bool) -> Option<TerminalSize> {
         let split = self
             .layouts
             .get(workspace)
@@ -602,25 +612,58 @@ impl TerminalPane {
             return Some(slot);
         }
         let room = self.room?;
-        Some(if split {
+        if !split {
+            return Some(room);
+        }
+        if let Some((bounds, cell)) = self.room_pixels {
+            let header = self.header_height.get().unwrap_or(Pixels::ZERO);
+            let outer_width = bounds.width + SPACE_5 * 2.;
+            let outer_height = bounds.height + SPACE_3 * 2.;
+            let (width, height) = if stacked {
+                (
+                    bounds.width,
+                    (outer_height - px(1.)) / 2. - header - SPACE_3,
+                )
+            } else {
+                (
+                    (outer_width - px(1.)) / 2. - SPACE_5 * 2.,
+                    outer_height - header - SPACE_3,
+                )
+            };
+            let columns = (f32::from(width) / f32::from(cell.width)).floor().max(1.) as u16;
+            let rows = (f32::from(height) / f32::from(cell.height)).floor().max(1.) as u16;
+            return Some(TerminalSize { columns, rows });
+        }
+        Some(if stacked {
             TerminalSize {
-                columns: room.columns / 2,
+                rows: (room.rows / 2).max(1),
                 ..room
             }
         } else {
-            room
+            TerminalSize {
+                columns: (room.columns / 2).max(1),
+                ..room
+            }
         })
     }
 
-    fn room_found(&mut self, room: TerminalSize, cx: &mut Context<Self>) {
+    fn room_found(
+        &mut self,
+        room: TerminalSize,
+        bounds: Size<Pixels>,
+        cell: Size<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         if self.room != Some(room) {
             self.slot = None;
         }
         self.room = Some(room);
+        self.room_pixels = Some((bounds, cell));
         self.attach_missing(cx);
     }
 
     fn attach_missing(&mut self, cx: &mut Context<Self>) {
+        let stacked = self.models.settings.read(cx).terminal_place() != TerminalPlace::Below;
         let missing: Vec<TerminalInfo> = self
             .models
             .terminals
@@ -631,7 +674,7 @@ impl TerminalPane {
             .cloned()
             .collect();
         for info in missing {
-            let Some(size) = self.attach_size(&info.workspace) else {
+            let Some(size) = self.attach_size(&info.workspace, stacked) else {
                 continue;
             };
             self.attach(info, size, cx);
@@ -849,10 +892,10 @@ impl Render for TerminalPane {
             window.request_animation_frame();
         }
 
-        let theme = cx.theme();
-        let (border, muted) = (theme.border, theme.muted_foreground);
-        let (warning, warning_text) = (theme.warning, theme.warning_foreground);
+        let palette = palette(cx);
+        let stacked = self.models.settings.read(cx).terminal_place() != TerminalPlace::Below;
         let shown = self.shown();
+        let split = shown.len() == 2;
         let launchers = self.render_launchers(cx);
         let consent = self.render_consent(cx);
         let slots = shown.iter().enumerate().filter_map(|(n, id)| {
@@ -863,24 +906,18 @@ impl Render for TerminalPane {
                 .debug_selector(move || format!("terminal-slot-{n}"))
                 .flex_1()
                 .min_w_0()
-                .h_full()
+                .min_h_0()
+                .size_full()
                 .on_mouse_down(
                     gpui_kit::MouseButton::Left,
                     cx.listener(move |pane, _, window, cx| pane.click_slot(n, window, cx)),
                 );
             let mark = self.waiting(id, cx).then(|| {
-                div()
-                    .debug_selector(move || format!("terminal-waiting-{n}"))
-                    .absolute()
-                    .top_2()
-                    .right_3()
-                    .px_2()
-                    .py_0p5()
-                    .rounded_md()
-                    .text_xs()
-                    .bg(warning)
-                    .text_color(warning_text)
-                    .child("Waiting for permission")
+                div().absolute().top(SPACE_4).right(SPACE_5).child(
+                    Chip::new("Waiting for permission")
+                        .tone(Tone::Warn)
+                        .selector(format!("terminal-waiting-{n}")),
+                )
             });
             let cut = entry
                 .view
@@ -895,66 +932,124 @@ impl Render for TerminalPane {
                         .right_0()
                         .h(height)
                         .border_b_1()
-                        .border_color(border)
+                        .border_color(palette.separator)
                 });
-            // A sibling of the slot, so that the slot's bounds are exactly its view's.
-            let divider = (n > 0).then(|| div().flex_none().w_px().h_full().bg(border));
+            let divider = (n > 0).then(|| {
+                if stacked {
+                    Divider::horizontal().into_any_element()
+                } else {
+                    Divider::vertical().into_any_element()
+                }
+            });
+            let header = split.then(|| {
+                let measured = self.header_height.clone();
+                let measure = canvas(
+                    |bounds, _, _| bounds,
+                    move |_, bounds, _, _| {
+                        if bounds.size.height > Pixels::ZERO {
+                            measured.set(Some(bounds.size.height));
+                        }
+                    },
+                )
+                .absolute()
+                .size_full();
+                div()
+                    .flex_none()
+                    .relative()
+                    .pt(SPACE_2)
+                    .bg(palette.pane)
+                    .child(measure)
+                    .child(
+                        SectionLabel::new(self.terminal_label(id, cx))
+                            .selector(format!("terminal-split-header-{n}")),
+                    )
+            });
             let named = div()
                 .debug_selector(move || format!("terminal-{name}"))
                 .size_full()
                 .child(view);
             let attached = self.render_attachment(n, id, cx);
-            Some((
-                divider,
-                slot.relative()
-                    .child(named)
-                    .children(cut)
-                    .children(mark)
-                    .children(attached),
-            ))
+            let slot_body = slot
+                .relative()
+                .child(named)
+                .children(cut)
+                .children(mark)
+                .children(attached);
+            let slot_wrap = if split {
+                div().flex_1().min_w_0().min_h_0().px(SPACE_5).pb(SPACE_3)
+            } else {
+                div().flex_1().min_w_0().min_h_0().px(SPACE_5).py(SPACE_3)
+            };
+            // The header and inset padding are siblings/ancestors of `terminal-slot-{n}`, so the
+            // slot's bounds stay exactly those of its terminal view.
+            let cell = div()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .children(header)
+                .child(slot_wrap.child(slot_body))
+                .into_any_element();
+            Some((divider, cell))
         });
         let slots = slots.flat_map(|(divider, slot)| divider.into_iter().chain([slot]));
         let empty = shown.is_empty().then(|| {
             div()
-                .debug_selector(|| "terminal-how-to-open".to_owned())
-                .p_3()
-                .text_sm()
-                .text_color(muted)
-                .child(how_to_open())
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    EmptyState::new("No terminal open")
+                        .line(how_to_open())
+                        .selector("terminal-how-to-open"),
+                )
+        });
+        let slots_area = (!shown.is_empty()).then(|| {
+            let area = div().flex_1().min_h_0().flex();
+            let area = if stacked {
+                area.flex_col()
+            } else {
+                area.flex_row()
+            };
+            area.children(slots)
         });
         let cell = TerminalView::metrics(window, cx).2;
         let (weak, seen) = (cx.weak_entity(), self.room_seen.clone());
-        let room = canvas(
-            |bounds, _, _| bounds,
-            move |_, bounds, window, cx| {
-                let columns = (f32::from(bounds.size.width) / f32::from(cell.width)).floor() as u16;
-                let rows = (f32::from(bounds.size.height) / f32::from(cell.height)).floor() as u16;
-                let room = TerminalSize { columns, rows };
-                if columns == 0 || rows == 0 || seen.get() == Some(room) {
-                    return;
-                }
-                seen.set(Some(room));
-                let weak = weak.clone();
-                window.defer(cx, move |_, cx| {
-                    weak.update(cx, |pane, cx| pane.room_found(room, cx)).ok();
-                });
-            },
-        )
-        .absolute()
-        .size_full();
-        let notice = self.notice.clone().map(|notice| {
-            div()
-                .flex_none()
-                .px_3()
-                .py_1()
-                .text_sm()
-                .text_color(cx.theme().danger)
-                .child(notice)
-        });
+        let room = div().absolute().inset_0().px(SPACE_5).py(SPACE_3).child(
+            canvas(
+                |bounds, _, _| bounds,
+                move |_, bounds, window, cx| {
+                    let columns =
+                        (f32::from(bounds.size.width) / f32::from(cell.width)).floor() as u16;
+                    let rows =
+                        (f32::from(bounds.size.height) / f32::from(cell.height)).floor() as u16;
+                    let room = TerminalSize { columns, rows };
+                    if columns == 0 || rows == 0 || seen.get() == Some(room) {
+                        return;
+                    }
+                    seen.set(Some(room));
+                    let weak = weak.clone();
+                    let size = bounds.size;
+                    window.defer(cx, move |_, cx| {
+                        weak.update(cx, |pane, cx| pane.room_found(room, size, cell, cx))
+                            .ok();
+                    });
+                },
+            )
+            .size_full(),
+        );
+        let notice = self
+            .notice
+            .clone()
+            .map(|notice| Banner::new(notice).tone(Tone::Danger));
         div()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .size_full()
+            .bg(palette.pane)
             .flex()
             .flex_col()
             .children(launchers)
@@ -969,7 +1064,7 @@ impl Render for TerminalPane {
                     .child(room)
                     .children(notice)
                     .children(empty)
-                    .child(div().flex_1().min_h_0().flex().flex_row().children(slots)),
+                    .children(slots_area),
             )
     }
 }

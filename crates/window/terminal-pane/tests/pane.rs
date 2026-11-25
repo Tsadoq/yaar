@@ -6,7 +6,7 @@ use gpui_kit::{
     ClipboardItem, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, ScrollDelta,
     ScrollEvent, TestAppContext, VisualTestContext, point, px, size,
 };
-use yaar_link::{Ending, Fact, Reply, Request, TerminalId};
+use yaar_link::{Ending, Fact, Reply, Request, Setting, TerminalId, TerminalPlace};
 use yaar_terminal_pane::{
     Copy, FIRST_SIZE, FRAMES_AFTER_A_KEY, NewTerminal, NextTerminal, Paste, PreviousTerminal,
     ScrollPageUp, ToggleSplit,
@@ -130,9 +130,26 @@ fn the_split_view_shows_two_terminals_at_once_and_keys_go_to_the_focused_one(
         drawn("terminal-slot-1", &mut cx).expect("the second slot is drawn"),
     );
     assert!(
-        first.right() <= second.left(),
-        "the slots are not side by side: {first:?} and {second:?}"
+        first.bottom() <= second.top(),
+        "in a side pane the split slots are stacked: {first:?} and {second:?}"
     );
+
+    panes.models.settings.update(&mut cx, |settings, cx| {
+        settings.set(Setting::TerminalPlace(TerminalPlace::Below), cx);
+    });
+    cx.run_until_parked();
+    let (below_first, below_second) = (
+        drawn("terminal-slot-0", &mut cx).expect("the first slot is drawn below"),
+        drawn("terminal-slot-1", &mut cx).expect("the second slot is drawn below"),
+    );
+    assert!(
+        below_first.right() <= below_second.left(),
+        "in a bottom pane the split slots are side by side: {below_first:?} and {below_second:?}"
+    );
+    panes.models.settings.update(&mut cx, |settings, cx| {
+        settings.set(Setting::TerminalPlace(TerminalPlace::Right), cx);
+    });
+    cx.run_until_parked();
 
     panes.click_slot(1, &mut cx);
     assert_eq!(focused(&panes, &mut cx), Some(two[1].clone()));

@@ -1,6 +1,17 @@
-use gpui_kit::{DefiniteLength, FontWeight, Styled, px, relative};
+use gpui_kit::{DefiniteLength, Font, FontWeight, Pixels, Styled, font, px, relative};
 
 use crate::fonts::{CODE, UI};
+
+/// Font and point size for the painted terminal grid, matching [`TypeRole::Terminal`].
+pub fn terminal_font() -> (Font, Pixels) {
+    (font(CODE), px(12.5))
+}
+
+/// Bold copy of a font for painted terminal cells.
+pub fn bold_font(mut base: Font) -> Font {
+    base.weight = FontWeight::BOLD;
+    base
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeRole {

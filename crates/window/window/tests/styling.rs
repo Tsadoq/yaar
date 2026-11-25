@@ -1,6 +1,6 @@
-//! No source of the Frame, the panes or the Window program writes a colour or reads a theme role
-//! no definition holds, but the theme definitions and the terminal pane's `colour_of`; a crate in
-//! `STRICT` also leaves fonts, sizes, corners, shadows and the pointer to `yaar-ui`.
+//! No source of the Frame, the panes or the Window program writes a colour, reads a theme role
+//! no definition holds, or styles fonts, sizes, corners, shadows or the pointer directly — all of
+//! that belongs in `yaar-ui`, except the terminal pane's `colour_of`.
 
 #[path = "styling/scan.rs"]
 mod scan;
@@ -13,9 +13,6 @@ use scan::{
     THEME_OF_ANYTHING, THEME_TRAIT, XTERM_FILE, XTERM_FUNCTION, code_of, colours_not_allowed,
     colours_written, crates_folder, function_span, roles, roles_unknown, scan, sources_under,
 };
-
-/// The crates held to the full styling rule, not only to the colour rules.
-const STRICT: &[&str] = &["frame", "review-pane"];
 
 fn said(findings: &[Finding], rule: Rule) -> Vec<String> {
     findings
@@ -33,7 +30,7 @@ fn of_the_repository(rule: Rule) -> Vec<String> {
             "no source of {krate} was found: the walk looks in the wrong place"
         );
     }
-    said(&scan(&sources, STRICT), rule)
+    said(&scan(&sources), rule)
 }
 
 fn in_crate(krate: &str, text: &str) -> Source {
@@ -44,8 +41,8 @@ fn in_crate(krate: &str, text: &str) -> Source {
     }
 }
 
-fn scanned(krate: &str, strict: &[&str], text: &str) -> Vec<(usize, Rule, String)> {
-    scan(&[in_crate(krate, text)], strict)
+fn scanned(krate: &str, text: &str) -> Vec<(usize, Rule, String)> {
+    scan(&[in_crate(krate, text)])
         .into_iter()
         .map(|finding| (finding.line, finding.rule, finding.what))
         .collect()
@@ -117,7 +114,7 @@ fn a_new_source_file_is_scanned_without_being_listed() {
     assert!(!files.iter().any(|file| file.contains("not_rust")));
     assert!(!files.iter().any(|file| file.starts_with("ui/")));
 
-    let mut written: Vec<String> = said(&scan(&sources, &[]), Rule::Colour);
+    let mut written: Vec<String> = said(&scan(&sources), Rule::Colour);
     written.sort();
     assert_eq!(
         written,
@@ -131,7 +128,7 @@ fn a_new_source_file_is_scanned_without_being_listed() {
 }
 
 #[test]
-fn in_a_strict_crate_each_styling_call_is_found() {
+fn each_styling_call_is_found_in_every_scanned_crate() {
     let calls = [
         ("div().font_family(\"Inter\")", "font_family"),
         ("div().text_size(px(13.))", "text_size"),
@@ -172,7 +169,7 @@ fn in_a_strict_crate_each_styling_call_is_found() {
     for (text, name) in calls {
         for krate in CRATES {
             assert_eq!(
-                scanned(krate, &[krate], text),
+                scanned(krate, text),
                 [(1, Rule::Styling, name.to_string())],
                 "the scan of {text:?} in {krate}"
             );
@@ -180,7 +177,7 @@ fn in_a_strict_crate_each_styling_call_is_found() {
     }
 
     let text: String = calls.iter().map(|(text, _)| format!("{text}\n")).collect();
-    let found: Vec<&str> = scanned("frame", &["frame"], &text)
+    let found: Vec<&str> = scanned("frame", &text)
         .iter()
         .map(|(line, ..)| *line)
         .map(|line| calls[line - 1].1)
@@ -194,7 +191,6 @@ fn in_a_strict_crate_each_styling_call_is_found() {
     assert_eq!(
         scanned(
             "frame",
-            &["frame"],
             "div().text_sm().text_sm().rounded_md().rounded_lg()"
         ),
         [
@@ -206,7 +202,6 @@ fn in_a_strict_crate_each_styling_call_is_found() {
     assert_eq!(
         scanned(
             "frame",
-            &["frame"],
             "div()\n    .rounded_md()\n    .child(x)\n    .shadow_sm()"
         ),
         [
@@ -215,15 +210,10 @@ fn in_a_strict_crate_each_styling_call_is_found() {
         ],
         "a call on its own line is found where it is"
     );
-    let other = &["review-pane", "window"];
-    assert!(
-        scanned("frame", other, "div().text_sm().rounded_md()").is_empty(),
-        "the strictness is that of the crate the file is in"
-    );
 }
 
 #[test]
-fn in_a_crate_not_yet_strict_only_colour_writes_are_found() {
+fn colour_and_styling_rules_both_apply_to_every_scanned_crate() {
     let text = "\
 div().text_sm().rounded_md().shadow_lg().cursor_pointer().font_weight(w).border_dashed()
 let c = cx.theme().accent;
@@ -231,20 +221,10 @@ use gpui_kit::ActiveTheme;
 div().bg(rgb(0x123456))
 ";
     for krate in CRATES {
-        assert_eq!(
-            scanned(krate, &[], text),
-            [(4, Rule::Colour, "rgb(".to_string())],
-            "{krate}"
-        );
+        let found = scanned(krate, text);
+        assert_eq!(found.len(), 9, "{krate}: {found:?}");
+        assert!(found.contains(&(4, Rule::Colour, "rgb(".to_string())));
     }
-    let strict = scanned("window", &["window"], text);
-    assert_eq!(strict.len(), 9, "{strict:?}");
-    assert!(strict.contains(&(4, Rule::Colour, "rgb(".to_string())));
-    assert_eq!(
-        scanned("review-pane", &["frame", "window"], text),
-        [(4, Rule::Colour, "rgb(".to_string())],
-        "a crate outside the strict set is not held to the styling rules"
-    );
 }
 
 #[test]
@@ -265,10 +245,7 @@ fn a_styling_word_inside_a_comment_or_a_string_is_passed() {
         "let s = \"//\"; /* .rounded_md() */",
     ];
     for text in passed {
-        assert!(
-            scanned("frame", &["frame"], text).is_empty(),
-            "the scan of {text:?}"
-        );
+        assert!(scanned("frame", text).is_empty(), "the scan of {text:?}");
     }
 
     let unrelated = [
@@ -308,15 +285,12 @@ fn a_styling_word_inside_a_comment_or_a_string_is_passed() {
         "div().text_color(c).font_style(s).border_1()",
     ];
     for text in unrelated {
-        assert!(
-            scanned("frame", &["frame"], text).is_empty(),
-            "the scan of {text:?}"
-        );
+        assert!(scanned("frame", text).is_empty(), "the scan of {text:?}");
     }
 
     let after = "let a = '\"'; x.text_sm();\nfn f<'a>(x: &'a str) { x.rounded_md(); }\nlet b = '\\''; y.shadow_sm();";
     assert_eq!(
-        scanned("frame", &["frame"], after),
+        scanned("frame", after),
         [
             (1, Rule::Styling, "text_sm".to_string()),
             (2, Rule::Styling, "rounded".to_string()),
@@ -365,14 +339,11 @@ fn no_source_of_the_frame_the_panes_or_the_window_program_reads_a_colour_no_defi
 }
 
 #[test]
-fn no_strict_crate_styles_what_the_ui_crate_paints() {
-    for krate in STRICT {
-        assert!(CRATES.contains(krate), "{krate} is no crate that draws");
-    }
+fn no_scanned_crate_styles_what_the_ui_crate_paints() {
     let hits = of_the_repository(Rule::Styling);
     assert!(
         hits.is_empty(),
-        "a strict crate styles itself instead of using the pieces of `yaar-ui`:\n{}",
+        "a crate styles itself instead of using the pieces of `yaar-ui`:\n{}",
         hits.join("\n")
     );
 }

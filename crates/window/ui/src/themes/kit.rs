@@ -76,8 +76,7 @@ impl ThemeDefinition {
         self.write_kit_roles(&mut theme.colors);
         theme.font_family = FONT.into();
         theme.mono_font_family = MONO_FONT.into();
-        // The toolkit's font size is the rem the panes size by.
-        theme.font_size = px(16.);
+        theme.font_size = px(13.);
         theme.mono_font_size = px(13.);
         theme.radius = px(6.);
         theme.radius_lg = px(10.);
@@ -193,7 +192,7 @@ mod tests {
             let kit = kit_of(theme);
             assert_eq!(kit.font_family, "Inter");
             assert_eq!(kit.mono_font_family, "JetBrains Mono");
-            assert_eq!(kit.font_size, px(16.));
+            assert_eq!(kit.font_size, px(13.));
             assert_eq!(kit.mono_font_size, px(13.));
             assert_eq!(kit.radius, px(6.));
             assert_eq!(kit.radius_lg, px(10.));

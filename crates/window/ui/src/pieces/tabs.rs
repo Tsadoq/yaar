@@ -9,7 +9,7 @@ use gpui_kit::{
 
 use super::state_dot::dot;
 use super::{CountBadge, OnSelect, State, marked, part};
-use crate::metrics::{RADIUS_CONTROL, SPACE_1, SPACE_2, SPACE_3, SPACE_5};
+use crate::metrics::{RADIUS_CONTROL, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5};
 use crate::themes::palette;
 use crate::typography::{TypeRole, Typed};
 
@@ -93,10 +93,10 @@ impl Tabs {
 impl RenderOnce for Tabs {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let palette = palette(cx);
-        let (role, down) = if self.mono {
-            (TypeRole::CodeSmall, px(3.))
+        let (role, across, down) = if self.mono {
+            (TypeRole::CodeSmall, SPACE_4, px(3.))
         } else {
-            (TypeRole::Body, SPACE_2)
+            (TypeRole::Body, SPACE_5, SPACE_2)
         };
         let parent = Arc::new(self.id.clone());
         let selector = self.selector;
@@ -109,7 +109,7 @@ impl RenderOnce for Tabs {
                 .flex()
                 .items_center()
                 .gap(SPACE_3)
-                .px(SPACE_5)
+                .px(across)
                 .py(down)
                 .rounded(RADIUS_CONTROL)
                 .typed(role)

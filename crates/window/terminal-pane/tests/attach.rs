@@ -295,7 +295,7 @@ fn a_terminal_for_a_workspace_that_shows_none_is_attached_at_the_whole_room_in_t
     panes.open_terminal(&t2, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     wait_until(&mut cx, "the terminals at half the room", |_| {
-        panes.grid(&t1).columns < whole.columns && panes.grid(&t2).columns < whole.columns
+        panes.grid(&t1).rows < whole.rows && panes.grid(&t2).rows < whole.rows
     });
 
     click_in(&format!("sidebar-workspace-{two}"), &mut cx);
@@ -331,7 +331,7 @@ fn a_terminal_gained_for_a_split_workspace_is_attached_at_the_size_of_a_slot(
     panes.open_terminal(&t2, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     wait_until(&mut cx, "the terminals at half the room", |_| {
-        panes.grid(&t1).columns < whole.columns && panes.grid(&t2).columns < whole.columns
+        panes.grid(&t1).rows < whole.rows && panes.grid(&t2).rows < whole.rows
     });
     let half = panes.grid(&t1);
 
@@ -376,7 +376,7 @@ fn a_terminal_gained_for_a_workspace_that_shows_one_is_attached_at_the_whole_roo
     panes.open_terminal(&t3, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     wait_until(&mut cx, "the terminals at half the room", |_| {
-        panes.grid(&t2).columns < whole.columns && panes.grid(&t3).columns < whole.columns
+        panes.grid(&t2).rows < whole.rows && panes.grid(&t3).rows < whole.rows
     });
 
     panes
@@ -419,7 +419,7 @@ fn a_terminal_gained_for_a_split_workspace_is_attached_at_a_slot_whatever_anothe
     panes.open_terminal(&t2, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     wait_until(&mut cx, "the terminals at half the room", |_| {
-        panes.grid(&t1).columns < whole.columns && panes.grid(&t2).columns < whole.columns
+        panes.grid(&t1).rows < whole.rows && panes.grid(&t2).rows < whole.rows
     });
     let half = panes.grid(&t1);
 
@@ -469,7 +469,7 @@ fn a_terminal_gained_for_a_split_workspace_after_the_window_was_resized_is_attac
     panes.open_terminal(&t2, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     wait_until(&mut cx, "the terminals at half the room", |_| {
-        panes.grid(&t1).columns < whole.columns && panes.grid(&t2).columns < whole.columns
+        panes.grid(&t1).rows < whole.rows && panes.grid(&t2).rows < whole.rows
     });
     let old_slot = panes.grid(&t1);
 
@@ -484,18 +484,18 @@ fn a_terminal_gained_for_a_split_workspace_after_the_window_was_resized_is_attac
         grid.columns < whole.columns && grid.rows < whole.rows
     });
     let room = panes.grid(&t3);
-    let slot = TerminalSize {
-        columns: room.columns / 2,
-        ..room
-    };
-    assert_ne!(slot, old_slot);
-
     panes
         .models
         .terminals
         .update(&mut cx, |list, cx| list.opened(info(&t4, &one), cx));
     let (id, asked, size) = attach_request(&panes, &mut cx);
-    assert_eq!((asked, size), (t4.clone(), slot));
+    assert_eq!(asked, t4);
+    assert_ne!(size, old_slot);
+    assert_eq!(size.columns, room.columns);
+    assert!(
+        size.rows > 0 && size.rows <= room.rows / 2,
+        "stacked slot rows {size:?} for room {room:?}"
+    );
     answer_attach(&panes, id, &t4, false, &[b"hello\r\n"]);
     wait_until(&mut cx, "the attached terminal in the pane", |cx| {
         panes

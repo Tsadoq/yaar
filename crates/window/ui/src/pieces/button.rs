@@ -144,7 +144,12 @@ impl RenderOnce for Button {
             ),
         };
         let (across, down, role) = if self.small {
-            (SPACE_4, px(1.), TypeRole::Meta)
+            let across = if kind == ButtonKind::Ghost {
+                SPACE_3
+            } else {
+                SPACE_4
+            };
+            (across, px(1.), TypeRole::Meta)
         } else {
             (SPACE_5, SPACE_2, TypeRole::Body)
         };

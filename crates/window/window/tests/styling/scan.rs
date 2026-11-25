@@ -418,8 +418,8 @@ pub fn styling_banned(source: &str) -> Vec<(usize, &'static str)> {
     hits
 }
 
-/// Every check, over the given sources; a crate in `strict` is also held to the styling rules.
-pub fn scan(sources: &[Source], strict: &[&str]) -> Vec<Finding> {
+/// Every check, over the given sources: colour, role and styling rules hold in every drawing crate.
+pub fn scan(sources: &[Source]) -> Vec<Finding> {
     let roles = roles();
     let mut findings = Vec::new();
     for Source { krate, file, text } in sources {
@@ -436,10 +436,8 @@ pub fn scan(sources: &[Source], strict: &[&str]) -> Vec<Finding> {
         for (line, what) in roles_unknown(krate, file, text, &roles) {
             findings.push(finding(line, Rule::Role, what));
         }
-        if strict.contains(&krate.as_str()) {
-            for (line, what) in styling_banned(text) {
-                findings.push(finding(line, Rule::Styling, what.to_string()));
-            }
+        for (line, what) in styling_banned(text) {
+            findings.push(finding(line, Rule::Styling, what.to_string()));
         }
     }
     findings

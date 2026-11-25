@@ -1,14 +1,17 @@
 //! The launchers next to the shell, one per agent CLI the Keeper names, and the controls that
 //! resume the sessions a restart cut off.
 
-use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_frame::AskError;
-use yaar_link::{AgentCli, Fact, Program, Reply, Request, Session, SessionId, TerminalId};
+use yaar_link::{
+    AgentCli, Fact, Program, Reply, Request, Session, SessionId, SessionState, Setting, TerminalId,
+    TerminalPlace,
+};
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4};
+use yaar_ui::pieces::{Banner, Button, ButtonKind, Segmented, State, Tabs};
+use yaar_ui::themes::palette;
 
-use crate::{NewAgentTerminal, NextAgentCli, ResumeAgent, TerminalPane};
-
-const LINE: Pixels = px(28.);
+use crate::{NewAgentTerminal, NextAgentCli, ResumeAgent, TerminalPane, ToggleSplit};
 
 const NO_CLI: &str = "The Keeper names no agent CLI to start.";
 
@@ -193,104 +196,186 @@ impl TerminalPane {
         }
     }
 
-    fn control(
-        &self,
-        selector: String,
-        label: String,
-        chosen: Option<String>,
-        act: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
-        // The mark of the chosen launcher is a ring over the control, which takes no click from it.
-        let mark = chosen.map(|selector| {
-            div()
-                .debug_selector(move || selector.clone())
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .rounded_sm()
-                .border_1()
-                .border_color(theme.primary)
-        });
-        div()
-            .id(SharedString::from(selector.clone()))
-            .debug_selector(move || selector.clone())
-            .relative()
-            .flex_none()
-            .px_2()
-            .rounded_sm()
-            .cursor_pointer()
-            .text_xs()
-            .bg(theme.secondary)
-            .text_color(theme.secondary_foreground)
-            .child(label)
-            .children(mark)
-            .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| act(pane, cx)))
+    pub(crate) fn terminal_label(&self, id: &TerminalId, cx: &App) -> String {
+        if let Some(session) = self.models.agents.read(cx).in_terminal(id) {
+            return session.title.clone();
+        }
+        let agents = self.models.agents.read(cx);
+        let mut shell_index = 0usize;
+        for held in self.terminals_here() {
+            if agents.in_terminal(&held).is_none() {
+                shell_index += 1;
+                if held == *id {
+                    return if shell_index == 1 {
+                        "Shell".to_owned()
+                    } else {
+                        format!("Shell {shell_index}")
+                    };
+                }
+            }
+        }
+        "Shell".to_owned()
     }
 
-    fn line(&self, selector: &'static str, cx: &App) -> Div {
-        let theme = cx.theme();
-        div()
-            .debug_selector(move || selector.to_owned())
-            .flex_none()
-            .h(LINE)
-            .px_2()
-            .gap_2()
-            .flex()
-            .flex_row()
-            .items_center()
-            .bg(theme.muted)
-            .text_color(theme.foreground)
-            .border_b_1()
-            .border_color(theme.border)
+    fn terminal_state_dot(&self, id: &TerminalId, cx: &App) -> Option<State> {
+        let session = self.models.agents.read(cx).in_terminal(id)?;
+        Some(match session.state {
+            SessionState::Works => State::Working,
+            SessionState::WaitsForPermission => State::Permission,
+            SessionState::Unreviewed => State::NeedsYou,
+            SessionState::NotRunning => State::Idle,
+            SessionState::Idle => State::Ok,
+        })
     }
 
     pub(crate) fn render_launchers(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let palette = palette(cx);
         let chosen = self.chosen_cli(cx);
-        let mut launchers = self.line("terminal-launchers", cx).child(self.control(
-            "terminal-launcher-shell".to_owned(),
-            "Shell".to_owned(),
-            None,
-            |pane, cx| {
-                pane.launch(Program::Shell, cx);
-            },
-            cx,
-        ));
+        let here = self.terminals_here();
+        let focused = self.focused();
+        let pane_entity = cx.entity();
+
+        let tabs = (!here.is_empty()).then(|| {
+            let mut row = Tabs::new("terminal-tabs").mono().selector("terminal-tab");
+            let mut selected = None;
+            for (index, id) in here.iter().enumerate() {
+                if focused.as_ref() == Some(id) {
+                    selected = Some(index);
+                }
+                row = row.tab(
+                    id.as_str().to_owned(),
+                    self.terminal_label(id, cx),
+                    None,
+                    self.terminal_state_dot(id, cx),
+                );
+            }
+            if let Some(index) = selected {
+                row = row.selected(index);
+            }
+            let ids = here.clone();
+            let entity = pane_entity.clone();
+            row.on_select(move |index, window, cx| {
+                if let Some(target) = ids.get(index).cloned() {
+                    entity.update(cx, |pane, cx| pane.show(target, window, cx));
+                }
+            })
+        });
+
+        let mut launchers = div()
+            .debug_selector(|| "terminal-launchers".to_owned())
+            .flex_none()
+            .w_full()
+            .min_h(px(40.))
+            .px(SPACE_4)
+            .py(SPACE_2)
+            .gap(SPACE_1)
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .bg(palette.pane)
+            .text_color(palette.text)
+            .border_b_1()
+            .border_color(palette.separator)
+            .children(tabs)
+            .child(
+                Button::new("terminal-launcher-shell", "+ Shell")
+                    .kind(ButtonKind::Ghost)
+                    .small()
+                    .selector("terminal-launcher-shell")
+                    .on_click(cx.listener(|pane, _: &ClickEvent, _, cx| {
+                        pane.launch(Program::Shell, cx);
+                    })),
+            );
         for cli in self.launchers(cx) {
             let agent = cli.agent.clone();
-            let mark = (chosen.as_ref() == Some(&cli))
-                .then(|| format!("terminal-launcher-chosen-{}", cli.agent));
-            launchers = launchers.child(self.control(
-                format!("terminal-launcher-{}", cli.agent),
-                cli.title,
-                mark,
-                move |pane, cx| {
-                    pane.launch(
-                        Program::Agent {
-                            agent: agent.clone(),
-                        },
-                        cx,
-                    );
-                },
-                cx,
-            ));
+            let is_chosen = chosen.as_ref() == Some(&cli);
+            let mut button = Button::new(
+                SharedString::from(format!("terminal-launcher-{}", cli.agent)),
+                format!("+ {}", cli.title),
+            )
+            .kind(ButtonKind::Ghost)
+            .small()
+            .selected(is_chosen)
+            .selector(format!("terminal-launcher-{}", cli.agent))
+            .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
+                pane.launch(
+                    Program::Agent {
+                        agent: agent.clone(),
+                    },
+                    cx,
+                );
+            }));
+            if is_chosen {
+                button =
+                    button.indicator_selector(format!("terminal-launcher-chosen-{}", cli.agent));
+            }
+            launchers = launchers.child(button);
         }
+
+        let place = self.models.settings.read(cx).terminal_place();
+        let place_index = match place {
+            TerminalPlace::Left => 0,
+            TerminalPlace::Right => 1,
+            TerminalPlace::Below => 2,
+        };
+        let settings = self.models.settings.clone();
+        let place_control = Segmented::new("terminal-place")
+            .selector("terminal-place")
+            .segment("left", "Left")
+            .segment("right", "Right")
+            .segment("bottom", "Bottom")
+            .selected(place_index)
+            .on_select(move |index, _, cx| {
+                let target = match index {
+                    0 => TerminalPlace::Left,
+                    2 => TerminalPlace::Below,
+                    _ => TerminalPlace::Right,
+                };
+                settings.update(cx, |settings, cx| {
+                    settings.set(Setting::TerminalPlace(target), cx);
+                });
+            });
+
+        let split_button = Button::new("terminal-split-toggle", "Split")
+            .small()
+            .selected(self.split())
+            .disabled(here.len() < 2)
+            .selector("terminal-split-toggle")
+            .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                pane.toggle_split(&ToggleSplit, window, cx);
+            }));
+
+        launchers = launchers.child(div().flex_1()).child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(SPACE_2)
+                .child(split_button)
+                .child(place_control),
+        );
+
         let sessions = self.resumable_sessions(cx);
         let resume = (!sessions.is_empty()).then(|| {
-            let mut line = self.line("terminal-resume", cx);
+            let mut row = div().flex().flex_wrap().items_center().gap(SPACE_3);
             for (n, session) in sessions.into_iter().enumerate() {
                 let id = session.id;
-                line = line.child(self.control(
-                    format!("terminal-resume-{n}"),
-                    format!("Resume {}", session.title),
-                    None,
-                    move |pane, cx| pane.resume(id.clone(), cx),
-                    cx,
-                ));
+                let selector = format!("terminal-resume-{n}");
+                row = row.child(
+                    Button::new(
+                        SharedString::from(selector.clone()),
+                        format!("Resume {}", session.title),
+                    )
+                    .small()
+                    .selector(selector)
+                    .on_click(cx.listener(
+                        move |pane, _: &ClickEvent, _, cx| {
+                            pane.resume(id.clone(), cx);
+                        },
+                    )),
+                );
             }
-            line
+            Banner::custom().selector("terminal-resume").child(row)
         });
         Some(
             div()
