@@ -189,6 +189,21 @@ mod tests {
     }
 
     #[test]
+    fn in_each_built_in_theme_a_raised_ground_shows_on_the_window_and_the_pane() {
+        for theme in Themes::built_in().all() {
+            let palette = &theme.palette;
+            for ground in ["window", "pane"] {
+                let ratio = contrast(palette.raised, token(palette, ground), palette.pane);
+                assert!(
+                    ratio >= 1.15,
+                    "{}: `raised` on `{ground}` reads {ratio:.2} to 1",
+                    theme.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_dimmest_text_of_the_dark_theme_is_the_darkest_grey_that_passes() {
         let themes = Themes::built_in();
         let palette = &themes.named(crate::themes::DARK).expect("built in").palette;

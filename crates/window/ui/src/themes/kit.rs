@@ -42,9 +42,9 @@ kit_roles! { p;
     secondary_foreground = p.text,
     muted = p.raised,
     muted_foreground = p.text_muted,
-    accent = composited(p.separator, p.raised),
+    accent = composited(Hsla { a: 0.5, ..p.raised }, p.pane),
     accent_foreground = p.text,
-    list_hover = composited(p.separator, p.raised),
+    list_hover = composited(Hsla { a: 0.5, ..p.raised }, p.pane),
     success = p.ok,
     warning = p.warn,
     warning_foreground = p.text_on_warn,
@@ -103,7 +103,7 @@ mod tests {
     /// The table of the mapping, written again from the theme's own tokens.
     fn wanted(p: &Palette) -> Vec<(&'static str, Hsla)> {
         let over_pane = composited(Hsla { a: 0.16, ..p.warn }, p.pane);
-        let hover = composited(p.separator, p.raised);
+        let hover = composited(Hsla { a: 0.5, ..p.raised }, p.pane);
         vec![
             ("background", p.pane),
             ("foreground", p.text),
