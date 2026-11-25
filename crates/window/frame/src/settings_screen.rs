@@ -10,7 +10,7 @@ use yaar_link::{
     Changes, Comparison, ConsentAnswer, OptionKey, RepositoryId, RequestKind, Setting,
     TerminalPlace, ThemeChoice, TurnEndSelects,
 };
-use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_6, SPACE_8};
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_8};
 use yaar_ui::pieces::{Banner, Button, ButtonKind, Card, Divider, Field, Pane as UiPane, Tone};
 use yaar_ui::themes::palette;
 use yaar_ui::typography::{TypeRole, Typed};
@@ -63,6 +63,9 @@ pub const FOLDER_PLACEHOLDER: &str = "An absolute folder; empty for beside the r
 
 pub const NO_BASE: &str = "None found: set one";
 pub const TOTAL_STATES: &str = "Total";
+pub const HEADER_SUBTITLE: &str =
+    "Preferences for review, terminal, language servers, and storage.";
+pub const HEADER_KEYS_HINT: &str = "j/k move · h/l change · Enter edit · Esc close";
 
 pub const STOP_AFTER_MINUTES: [u32; 7] = [1, 2, 5, 10, 15, 30, 60];
 
@@ -93,6 +96,45 @@ pub enum SettingRow {
     Servers(RepositoryId),
     WorktreesFolder(RepositoryId),
     States,
+}
+
+/// Plain-English explanation shown beneath the title of a setting row.
+pub fn description(row: &SettingRow) -> &'static str {
+    match row {
+        SettingRow::TurnEnd => {
+            "Choose whether Changes automatically jumps to what the agent just modified when it finishes a turn."
+        }
+        SettingRow::StopAfter => {
+            "How long idle language servers keep running in the background after you leave a workspace."
+        }
+        SettingRow::Theme => {
+            "Follow your operating system's appearance, or lock YAAR to Light or Dark."
+        }
+        SettingRow::Base => {
+            "The git branch or commit that 'All changes' compares this worktree against."
+        }
+        SettingRow::KeepStates => {
+            "How long YAAR keeps internal snapshots of past agent turns that no review comment references."
+        }
+        SettingRow::TerminalPlace => {
+            "Where the terminal pane sits relative to the review pane (also switchable from the terminal bar)."
+        }
+        SettingRow::OptionKey => {
+            "Use Option as Meta/Esc for terminal shortcuts, type special characters, or follow your keyboard layout."
+        }
+        SettingRow::Extension(_) => {
+            "Allow YAAR to install its small companion extension so this agent reports live steps and accepts reviews."
+        }
+        SettingRow::Servers(_) => {
+            "Allow YAAR to run language servers located inside this repository (e.g. from node_modules or a venv)."
+        }
+        SettingRow::WorktreesFolder(_) => {
+            "Folder where YAAR creates new git worktrees for this repository."
+        }
+        SettingRow::States => {
+            "Disk space used by saved snapshots that let YAAR diff past turns and keep review comments anchored."
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -879,17 +921,32 @@ impl Render for SettingsScreen {
 
             let mut block = Card::new()
                 .selected(i == cursor)
-                .p(SPACE_5)
-                .gap(SPACE_3)
+                .px(SPACE_5)
+                .py(SPACE_3)
+                .gap(SPACE_2)
                 .child(
                     div()
-                        .debug_selector({
-                            let title = format!("settings-title-{i}:{}", row.shown.title);
-                            move || title.clone()
-                        })
-                        .typed(TypeRole::Strong)
-                        .text_color(palette.text)
-                        .child(row.shown.title.clone()),
+                        .flex()
+                        .flex_col()
+                        .gap(SPACE_1)
+                        .child(
+                            div()
+                                .debug_selector({
+                                    let title = format!("settings-title-{i}:{}", row.shown.title);
+                                    move || title.clone()
+                                })
+                                .typed(TypeRole::Strong)
+                                .text_color(palette.text)
+                                .child(row.shown.title.clone()),
+                        )
+                        .child(
+                            words(
+                                format!("settings-description-{i}"),
+                                description(&row.shown.row).to_owned(),
+                            )
+                            .typed(TypeRole::Meta)
+                            .text_color(palette.text_muted),
+                        ),
                 )
                 .child(values);
             if !note_items.is_empty() {
@@ -905,7 +962,7 @@ impl Render for SettingsScreen {
                     .flex()
                     .flex_col()
                     .px(SPACE_8)
-                    .py(SPACE_2)
+                    .py(SPACE_1)
                     .child(block),
             );
         }
@@ -915,22 +972,49 @@ impl Render for SettingsScreen {
             .flex()
             .items_center()
             .justify_between()
+            .gap(SPACE_4)
             .px(SPACE_8)
-            .py(SPACE_6)
+            .py(SPACE_4)
             .child(
                 div()
-                    .typed(TypeRole::Title)
-                    .text_color(palette.text)
-                    .child("Settings"),
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_1)
+                    .child(
+                        div()
+                            .typed(TypeRole::Title)
+                            .text_color(palette.text)
+                            .child("Settings"),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-subtitle".to_owned())
+                            .typed(TypeRole::Meta)
+                            .text_color(palette.text_muted)
+                            .child(HEADER_SUBTITLE),
+                    ),
             )
             .child(
-                Button::new("settings-close", "Close")
-                    .kind(ButtonKind::Ghost)
-                    .small()
-                    .selector("settings-close")
-                    .on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(CloseSettings), cx);
-                    }),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_4)
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-keys-hint".to_owned())
+                            .typed(TypeRole::Meta)
+                            .text_color(palette.text_dim)
+                            .child(HEADER_KEYS_HINT),
+                    )
+                    .child(
+                        Button::new("settings-close", "Close")
+                            .kind(ButtonKind::Ghost)
+                            .small()
+                            .selector("settings-close")
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(CloseSettings), cx);
+                            }),
+                    ),
             );
 
         let notice = self.notice.clone().map(|notice| {
@@ -975,7 +1059,7 @@ impl Render for SettingsScreen {
                         .min_h_0()
                         .flex()
                         .flex_col()
-                        .py(SPACE_4)
+                        .py(SPACE_2)
                         .overflow_y_scroll()
                         .track_scroll(&self.scroll)
                         .children(drawn_rows),
