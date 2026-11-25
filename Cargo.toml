@@ -38,6 +38,10 @@ yaar-ui = { path = "crates/window/ui" }
 # Exact version, raised by hand with the patch script of patches/.
 # Without the kit's icon set: the app ships only the icons it uses.
 gpui-kit = { version = "=0.9.1", default-features = false, features = ["component"] }
+# For the Window's tests only: the text system each platform draws with, which GPUI's test
+# platform replaces by one that lists no fonts. Both are already linked beneath the toolkit.
+gpui-pre-apple = "=0.3.12"
+gpui-pre-wgpu = "=0.3.12"
 libc = "0.2"
 serde_json = "1"
 toml = "1"

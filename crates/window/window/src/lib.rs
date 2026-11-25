@@ -128,6 +128,7 @@ fn own_controls() -> Vec<Control> {
 
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    yaar_ui::init(cx);
     // After the toolkit, whose bindings it has to outrank.
     yaar_frame::release_program_keys(cx);
     Theme::sync_system_appearance(None, cx);

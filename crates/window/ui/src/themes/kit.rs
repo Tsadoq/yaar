@@ -3,9 +3,7 @@ use gpui_kit::*;
 
 use super::ThemeDefinition;
 use crate::colour::composited;
-
-const FONT: &str = "Inter";
-const MONO_FONT: &str = "JetBrains Mono";
+use crate::fonts::{CODE as MONO_FONT, UI as FONT};
 
 /// A kit role written with one role of the palette, or one made of two, is a line of this list.
 /// `$palette` names the palette inside the values.

@@ -14,5 +14,11 @@ toml.workspace = true
 # GPUI's test platform, for tests only: the programs users get are built without it.
 gpui-kit = { workspace = true, features = ["test-support"] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui-pre-apple.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gpui-pre-wgpu.workspace = true
+
 [lints]
 workspace = true
