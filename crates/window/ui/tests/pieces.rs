@@ -506,6 +506,50 @@ fn a_mono_tab_row_is_still_one_row_of_tabs_that_report_their_index(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn clicking_a_tab_close_button_reports_close_without_selecting_the_tab(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let selected = Rc::new(RefCell::new(Vec::new()));
+        let closed = Rc::new(RefCell::new(Vec::new()));
+        let (heard_select, heard_close) = (selected.clone(), closed.clone());
+        let mut shown = Shown::open(theme, cx, move || {
+            let (heard_select, heard_close) = (heard_select.clone(), heard_close.clone());
+            Tabs::new("tabs")
+                .mono()
+                .tab("one", "Shell", None, None)
+                .tab("two", "Claude Code", None, Some(State::Working))
+                .selected(0)
+                .selector("tabs")
+                .on_select(move |index, _, _| heard_select.borrow_mut().push(index))
+                .on_close(move |index, _, _| heard_close.borrow_mut().push(index))
+                .into_any_element()
+        });
+        assert!(shown.is_drawn("tabs-one-close"), "{theme}");
+        assert!(shown.is_drawn("tabs-two-close"), "{theme}");
+        assert!(
+            inside(shown.bounds("tabs-two"), shown.bounds("tabs-two-close")),
+            "{theme}"
+        );
+
+        shown.click("tabs-two-close");
+        assert_eq!(*closed.borrow(), [1], "{theme}");
+        assert!(
+            selected.borrow().is_empty(),
+            "{theme}: closing a tab must not select it first"
+        );
+
+        let tab_bounds = shown.bounds("tabs-two");
+        let label_point = point(tab_bounds.left() + px(12.), tab_bounds.center().y);
+        shown.cx.simulate_click(label_point, Modifiers::none());
+        assert_eq!(*selected.borrow(), [1], "{theme}");
+        assert_eq!(*closed.borrow(), [1], "{theme}");
+    }
+
+    let mut plain = Shown::open(LIGHT, cx, tabs);
+    assert!(!plain.is_drawn("tabs-changes-close"));
+    assert!(!plain.is_drawn("tabs-flow-close"));
+}
+
+#[gpui_kit::test]
 fn a_segmented_control_reports_the_index_clicked_and_paints_only_the_selected_one(
     cx: &mut TestAppContext,
 ) {

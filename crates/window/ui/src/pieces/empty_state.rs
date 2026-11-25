@@ -1,9 +1,10 @@
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window, div, px,
 };
 
 use super::{Button, marked};
-use crate::metrics::SPACE_5;
+use crate::metrics::{SPACE_3, SPACE_5};
 use crate::themes::palette;
 use crate::typography::{TypeRole, Typed};
 
@@ -80,7 +81,17 @@ impl RenderOnce for EmptyState {
                     .child(self.title),
             )
             .children(lines)
-            .children(self.actions);
+            .when(!self.actions.is_empty(), |state| {
+                state.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .justify_center()
+                        .gap(SPACE_3)
+                        .children(self.actions),
+                )
+            });
         marked(state, self.selector)
     }
 }
