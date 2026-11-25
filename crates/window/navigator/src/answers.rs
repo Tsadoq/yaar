@@ -895,6 +895,7 @@ mod tests {
                 platform: None,
                 stop_after: Duration::from_secs(1),
                 clock: Arc::new(SystemClock),
+                auto_download: false,
             },
             registry: Registry::default(),
             told,

@@ -209,6 +209,7 @@ pub fn navigator_for(world: &World, found: Found, row: &str) -> NavigatorConfig 
         platform: None,
         stop_after: STOP_AFTER,
         clock: std::sync::Arc::new(SystemClock),
+        auto_download: false,
     }
 }
 
