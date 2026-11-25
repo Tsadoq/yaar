@@ -83,7 +83,7 @@ impl RenderOnce for Toast {
             .shadow(shadow_float())
             .typed(TypeRole::Body)
             .text_color(palette.text)
-            .child(div().flex_1().child(self.text))
+            .child(div().flex_1().min_w(px(0.)).child(self.text))
             .children(self.actions)
             .child(dismiss);
         marked(toast, self.selector)
