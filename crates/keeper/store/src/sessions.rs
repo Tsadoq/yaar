@@ -94,7 +94,7 @@ pub struct TurnRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepRecord {
-    Read(PathBuf),
+    Read(PathBuf, Option<RangeInclusive<u32>>),
     Edit(PathBuf, Option<Vec<RangeInclusive<u32>>>),
     Write(PathBuf),
     Command(String),
@@ -459,7 +459,13 @@ impl Store {
         }
         let (turn, step) = (turn.0.clone(), step.clone());
         let (kind, what, lines) = match &step {
-            StepRecord::Read(file) => (0, bytes(file), None),
+            StepRecord::Read(file, lines) => (
+                0,
+                bytes(file),
+                lines
+                    .as_ref()
+                    .map(|range| lines_text(std::slice::from_ref(range))),
+            ),
             StepRecord::Edit(file, lines) => (1, bytes(file), lines.as_deref().map(lines_text)),
             StepRecord::Write(file) => (2, bytes(file), None),
             StepRecord::Command(command) => (3, command.clone().into_bytes(), None),
@@ -550,7 +556,12 @@ fn step_of_row(row: &Row<'_>) -> rusqlite::Result<StepRecord> {
     let (kind, what, lines): (i64, Vec<u8>, Option<String>) =
         (row.get(0)?, row.get(1)?, row.get(2)?);
     Ok(match kind {
-        0 => StepRecord::Read(path(what)),
+        0 => StepRecord::Read(
+            path(what),
+            lines
+                .as_deref()
+                .and_then(|text| lines_of(text).into_iter().next()),
+        ),
         1 => StepRecord::Edit(path(what), lines.as_deref().map(lines_of)),
         2 => StepRecord::Write(path(what)),
         // The column holds what `put_step` wrote, which was text.

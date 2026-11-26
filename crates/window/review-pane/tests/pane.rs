@@ -704,9 +704,9 @@ impl Effect {
             Effect::Form => assert_eq!(
                 pane.read_with(cx, |pane, _| pane.flow_form()),
                 if how == "its key" {
-                    FlowForm::LiveDiff
-                } else {
                     FlowForm::Timeline
+                } else {
+                    FlowForm::LiveDiff
                 },
                 "{title} by {how} showed the wrong form"
             ),
@@ -952,8 +952,8 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
                     == [
                         turn_end(TurnEndSelects::KeepSelection),
                         turn_end(TurnEndSelects::WhatChanged),
-                        form(FlowForm::LiveDiff),
                         form(FlowForm::Timeline),
+                        form(FlowForm::LiveDiff),
                     ]
             });
         }

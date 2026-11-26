@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use gpui_kit::*;
-use yaar_link::{Fact, FlowForm, TurnId, WorkspaceAgents, WorkspaceId};
+use yaar_link::{Fact, FlowForm, Step, TurnId, WorkspaceAgents, WorkspaceId};
 use yaar_ui::metrics::{SPACE_4, SPACE_6};
 use yaar_ui::pieces::{Button, ButtonKind, Card, Pill};
 
@@ -60,7 +60,7 @@ impl ReviewPane {
             Following::Paused { .. } => {
                 self.following = Following::On;
                 if let Some(newest) = self.flow.newest() {
-                    self.follow_to(newest);
+                    self.follow_to(newest, cx);
                 }
                 cx.notify();
             }
@@ -86,10 +86,13 @@ impl ReviewPane {
                 ..
             } if self.on_screen(workspace, cx) => match self.following {
                 Following::On => {
-                    self.follow_to(FlowAt {
-                        turn: turn.clone(),
-                        number: *number,
-                    });
+                    self.follow_to(
+                        FlowAt {
+                            turn: turn.clone(),
+                            number: *number,
+                        },
+                        cx,
+                    );
                     cx.notify();
                 }
                 Following::Paused { missed } => {
@@ -274,7 +277,7 @@ impl ReviewPane {
     }
 
     /// `ReviewPane::at` is kept in Changes too, and Flow scrolls to it when it comes on screen.
-    fn follow_to(&mut self, at: FlowAt) {
+    fn follow_to(&mut self, at: FlowAt, cx: &mut Context<Self>) {
         self.at = Some(at.clone());
         if self.view != View::Flow {
             return;
@@ -285,11 +288,27 @@ impl ReviewPane {
                     self.scroll_timeline_to(row);
                 }
             }
-            FlowForm::LiveDiff => {
-                if let Some(row) = self.live_row_of(&at) {
-                    self.scroll_live_to(row);
+            FlowForm::LiveDiff => match self.flow.step(&at).cloned() {
+                Some(Step::Read { path, lines }) => {
+                    self.live_open_read(path, lines, cx);
+                    if let Some(row) = self.live_row_of(&at) {
+                        self.scroll_live_to(row);
+                    } else {
+                        self.live.mark_scrolled(&at);
+                    }
                 }
-            }
+                Some(Step::Edit { .. } | Step::Write { .. }) => {
+                    self.live_clear_read(cx);
+                    if let Some(row) = self.live_row_of(&at) {
+                        self.scroll_live_to(row);
+                    }
+                }
+                _ => {
+                    if let Some(row) = self.live_row_of(&at) {
+                        self.scroll_live_to(row);
+                    }
+                }
+            },
         }
     }
 }

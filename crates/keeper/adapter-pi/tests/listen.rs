@@ -127,6 +127,7 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
             16,
             Event::FileRead {
                 path: project.join("src/calc.py"),
+                lines: None,
             },
         ),
         (28, finished()),
@@ -369,9 +370,39 @@ fn result(adapter: &mut Pi, tool: &str, input: Value, more: Value) -> Vec<Event>
 
 fn path_of(events: &[Event]) -> PathBuf {
     match events {
-        [Event::FileRead { path }] | [Event::FileWritten { path, .. }] => path.clone(),
+        [Event::FileRead { path, .. }] | [Event::FileWritten { path, .. }] => path.clone(),
         other => panic!("one file event, not {other:?}"),
     }
+}
+
+#[test]
+fn a_read_with_offset_and_limit_names_its_line_range() {
+    let mut adapter = Pi::new();
+    let lines = |adapter: &mut Pi, input: Value| match result(adapter, "read", input, json!({}))[..]
+    {
+        [Event::FileRead { ref lines, .. }] => lines.clone(),
+        ref other => panic!("one read event, not {other:?}"),
+    };
+    assert_eq!(
+        lines(
+            &mut adapter,
+            json!({"path": "src/a.rs", "offset": 40, "limit": 81})
+        ),
+        Some(40..=120)
+    );
+    assert_eq!(
+        lines(&mut adapter, json!({"path": "src/a.rs", "offset": 15})),
+        Some(15..=15)
+    );
+    assert_eq!(
+        lines(&mut adapter, json!({"path": "src/a.rs", "limit": 20})),
+        Some(1..=20)
+    );
+    assert_eq!(
+        lines(&mut adapter, json!({"path": "src/a.rs", "limit": 0})),
+        None
+    );
+    assert_eq!(lines(&mut adapter, json!({"path": "src/a.rs"})), None);
 }
 
 #[test]

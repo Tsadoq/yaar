@@ -607,7 +607,13 @@ fn the_steps_of_a_turn_are_told_in_order_with_paths_in_the_worktree_and_are_kept
             .expect("a file of the project")
             .to_owned()
     };
-    assert_eq!(steps[0].1, Step::Read { path: path_of(4) });
+    assert_eq!(
+        steps[0].1,
+        Step::Read {
+            path: path_of(4),
+            lines: None,
+        }
+    );
     let Step::Edit { path, lines } = &steps[1].1 else {
         panic!("not an edit: {:?}", steps[1].1);
     };
@@ -630,7 +636,7 @@ fn the_steps_of_a_turn_are_told_in_order_with_paths_in_the_worktree_and_are_kept
         .expect("read")
         .expect("the turn");
     assert_eq!(kept.len(), 4);
-    assert_eq!(kept[0], StepRecord::Read(path_of(4)));
+    assert_eq!(kept[0], StepRecord::Read(path_of(4), None));
     assert_eq!(kept[2], StepRecord::Write(path_of(13)));
     assert_eq!(kept[3], StepRecord::Command(command.to_owned()));
     let StepRecord::Edit(path, kept_lines) = &kept[1] else {

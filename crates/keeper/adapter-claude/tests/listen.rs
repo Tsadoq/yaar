@@ -101,12 +101,14 @@ fn a_recorded_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_gives_its_ev
             4,
             Event::FileRead {
                 path: in_project("notes.txt"),
+                lines: None,
             },
         ),
         (
             7,
             Event::FileRead {
                 path: in_project("src/calc.py"),
+                lines: None,
             },
         ),
         (

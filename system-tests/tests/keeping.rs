@@ -210,6 +210,7 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(
         .iter()
         .map(|file| Taken::Read {
             path: PathBuf::from(file),
+            lines: None,
         })
         .collect();
     let first_difference = kept

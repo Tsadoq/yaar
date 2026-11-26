@@ -734,7 +734,8 @@ fn each_event_of_a_turn_is_reported_in_pi_s_order_and_is_read_as_the_event_of_th
             told(
                 &world,
                 Event::FileRead {
-                    path: project.join("src/calc.py")
+                    path: project.join("src/calc.py"),
+                    lines: None,
                 }
             ),
             told(
@@ -834,7 +835,8 @@ fn a_tool_that_failed_is_reported_as_failed_and_is_no_file_read_or_written() {
         told_by_the_adapter,
         [
             Event::FileRead {
-                path: project.join("src/calc.py")
+                path: project.join("src/calc.py"),
+                lines: None,
             },
             Event::FileWritten {
                 path: project.join("src/calc.py"),

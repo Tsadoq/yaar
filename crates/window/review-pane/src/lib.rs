@@ -191,6 +191,14 @@ pub struct LiveChange {
     pub to: Option<String>,
 }
 
+/// The file Flow's live view is currently following an agent read into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveReadShown {
+    pub path: PathBuf,
+    pub lines: Option<std::ops::RangeInclusive<u32>>,
+    pub line_count: usize,
+}
+
 pub const FIRST_LAYOUT: Layout = Layout::Unified;
 
 pub const NAME: &str = "review";
@@ -634,7 +642,7 @@ impl ReviewPane {
             show_empty_past_sessions: false,
             session_picker_bounds: Rc::default(),
             view: View::Changes,
-            form: FlowForm::Timeline,
+            form: FlowForm::LiveDiff,
             at: None,
             following: Following::On,
             flow: flow::Timeline::new(),
@@ -907,6 +915,20 @@ impl ReviewPane {
 
     pub fn live_text(&self, position: &Position) -> Option<String> {
         self.live.text(position)
+    }
+
+    pub fn live_reading(&self) -> Option<LiveReadShown> {
+        self.live.reading().map(|reading| LiveReadShown {
+            path: reading.path.clone(),
+            lines: reading.lines.clone(),
+            line_count: reading.line_ranges.len(),
+        })
+    }
+
+    pub fn live_reading_in_view(&self) -> Range<usize> {
+        self.live
+            .reading()
+            .map_or(0..0, |reading| reading.in_view.borrow().clone())
     }
 
     /// The step the live diff names above its files, having no row for it: a command, or an edit

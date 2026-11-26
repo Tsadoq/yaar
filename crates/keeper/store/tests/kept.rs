@@ -225,7 +225,11 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
             .set_turn_start(&TurnId::new(id(60)), &state('f'))
             .expect("set the start");
         store
-            .put_step(&TurnId::new(id(60)), 1, &StepRecord::Read(odd.clone()))
+            .put_step(
+                &TurnId::new(id(60)),
+                1,
+                &StepRecord::Read(odd.clone(), Some(10..=25)),
+            )
             .expect("put step");
         store
             .put_step(
@@ -356,7 +360,7 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
                         ..turn(60, 1)
                     },
                     vec![
-                        StepRecord::Read(odd.clone()),
+                        StepRecord::Read(odd.clone(), Some(10..=25)),
                         StepRecord::Edit(odd.clone(), Some(vec![3..=4, 9..=9])),
                     ],
                 ),

@@ -291,7 +291,8 @@ fn a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen(dialect: Dial
             (
                 1,
                 Taken::Read {
-                    path: path("notes.txt")
+                    path: path("notes.txt"),
+                    lines: None,
                 }
             ),
             (

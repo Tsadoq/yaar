@@ -424,7 +424,7 @@ fn turn_end(ended: TurnEndRecord) -> TurnEnd {
 
 fn step(step: StepRecord) -> Step {
     match step {
-        StepRecord::Read(path) => Step::Read { path },
+        StepRecord::Read(path, lines) => Step::Read { path, lines },
         StepRecord::Edit(path, lines) => Step::Edit { path, lines },
         StepRecord::Write(path) => Step::Write { path },
         StepRecord::Command(command) => Step::Command { command },

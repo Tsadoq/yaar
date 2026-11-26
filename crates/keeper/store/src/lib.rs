@@ -874,7 +874,7 @@ mod tests {
         assert_eq!(
             steps,
             [
-                StepRecord::Read(PathBuf::from("a.txt")),
+                StepRecord::Read(PathBuf::from("a.txt"), None),
                 StepRecord::Edit(PathBuf::from("a.txt"), Some(vec![3..=4, 9..=9])),
             ]
         );

@@ -333,6 +333,7 @@ fn no_fact_of_the_keeper_moves_what_changes_shows_a_step_a_turn_end_a_reply_or_a
             1,
             Step::Read {
                 path: "long.txt".into(),
+                lines: None,
             },
         ),
         (

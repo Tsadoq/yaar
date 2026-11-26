@@ -54,6 +54,9 @@ pub enum Event {
     },
     FileRead {
         path: PathBuf,
+        /// The lines asked for, numbered from 1; None when the file was read whole or the CLI did
+        /// not say.
+        lines: Option<RangeInclusive<u32>>,
     },
     FileWritten {
         path: PathBuf,
