@@ -29,6 +29,7 @@ pub struct Tabs {
     tabs: Vec<Tab>,
     selected: Option<usize>,
     mono: bool,
+    scrollable: bool,
     trailing: Vec<AnyElement>,
     selector: Option<SharedString>,
     on_select: Option<OnSelect>,
@@ -42,6 +43,7 @@ impl Tabs {
             tabs: Vec::new(),
             selected: None,
             mono: false,
+            scrollable: false,
             trailing: Vec::new(),
             selector: None,
             on_select: None,
@@ -73,6 +75,12 @@ impl Tabs {
     /// Labels in the code font, as the terminal's tabs have them.
     pub fn mono(mut self) -> Self {
         self.mono = true;
+        self
+    }
+
+    /// Keeps tabs on one single line and scrolls horizontally when narrower than their total width.
+    pub fn scrollable(mut self) -> Self {
+        self.scrollable = true;
         self
     }
 
@@ -118,6 +126,7 @@ impl RenderOnce for Tabs {
                         parent.clone(),
                         SharedString::from(format!("{}-close", tab.key)),
                     ))
+                    .flex_none()
                     .px(SPACE_1)
                     .rounded(RADIUS_CONTROL)
                     .text_color(palette.text_muted)
@@ -135,6 +144,7 @@ impl RenderOnce for Tabs {
             });
             let button = div()
                 .id(ElementId::NamedChild(parent.clone(), tab.key))
+                .flex_none()
                 .flex()
                 .items_center()
                 .gap(SPACE_3)
@@ -169,6 +179,7 @@ impl RenderOnce for Tabs {
         });
         let row = div()
             .id(self.id)
+            .when(self.scrollable, |row| row.min_w_0().overflow_x_scroll())
             .flex()
             .items_center()
             .gap(SPACE_1)
@@ -177,7 +188,7 @@ impl RenderOnce for Tabs {
             .children(
                 self.trailing
                     .into_iter()
-                    .map(|trailing| div().ml(SPACE_3).child(trailing)),
+                    .map(|trailing| div().flex_none().ml(SPACE_3).child(trailing)),
             );
         marked(row, selector)
     }

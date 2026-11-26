@@ -16,8 +16,8 @@ use yaar_ui::colour::composited;
 use yaar_ui::diff::GutterPlus;
 use yaar_ui::pieces::{
     Avatar, Banner, Button, ButtonKind, Card, Chip, CountBadge, Divider, EmptyState, Field,
-    ListRow, Pane, Pill, Popover, SectionLabel, Segmented, State, StateDot, Tabs, Toast, Toggle,
-    Tone,
+    ListRow, MenuTrigger, Pane, Pill, Popover, SectionLabel, Segmented, SplitButton, State,
+    StateDot, Tabs, Toast, Toggle, Tone,
 };
 use yaar_ui::themes::{Appearance, DARK, LIGHT, Themes, palette, set_applied};
 use yaar_ui::tokens::Palette;
@@ -1778,5 +1778,187 @@ fn hovering_an_unselected_interactive_segment_tints_its_ground(cx: &mut TestAppC
             Some(palette.raised.opacity(0.50)),
             "{theme}"
         );
+    }
+}
+
+#[gpui_kit::test]
+fn a_popover_honours_width_max_height_right_alignment_and_outside_dismissal(
+    cx: &mut TestAppContext,
+) {
+    for theme in THEMES {
+        let dismissed = counter();
+        let on_dismiss = dismissed.clone();
+        let anchor = Bounds {
+            origin: point(px(480.), px(20.)),
+            size: size(px(60.), px(24.)),
+        };
+        let mut shown = Shown::open(theme, cx, move || {
+            let on_dismiss = on_dismiss.clone();
+            div()
+                .child(
+                    Popover::new(anchor)
+                        .width(px(220.))
+                        .max_height(px(80.))
+                        .align_right()
+                        .selector("pop")
+                        .on_dismiss(move |_, _| on_dismiss.set(on_dismiss.get() + 1))
+                        .child(div().h(px(200.)).child("tall menu")),
+                )
+                .into_any_element()
+        });
+        let pop = shown.bounds("pop");
+        assert_eq!(pop.size.width, px(220.), "{theme}");
+        assert!(
+            (pop.right() - anchor.right()).abs() <= px(1.),
+            "{theme}: right-aligned {pop:?} vs {anchor:?}"
+        );
+        // 80 px max inner scroll height + 2 px top/bottom border.
+        assert!(
+            pop.size.height <= px(84.),
+            "{theme}: capped by max_height: {pop:?}"
+        );
+
+        // Clicking inside the popover does not dismiss it.
+        shown.click("pop");
+        assert_eq!(dismissed.get(), 0, "{theme}: click inside");
+
+        // Clicking on the anchor does not fire on_dismiss so the trigger can toggle cleanly.
+        shown.cx.simulate_click(anchor.center(), Modifiers::none());
+        shown.cx.run_until_parked();
+        assert_eq!(dismissed.get(), 0, "{theme}: click on anchor");
+
+        // Clicking outside both dismisses the popover.
+        shown
+            .cx
+            .simulate_click(point(px(10.), px(10.)), Modifiers::none());
+        shown.cx.run_until_parked();
+        assert_eq!(dismissed.get(), 1, "{theme}: click outside");
+    }
+}
+
+#[gpui_kit::test]
+fn scrollable_mono_tabs_stay_on_one_line_and_do_not_overflow_their_container(
+    cx: &mut TestAppContext,
+) {
+    let mut shown = Shown::open(DARK, cx, || {
+        let mut tabs = Tabs::new("term-tabs")
+            .mono()
+            .scrollable()
+            .selector("term-tab");
+        for i in 0..8 {
+            tabs = tabs.tab(
+                format!("t{i}"),
+                format!("Claude Code {}", i + 1),
+                None,
+                Some(State::Working),
+            );
+        }
+        div()
+            .w(px(300.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(tabs)
+            .child(
+                Button::new("right-ctrl", "Dock")
+                    .small()
+                    .selector("right-ctrl"),
+            )
+            .into_any_element()
+    });
+    let tabs_bounds = shown.bounds("term-tab");
+    let right_ctrl = shown.bounds("right-ctrl");
+    assert!(
+        tabs_bounds.right() <= right_ctrl.left(),
+        "scrollable tabs must not push right controls: {tabs_bounds:?} vs {right_ctrl:?}"
+    );
+    assert!(
+        right_ctrl.right() <= px(322.),
+        "right control stays inside 300 px row (plus 20 px stage padding): {right_ctrl:?}"
+    );
+    let t0 = shown.bounds("term-tab-t0");
+    let t1 = shown.bounds("term-tab-t1");
+    assert_eq!(t0.top(), t1.top(), "tabs stay on one line");
+}
+
+#[gpui_kit::test]
+fn a_split_button_routes_primary_and_menu_clicks_separately_and_tracks_bounds(
+    cx: &mut TestAppContext,
+) {
+    for theme in THEMES {
+        let primary_clicks = counter();
+        let menu_clicks = counter();
+        let tracked = Rc::new(Cell::new(Bounds::default()));
+        let (p, m, b) = (primary_clicks.clone(), menu_clicks.clone(), tracked.clone());
+        let mut shown = Shown::open(theme, cx, move || {
+            let (p, m, b) = (p.clone(), m.clone(), b.clone());
+            SplitButton::new("launcher", "+")
+                .open(true)
+                .selector("launcher")
+                .primary_selector("launcher-add")
+                .menu_selector("launcher-menu")
+                .track_bounds(b)
+                .on_primary(move |_, _, _| p.set(p.get() + 1))
+                .on_menu(move |_, _, _| m.set(m.get() + 1))
+                .into_any_element()
+        });
+        let palette = shown.palette();
+        assert_eq!(shown.border("launcher"), palette.focus, "{theme}");
+        assert_eq!(
+            shown.ground("launcher-menu"),
+            Some(palette.raised),
+            "{theme}"
+        );
+        assert_eq!(tracked.get(), shown.bounds("launcher"), "{theme}");
+
+        shown.click("launcher-add");
+        assert_eq!((primary_clicks.get(), menu_clicks.get()), (1, 0), "{theme}");
+        shown.click("launcher-menu");
+        assert_eq!((primary_clicks.get(), menu_clicks.get()), (1, 1), "{theme}");
+    }
+}
+
+#[gpui_kit::test]
+fn a_menu_trigger_renders_active_open_state_and_non_interactive_badge_mode(
+    cx: &mut TestAppContext,
+) {
+    for theme in THEMES {
+        let clicks = counter();
+        let on_click = clicks.clone();
+        let tracked = Rc::new(Cell::new(Bounds::default()));
+        let tracked_in = tracked.clone();
+        let mut shown = Shown::open(theme, cx, move || {
+            let on_click = on_click.clone();
+            let tracked_in = tracked_in.clone();
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    MenuTrigger::new("picker", "Claude Code 6")
+                        .leading_dot(State::Working)
+                        .open(true)
+                        .selector("picker")
+                        .dot_selector("picker-dot")
+                        .track_bounds(tracked_in)
+                        .on_click(move |_, _, _| on_click.set(on_click.get() + 1)),
+                )
+                .child(
+                    MenuTrigger::new("badge", "Claude Code 1")
+                        .leading_dot(State::Ok)
+                        .chevron(false)
+                        .selector("badge"),
+                )
+                .into_any_element()
+        });
+        let palette = shown.palette();
+        assert_eq!(shown.ground("picker"), Some(palette.raised), "{theme}");
+        assert_eq!(shown.border("picker"), palette.focus, "{theme}");
+        assert_eq!(shown.ground("picker-dot"), Some(palette.link), "{theme}");
+        assert_eq!(tracked.get(), shown.bounds("picker"), "{theme}");
+        assert_eq!(shown.ground("badge"), None, "{theme}");
+        assert_eq!(shown.border("badge"), palette.edge, "{theme}");
+
+        shown.click("picker");
+        assert_eq!(clicks.get(), 1, "{theme}");
     }
 }
