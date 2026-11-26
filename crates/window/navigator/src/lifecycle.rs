@@ -271,9 +271,18 @@ pub(crate) fn consents(core: &mut Core, consents: Vec<RepositoryConsent>) {
                     changed = true;
                 }
                 Some(false) => {
-                    if let Some(keyed) = core.life.keys.get_mut(&key)
-                        && keyed.question.take().is_some()
-                    {
+                    let cleared = core
+                        .life
+                        .keys
+                        .get_mut(&key)
+                        .is_some_and(|keyed| keyed.question.take().is_some());
+                    if cleared {
+                        if matches!(
+                            core.life.keys.get(&key).map(|keyed| &keyed.phase),
+                            Some(Phase::NoneLeft)
+                        ) {
+                            crate::fetch::maybe_auto_download(core, &key.language);
+                        }
                         changed = true;
                     }
                 }
@@ -323,7 +332,12 @@ pub(crate) fn server_event(core: &mut Core, key: ServerKey, generation: u64, eve
                 return;
             };
             advance(core, &key, &mut keyed);
+            let none_left = matches!(keyed.phase, Phase::NoneLeft);
+            let language = key.language.clone();
             core.life.keys.insert(key, keyed);
+            if none_left {
+                crate::fetch::maybe_auto_download(core, &language);
+            }
             publish(core);
         }
     }
@@ -341,6 +355,7 @@ pub(crate) fn trial_ended(
     };
     let current = keyed.generation == generation
         && matches!(&keyed.phase, Phase::Trying { candidate: tried, .. } if *tried == candidate);
+    let mut none_left = false;
     if current {
         if passed {
             match start(core, &key, &keyed, candidate) {
@@ -353,9 +368,14 @@ pub(crate) fn trial_ended(
         } else {
             advance(core, &key, &mut keyed);
         }
+        none_left = matches!(keyed.phase, Phase::NoneLeft);
     }
+    let language = key.language.clone();
     core.life.keys.insert(key, keyed);
     if current {
+        if none_left {
+            crate::fetch::maybe_auto_download(core, &language);
+        }
         publish(core);
     }
 }
@@ -514,7 +534,11 @@ fn ensure_key(core: &mut Core, key: &ServerKey, root: &Path) -> bool {
     keyed.generation = core.life.generation;
     search(core, key, &mut keyed);
     advance(core, key, &mut keyed);
+    let none_left = matches!(keyed.phase, Phase::NoneLeft);
     core.life.keys.insert(key.clone(), keyed);
+    if none_left {
+        crate::fetch::maybe_auto_download(core, &key.language);
+    }
     true
 }
 
@@ -670,7 +694,11 @@ fn restart(core: &mut Core, key: &ServerKey) {
     keyed.generation = core.life.generation;
     search(core, key, &mut keyed);
     advance(core, key, &mut keyed);
+    let none_left = matches!(keyed.phase, Phase::NoneLeft);
     core.life.keys.insert(key.clone(), keyed);
+    if none_left {
+        crate::fetch::maybe_auto_download(core, &key.language);
+    }
 }
 
 pub(crate) fn publish(core: &Core) {

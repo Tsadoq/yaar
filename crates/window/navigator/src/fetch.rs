@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use crate::download::{DownloadError, Downloader, Installed};
@@ -14,6 +14,9 @@ pub(crate) struct Fetches {
     /// Rows with a download on its way, each with the keys shown for it when it began. A key
     /// forgotten meanwhile stays listed: `lifecycle::search_again` leaves an unknown key alone.
     on_its_way: BTreeMap<String, Waiting>,
+    /// Languages already tried automatically, so a failed automatic download falls back to the
+    /// manual offer instead of retrying in a loop.
+    auto_attempted: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -22,6 +25,20 @@ struct Waiting {
     keys: Vec<ServerKey>,
     /// An update's keys keep running their server, and a failure leaves them as they are.
     update: bool,
+}
+
+pub(crate) fn maybe_auto_download(core: &mut Core, language: &str) {
+    if !core.config.auto_download
+        || core.fetch.on_its_way.contains_key(language)
+        || core.fetch.auto_attempted.contains(language)
+    {
+        return;
+    }
+    if lifecycle::offering(core, language).is_empty() {
+        return;
+    }
+    core.fetch.auto_attempted.insert(language.to_owned());
+    download(core, language);
 }
 
 pub(crate) fn download(core: &mut Core, language: &str) {

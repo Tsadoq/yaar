@@ -1877,3 +1877,141 @@ fn of_many_changed_files_only_a_few_are_on_their_way_at_a_time_from_the_top_of_t
     stage.keeper.tell(changed);
     stage.keeper.expect(for_the_changes, &mut cx);
 }
+
+#[gpui_kit::test]
+fn horizontal_scroll_pans_long_diff_lines_clamps_keeps_click_coords_exact_and_resets_on_layout_change(
+    cx: &mut TestAppContext,
+) {
+    let long_line = format!(
+        "let prefix_ident = {}; let tail_symbol = 1;",
+        "x".repeat(180)
+    );
+    let (stage, _, mut cx) = open_on_one_file("", &format!("{long_line}\n"), cx);
+    let selector = format!("review-text-1-new:{long_line}");
+    let before = drawn(&selector, &mut cx).expect("long line text is drawn");
+    assert_eq!(stage.pane.read_with(&cx, |pane, _| pane.h_scroll()), px(0.));
+
+    let over = bounds_of_row(1, &mut cx).center();
+    cx.simulate_mouse_move(over, None, Modifiers::none());
+    cx.simulate_event(ScrollEvent {
+        position: over,
+        delta: ScrollDelta::Pixels(point(px(-160.), px(0.))),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+
+    let shifted = stage.pane.read_with(&cx, |pane, _| pane.h_scroll());
+    assert!(
+        shifted > px(0.),
+        "horizontal scroll panned right: {shifted:?}"
+    );
+    let after = drawn(&selector, &mut cx).expect("long line text stays drawn");
+    assert!(
+        (before.left() - after.left() - shifted).abs() < px(1.5),
+        "text element shifted left by {shifted:?}: before={before:?}, after={after:?}"
+    );
+
+    // Clicking on a visible name while scrolled horizontally selects the exact name under the pointer.
+    let cell = after.size.width / long_line.chars().count() as f32;
+    let tail_offset = long_line.find("tail_symbol").expect("tail_symbol") as f32;
+    let tail_x = after.left() + cell * (tail_offset + 2.5);
+    let row_bounds = bounds_of_row(1, &mut cx);
+    if tail_x > row_bounds.left() + px(130.) && tail_x < row_bounds.right() - px(4.) {
+        cx.simulate_click(point(tail_x, after.center().y), Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            stage
+                .pane
+                .read_with(&cx, |pane, _| pane.name_at())
+                .as_deref(),
+            Some("tail_symbol")
+        );
+    } else {
+        // Scroll further right so `tail_symbol` enters the viewport, then click it.
+        let need = tail_x - (row_bounds.right() - px(40.));
+        cx.simulate_event(ScrollEvent {
+            position: over,
+            delta: ScrollDelta::Pixels(point(-need, px(0.))),
+            ..ScrollEvent::default()
+        });
+        cx.run_until_parked();
+        let after_more = drawn(&selector, &mut cx).expect("text drawn after second pan");
+        let tail_x = after_more.left() + cell * (tail_offset + 2.5);
+        cx.simulate_click(point(tail_x, after_more.center().y), Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            stage
+                .pane
+                .read_with(&cx, |pane, _| pane.name_at())
+                .as_deref(),
+            Some("tail_symbol")
+        );
+    }
+
+    // Shift + vertical wheel also pans horizontally.
+    let before_shift = stage.pane.read_with(&cx, |pane, _| pane.h_scroll());
+    cx.simulate_event(ScrollEvent {
+        position: over,
+        delta: ScrollDelta::Pixels(point(px(0.), px(40.))),
+        modifiers: Modifiers::shift(),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+    let after_shift = stage.pane.read_with(&cx, |pane, _| pane.h_scroll());
+    assert!(
+        after_shift < before_shift,
+        "shift+wheel panned left: {after_shift:?} < {before_shift:?}"
+    );
+
+    // Panning far left clamps cleanly at 0.
+    cx.simulate_event(ScrollEvent {
+        position: over,
+        delta: ScrollDelta::Pixels(point(px(5000.), px(0.))),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+    assert_eq!(stage.pane.read_with(&cx, |pane, _| pane.h_scroll()), px(0.));
+
+    // Pan right again, then toggle layout: horizontal scroll resets to 0.
+    cx.simulate_event(ScrollEvent {
+        position: over,
+        delta: ScrollDelta::Pixels(point(px(-120.), px(0.))),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+    assert!(stage.pane.read_with(&cx, |pane, _| pane.h_scroll()) > px(0.));
+
+    cx.update(|window, cx| stage.focus.focus(window, cx));
+    cx.simulate_keystrokes("s");
+    cx.run_until_parked();
+    assert_eq!(stage.pane.read_with(&cx, |pane, _| pane.h_scroll()), px(0.));
+}
+
+#[gpui_kit::test]
+fn file_list_preserves_full_path_selector_and_pane_handles_unfocused_state(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    let deep = "crates/window/review-pane/src/very/deep/target.rs";
+    let changes = since_main(Vec::new(), vec![file(deep, FileStatus::Added)]);
+    stage
+        .keeper
+        .show(&changes, |_| texts("", "fn target() {}\n"), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+
+    assert!(
+        drawn(&format!("review-tree-file-{deep}"), &mut cx).is_some(),
+        "deep file selector is drawn in the file list"
+    );
+
+    // Focus then blur the pane to ensure both focused and unfocused diff rows render cleanly.
+    cx.update(|window, cx| stage.focus.focus(window, cx));
+    cx.run_until_parked();
+    assert!(cx.update(|window, _| stage.focus.is_focused(window)));
+    assert!(drawn("review-row-1", &mut cx).is_some());
+
+    cx.update(|window, cx| window.blur(cx));
+    cx.run_until_parked();
+    assert!(!cx.update(|window, _| stage.focus.is_focused(window)));
+    assert!(drawn("review-row-1", &mut cx).is_some());
+}

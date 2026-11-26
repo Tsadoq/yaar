@@ -33,6 +33,12 @@ pub(crate) struct Attachments {
     views: HashMap<TerminalId, View>,
 }
 
+impl Attachments {
+    pub(crate) fn remove(&mut self, terminal: &TerminalId) {
+        self.views.remove(terminal);
+    }
+}
+
 impl TerminalPane {
     pub fn attachment(&self, terminal: &TerminalId, cx: &App) -> Option<Attachment> {
         self.models

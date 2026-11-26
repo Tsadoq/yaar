@@ -1328,3 +1328,194 @@ fn the_layout_switch_makes_the_rows_of_the_live_diff_again_in_the_other_layout(
     );
     assert!(drawn("flow-row-2-new", &mut cx).is_some());
 }
+
+fn edit(path: &str, first: u32, last: u32) -> Step {
+    Step::Edit {
+        path: path.into(),
+        lines: Some(std::iter::once(first..=last).collect()),
+    }
+}
+
+#[gpui_kit::test]
+fn an_edit_step_scrolls_and_focuses_the_edited_line_in_the_live_diff(cx: &mut TestAppContext) {
+    let t = turn_id('t');
+    let (mut stage, mut cx) = in_the_live_diff(cx);
+    start_turn(&mut stage, &t, &s0(), &mut cx);
+    compared(&mut stage, &s0(), None, Vec::new(), &mut cx);
+
+    let before: String = (1..=100).map(|n| format!("line {n}\n")).collect();
+    let after: String = (1..=100)
+        .map(|n| match n {
+            1..=70 => format!("changed {n}\n"),
+            85 => "edited 85\n".to_owned(),
+            _ => format!("line {n}\n"),
+        })
+        .collect();
+
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t.clone(),
+        1,
+        edit("big.rs", 85, 85),
+    ));
+    compared(
+        &mut stage,
+        &s0(),
+        None,
+        vec![file("big.rs", FileStatus::Modified)],
+        &mut cx,
+    );
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("big.rs", &before, &after)],
+        &mut cx,
+    );
+    wait_for_live(&stage, &["big.rs"], &[], &mut cx);
+
+    let wanted = Position {
+        path: "big.rs".into(),
+        side: Side::New,
+        line: 84,
+    };
+    wait_until(&mut cx, "focus on the edited line", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.live_position() == Some(&wanted))
+    });
+    let (rows, edit_row) = stage.pane.read_with(&cx, |pane, _| {
+        (pane.live_rows().to_vec(), pane.flow_at_row())
+    });
+    let edit_row = edit_row.expect("the edit step resolves to a diff row");
+    assert_eq!(
+        rows[edit_row],
+        PaneRow::Diff {
+            path: "big.rs".into(),
+            row: Row::Added { new: 84 },
+        }
+    );
+    assert!(
+        edit_row > 0,
+        "focus is on the edited diff row, not the header"
+    );
+    wait_until(&mut cx, "the edited line scrolled into view", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            let in_view = pane.flow_rows_in_view();
+            in_view.contains(&edit_row) && in_view.start > 0
+        })
+    });
+    assert!(drawn(&format!("flow-text-{edit_row}-new:edited 85"), &mut cx).is_some());
+    assert!(drawn("flow-row-0", &mut cx).is_none());
+}
+
+#[gpui_kit::test]
+fn a_second_edit_to_the_same_file_re_scrolls_once_the_updated_diff_loads(cx: &mut TestAppContext) {
+    let t = turn_id('t');
+    let (mut stage, mut cx) = in_the_live_diff(cx);
+    start_turn(&mut stage, &t, &s0(), &mut cx);
+    compared(&mut stage, &s0(), None, Vec::new(), &mut cx);
+
+    let before: String = (1..=100).map(|n| format!("line {n}\n")).collect();
+    let after_first: String = (1..=100)
+        .map(|n| match n {
+            1..=70 => format!("first {n}\n"),
+            _ => format!("line {n}\n"),
+        })
+        .collect();
+    let after_second: String = (1..=100)
+        .map(|n| match n {
+            1..=70 => format!("first {n}\n"),
+            90 => "second 90\n".to_owned(),
+            _ => format!("line {n}\n"),
+        })
+        .collect();
+
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t.clone(),
+        1,
+        edit("big.rs", 5, 5),
+    ));
+    compared(
+        &mut stage,
+        &s0(),
+        None,
+        vec![file("big.rs", FileStatus::Modified)],
+        &mut cx,
+    );
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("big.rs", &before, &after_first)],
+        &mut cx,
+    );
+    wait_for_live(&stage, &["big.rs"], &[], &mut cx);
+
+    let first_pos = Position {
+        path: "big.rs".into(),
+        side: Side::New,
+        line: 4,
+    };
+    wait_until(&mut cx, "focus on the first edited line", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.live_position() == Some(&first_pos))
+    });
+
+    // The second edit arrives while the file is already open with the earlier diff; follow must
+    // re-scroll once the updated diff loads asynchronously.
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t.clone(),
+        2,
+        edit("big.rs", 90, 90),
+    ));
+    cx.run_until_parked();
+    compared(
+        &mut stage,
+        &s0(),
+        None,
+        vec![file("big.rs", FileStatus::Modified)],
+        &mut cx,
+    );
+    cx.run_until_parked();
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("big.rs", &before, &after_second)],
+        &mut cx,
+    );
+
+    let second_pos = Position {
+        path: "big.rs".into(),
+        side: Side::New,
+        line: 89,
+    };
+    wait_until(&mut cx, "focus moved to the second edited line", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.live_position() == Some(&second_pos))
+    });
+    let (rows, second_row) = stage.pane.read_with(&cx, |pane, _| {
+        (pane.live_rows().to_vec(), pane.flow_at_row())
+    });
+    let second_row = second_row.expect("the second edit resolves to a diff row");
+    assert_eq!(
+        rows[second_row],
+        PaneRow::Diff {
+            path: "big.rs".into(),
+            row: Row::Added { new: 89 },
+        }
+    );
+    wait_until(&mut cx, "the second edited line scrolled into view", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            let in_view = pane.flow_rows_in_view();
+            in_view.contains(&second_row) && in_view.start > 0
+        })
+    });
+    assert!(drawn(&format!("flow-text-{second_row}-new:second 90"), &mut cx).is_some());
+    assert!(drawn("flow-row-0", &mut cx).is_none());
+}

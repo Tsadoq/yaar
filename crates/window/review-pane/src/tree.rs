@@ -2,13 +2,14 @@
 //! the change of.
 
 use std::ops::Range;
+use std::path::Path;
 
 use gpui_kit::*;
 use yaar_link::{
     ChangedFile, CreditedFile, History, HistoryEntry, Reply, Request, ReviewId, WorkspaceId,
 };
 use yaar_ui::diff::DiffStats;
-use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4};
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_4, tooltip_element};
 use yaar_ui::pieces::{CountBadge, Divider, ListRow, SectionLabel};
 use yaar_ui::themes::palette;
 use yaar_ui::typography::{TypeRole, Typed};
@@ -106,6 +107,18 @@ impl Tree {
     }
 }
 
+pub(crate) fn split_display_path(path: &Path) -> (String, Option<String>) {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let parent = path
+        .parent()
+        .map(|dir| dir.display().to_string())
+        .filter(|dir| !dir.is_empty());
+    (file_name, parent)
+}
+
 pub(crate) fn version_of(entry: &HistoryEntry) -> Option<&str> {
     match entry {
         HistoryEntry::Commit(commit) => Some(&commit.id),
@@ -176,6 +189,7 @@ impl ReviewPane {
         self.tree = Tree::new(cx);
         self.tree.of = workspace;
         self.listed = None;
+        self.h_scroll = px(0.);
         self.read_history(cx);
         cx.notify();
     }
@@ -708,14 +722,19 @@ impl ReviewPane {
                     .pt(SPACE_2)
                     .child(
                         div()
+                            .w_full()
                             .flex()
                             .items_baseline()
+                            .justify_between()
                             .gap(SPACE_2)
+                            .pr(SPACE_3)
                             .child(SectionLabel::new("History"))
                             .child(
                                 div()
+                                    .flex_none()
                                     .typed(TypeRole::Tiny)
                                     .text_color(palette.text_dim)
+                                    .whitespace_nowrap()
                                     .child("shift-click: range"),
                             ),
                     )
@@ -766,27 +785,47 @@ impl ReviewPane {
                     FileContent::Unshown(_) => None,
                 };
                 let target_row = held.rows.start;
+                let full_path = SharedString::from(path.display().to_string());
+                let (file_name, parent) = split_display_path(&path);
+                let name_colour = if viewed {
+                    palette.text_dim
+                } else if selected {
+                    palette.text
+                } else {
+                    palette.text_muted
+                };
                 let mut row = ListRow::new(("review-file-item", file_idx))
                     .compact()
                     .selected(selected)
+                    .selector(format!("review-tree-file-{full_path}"))
                     .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
                         pane.acted(cx);
                         pane.jump_to_file(target_row, window, cx);
                     }))
                     .child(
                         div()
+                            .id(("review-file-path", file_idx))
                             .flex_1()
                             .min_w_0()
-                            .truncate()
-                            .typed(TypeRole::CodeSmall)
-                            .text_color(if viewed {
-                                palette.text_dim
-                            } else if selected {
-                                palette.text
-                            } else {
-                                palette.text_muted
-                            })
-                            .child(path.display().to_string()),
+                            .flex()
+                            .flex_col()
+                            .tooltip(move |_, cx| tooltip_element(full_path.clone(), cx))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .typed(TypeRole::CodeSmall)
+                                    .text_color(name_colour)
+                                    .child(file_name),
+                            )
+                            .children(parent.map(|dir| {
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .typed(TypeRole::Tiny)
+                                    .text_color(palette.text_dim)
+                                    .child(dir)
+                            })),
                     );
                 if threads > 0 {
                     row = row.child(CountBadge::new(threads));
@@ -985,5 +1024,27 @@ impl ReviewPane {
             .items_center()
             .child(row)
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::split_display_path;
+
+    #[test]
+    fn split_display_path_separates_basename_and_parent() {
+        assert_eq!(
+            split_display_path(Path::new("crates/window/review-pane/src/tree.rs")),
+            (
+                "tree.rs".to_owned(),
+                Some("crates/window/review-pane/src".to_owned())
+            )
+        );
+        assert_eq!(
+            split_display_path(Path::new("Cargo.toml")),
+            ("Cargo.toml".to_owned(), None)
+        );
     }
 }

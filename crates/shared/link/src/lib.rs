@@ -44,7 +44,7 @@ use wire::{In, Out};
 
 /// Raised whenever a frame other than the two fixed ones changes, never lowered:
 /// [`Hello::age_against`] relies on it.
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
 
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
 
@@ -1155,6 +1155,9 @@ mod tests {
             },
             Request::GetStateSizes,
             Request::CleanUpStates,
+            Request::CloseTerminal {
+                terminal: terminal(),
+            },
         ];
         let refused = Request::AnswerConsent {
             agent: "pi".to_owned(),
@@ -2023,6 +2026,7 @@ mod tests {
                 RequestKind::AnswerConsent,
                 RequestKind::CreateWorktree,
                 RequestKind::CleanUpStates,
+                RequestKind::CloseTerminal,
             ]
         );
         assert_eq!(RequestKind::GetChanges.origin(), Origin::Window);

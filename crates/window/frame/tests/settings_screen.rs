@@ -14,8 +14,8 @@ use yaar_frame::settings_screen::{
     BELOW, BY_LAYOUT, CHARACTERS, CLEAN_UP, CLEANING, DEFAULT_FOLDER, DONT_INSTALL, INSTALL,
     KEEP_SELECTION, KEEP_SERVERS_OUT, KEEP_STATES_DAYS, LEFT, META, NO_BASE, NO_WORKSPACE,
     OTHER_STATES, RIGHT, RUN_SERVERS, RowShown, SETTINGS_CONTEXT, STOP_AFTER_MINUTES, SYSTEM,
-    SettingRow, SettingsScreen, TITLES, TOTAL_STATES, WHAT_CHANGED, controls, keep_states_label,
-    stop_after_label,
+    SettingRow, SettingsScreen, TITLES, TOTAL_STATES, WHAT_CHANGED, controls, description,
+    keep_states_label, stop_after_label,
 };
 use yaar_frame::{
     Asks, BuildPane, CleanUpStates, CloseSettings, NextSetting, NextValue, OpenSetting,
@@ -389,8 +389,8 @@ impl Window9 {
     }
 
     /// The row's `settings-chosen-<row>` mark is the chosen value's control (no mark when nothing
-    /// is chosen), and that control is painted as a primary button (`accent`), every other as a
-    /// secondary button (transparent ground with an `edge` border).
+    /// is chosen), and that control is painted as a selected secondary button (`raised` ground
+    /// with a `focus` border), every other as an unselected secondary button (`edge` border).
     fn assert_chosen_drawn(&mut self, row: &SettingRow) {
         let at = self.index_of(row);
         let shown = self.row(row);
@@ -421,11 +421,14 @@ impl Window9 {
         for (value, label) in shown.values.iter().enumerate() {
             let (ground, border) = self.painted_control(&Window9::value(at, value, label));
             if value == chosen {
-                assert!(
-                    ground == Some(palette.accent) || ground == Some(palette.accent_hover),
-                    "{row:?}: chosen value {value} ({label}) should be painted in accent ({:?} or {:?}), got {ground:?}",
-                    palette.accent,
-                    palette.accent_hover,
+                assert_eq!(
+                    ground,
+                    Some(palette.raised),
+                    "{row:?}: chosen value {value} ({label}) should be painted on the raised ground"
+                );
+                assert_eq!(
+                    border, palette.focus,
+                    "{row:?}: chosen value {value} ({label}) should carry the focus border"
                 );
             } else {
                 assert!(
@@ -2094,4 +2097,50 @@ fn a_click_on_the_close_button_closes_the_settings_screen(cx: &mut TestAppContex
 
     assert!(!window.screen_is_open());
     assert!(!window.is_drawn("settings-screen"));
+}
+
+#[gpui_kit::test]
+fn every_setting_row_draws_its_plain_english_description_and_header_shows_keyboard_hint(
+    cx: &mut TestAppContext,
+) {
+    let mut window = opened(WINDOW, vec![servers('a', false)], &one_repository(), cx);
+    window.shown.keeper.tell(Fact::ConsentsChanged(vec![consent(
+        "pi",
+        ConsentAnswer::NotAsked,
+    )]));
+    window.wait("the question for leave", |shown, cx| {
+        shown
+            .models
+            .consents
+            .read_with(cx, |consents, _| !consents.all().is_empty())
+    });
+    window.open_screen(sizes(&[], 0));
+
+    assert!(window.is_drawn("settings-subtitle"));
+    assert!(window.is_drawn("settings-keys-hint"));
+
+    let rows = window.rows();
+    assert!(
+        rows.len() >= 11,
+        "every SettingRow variant is present in this test: got {}",
+        rows.len()
+    );
+    for (i, shown) in rows.iter().enumerate() {
+        let expected = description(&shown.row);
+        assert!(
+            !expected.is_empty(),
+            "row {i} ({:?}) has a non-empty description",
+            shown.row
+        );
+        assert!(
+            window.is_drawn(&format!("settings-description-{i}")),
+            "row {i} ({:?}) draws settings-description-{i}",
+            shown.row
+        );
+        assert!(
+            window.is_drawn(&format!("settings-description-{i}:{expected}")),
+            "row {i} ({:?}) draws its exact description text",
+            shown.row
+        );
+    }
 }

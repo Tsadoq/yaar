@@ -350,6 +350,7 @@ impl Scratch {
             platform: Platform::current(),
             stop_after: STOP_AFTER,
             clock: Arc::new(SystemClock),
+            auto_download: false,
         }
     }
 
@@ -970,6 +971,7 @@ pub struct Heard {
 struct Hearing {
     files: HashMap<String, Vec<u8>>,
     redirects: HashMap<String, String>,
+    statuses: HashMap<String, u16>,
     heard: Vec<Heard>,
 }
 
@@ -1026,6 +1028,22 @@ impl Loopback {
             .expect("the loopback's state")
             .redirects
             .insert(name.to_owned(), location.to_owned());
+    }
+
+    pub fn status(&self, name: &str, code: u16) {
+        self.hearing
+            .lock()
+            .expect("the loopback's state")
+            .statuses
+            .insert(name.to_owned(), code);
+    }
+
+    pub fn clear_status(&self, name: &str) {
+        self.hearing
+            .lock()
+            .expect("the loopback's state")
+            .statuses
+            .remove(name);
     }
 
     pub fn url(&self, name: &str) -> String {
@@ -1087,6 +1105,11 @@ fn answer(stream: TcpStream, hearing: &Mutex<Hearing>) {
         let name = target.strip_prefix('/').unwrap_or("");
         if method != "GET" {
             None
+        } else if let Some(&code) = hearing.statuses.get(name) {
+            Some(
+                format!("HTTP/1.1 {code} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .into_bytes(),
+            )
         } else if let Some(location) = hearing.redirects.get(name) {
             Some(
                 format!(

@@ -1,13 +1,13 @@
 use gpui_kit::*;
 use yaar_link::{RepositoryId, SessionState, Workspace, WorkspaceId};
-use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_5};
+use yaar_ui::metrics::{SPACE_1, SPACE_2, SPACE_3, SPACE_5, SPACE_7};
 use yaar_ui::pieces::{Button, ButtonKind, Card, Divider, ListRow, SectionLabel, State, StateDot};
 use yaar_ui::themes::palette;
 use yaar_ui::tokens::Palette;
 use yaar_ui::typography::{TypeRole, Typed};
 
 use crate::agents::AgentList;
-use crate::controls::{NewWorktree, OpenFolder};
+use crate::controls::{NewWorktree, OpenFolder, OpenSettings};
 use crate::models::WorkspaceList;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,7 +161,13 @@ impl Sidebar {
         cx.notify();
     }
 
-    fn row(&self, row: SidebarRow, palette: &Palette, cx: &mut Context<Self>) -> AnyElement {
+    fn row(
+        &self,
+        row: SidebarRow,
+        first_repo: bool,
+        palette: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let rail = self.form == SidebarForm::Rail;
         match row {
             SidebarRow::Repository { id, name } => {
@@ -178,7 +184,7 @@ impl Sidebar {
                         .debug_selector(move || format!("sidebar-repository-{id}"))
                         .flex_none()
                         .px(SPACE_5)
-                        .pt(SPACE_5)
+                        .pt(if first_repo { SPACE_3 } else { SPACE_7 })
                         .pb(SPACE_2)
                         .typed(TypeRole::MetaStrong)
                         .text_color(palette.text_muted)
@@ -229,6 +235,7 @@ impl Sidebar {
                     });
                     ListRow::rail(SharedString::from(selector.clone()))
                         .selected(selected)
+                        .accent_bar(selected)
                         .selector(selector)
                         .on_click(on_click)
                         .child(
@@ -245,6 +252,13 @@ impl Sidebar {
                         .children(gone_mark)
                         .into_any_element()
                 } else {
+                    let subtitle = state.words.map(|words| {
+                        div()
+                            .typed(TypeRole::Meta)
+                            .text_color(state.word_colour)
+                            .truncate()
+                            .child(words)
+                    });
                     let gone_mark = gone.then(|| {
                         let gone_selector = format!("sidebar-gone-{id}");
                         div()
@@ -256,6 +270,7 @@ impl Sidebar {
                     ListRow::new(SharedString::from(selector.clone()))
                         .nested()
                         .selected(selected)
+                        .accent_bar(selected)
                         .selector(selector)
                         .on_click(on_click)
                         .child(div().flex_none().pt(SPACE_2).child(dot))
@@ -277,13 +292,7 @@ impl Sidebar {
                                         .truncate()
                                         .child(name),
                                 )
-                                .child(
-                                    div()
-                                        .typed(TypeRole::Meta)
-                                        .text_color(state.word_colour)
-                                        .truncate()
-                                        .child(state.words),
-                                )
+                                .children(subtitle)
                                 .children(gone_mark),
                         )
                         .into_any_element()
@@ -297,6 +306,11 @@ impl Sidebar {
             .kind(ButtonKind::Ghost)
             .small()
             .selector("sidebar-pin")
+            .tooltip(if rail {
+                "Expand sidebar"
+            } else {
+                "Collapse sidebar"
+            })
             .on_click(cx.listener(|sidebar, _, _, cx| sidebar.pin_other_form(cx)));
         if rail {
             return div()
@@ -312,6 +326,7 @@ impl Sidebar {
             .kind(ButtonKind::Ghost)
             .small()
             .selector("sidebar-add")
+            .tooltip("Open folder or create worktree")
             .on_click(cx.listener(|sidebar, _, _, cx| sidebar.toggle_add_menu(cx)));
         div()
             .flex_none()
@@ -329,6 +344,66 @@ impl Sidebar {
                     .child(add)
                     .child(pin),
             )
+            .into_any_element()
+    }
+
+    fn footer(&self, rail: bool, palette: &Palette) -> AnyElement {
+        let tip = if cfg!(target_os = "macos") {
+            "Settings (Cmd-,)"
+        } else {
+            "Settings (Ctrl-,)"
+        };
+        let open = |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            window.dispatch_action(Box::new(OpenSettings), cx);
+        };
+        let content = if rail {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .py(SPACE_2)
+                .child(
+                    Button::new("sidebar-settings", "⚙")
+                        .kind(ButtonKind::Ghost)
+                        .small()
+                        .selector("sidebar-settings")
+                        .tooltip(tip)
+                        .on_click(open),
+                )
+        } else {
+            let hint = if cfg!(target_os = "macos") {
+                "⌘,"
+            } else {
+                "Ctrl+,"
+            };
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px(SPACE_3)
+                .py(SPACE_2)
+                .child(
+                    Button::new("sidebar-settings", "Settings")
+                        .kind(ButtonKind::Ghost)
+                        .small()
+                        .leading("⚙")
+                        .selector("sidebar-settings")
+                        .tooltip(tip)
+                        .on_click(open),
+                )
+                .child(
+                    div()
+                        .typed(TypeRole::Tiny)
+                        .text_color(palette.text_dim)
+                        .child(hint),
+                )
+        };
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .child(Divider::horizontal())
+            .child(content)
             .into_any_element()
     }
 
@@ -382,7 +457,7 @@ impl Sidebar {
 
 struct AgentPresentation {
     dot: State,
-    words: &'static str,
+    words: Option<&'static str>,
     word_colour: Hsla,
     selector_word: Option<&'static str>,
 }
@@ -391,37 +466,37 @@ fn agent_presentation(agent: Option<SessionState>, palette: &Palette) -> AgentPr
     match agent {
         Some(SessionState::Works) => AgentPresentation {
             dot: State::Working,
-            words: "working",
+            words: Some("working"),
             word_colour: palette.link,
             selector_word: Some("working"),
         },
         Some(SessionState::WaitsForPermission) => AgentPresentation {
             dot: State::Permission,
-            words: "waiting",
+            words: Some("waiting"),
             word_colour: palette.danger,
             selector_word: Some("waiting"),
         },
         Some(SessionState::Unreviewed) => AgentPresentation {
             dot: State::NeedsYou,
-            words: "to review",
+            words: Some("to review"),
             word_colour: palette.warn,
             selector_word: Some("unreviewed"),
         },
         Some(SessionState::NotRunning) => AgentPresentation {
             dot: State::Idle,
-            words: "not running",
+            words: Some("not running"),
             word_colour: palette.text_dim,
             selector_word: Some("not-running"),
         },
         Some(SessionState::Idle) => AgentPresentation {
             dot: State::Ok,
-            words: "idle",
+            words: Some("idle"),
             word_colour: palette.text_dim,
             selector_word: None,
         },
         None => AgentPresentation {
             dot: State::Idle,
-            words: "no agent running",
+            words: None,
             word_colour: palette.text_dim,
             selector_word: None,
         },
@@ -455,10 +530,20 @@ impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rail = self.form == SidebarForm::Rail;
         let palette = palette(cx);
+        let mut seen_repo = false;
         let rows: Vec<AnyElement> = self
             .rows(cx)
             .into_iter()
-            .map(|row| self.row(row, &palette, cx))
+            .map(|row| {
+                let first_repo = if matches!(row, SidebarRow::Repository { .. }) {
+                    let first = !seen_repo;
+                    seen_repo = true;
+                    first
+                } else {
+                    false
+                };
+                self.row(row, first_repo, &palette, cx)
+            })
             .collect();
 
         div()
@@ -484,6 +569,7 @@ impl Render for Sidebar {
                     .overflow_y_scroll()
                     .children(rows),
             )
+            .child(self.footer(rail, &palette))
     }
 }
 

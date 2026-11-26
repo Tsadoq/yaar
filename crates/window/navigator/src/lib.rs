@@ -24,6 +24,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 pub use clock::{Clock, SystemClock};
+pub use download::install_builtin_servers;
 pub use port::{
     Answered, Ask, AskId, ExportAsk, FileKind, Language, Location, Offer, OpenedFile, Place, Port,
     PortEnd, RepositoryConsent, ServerState, State, Told, Tree, WorkspaceRoot, port,
@@ -60,6 +61,9 @@ pub struct NavigatorConfig {
     pub platform: Option<Platform>,
     pub stop_after: Duration,
     pub clock: Arc<dyn Clock>,
+    /// When true, a missing built-in language server with a pinned download is fetched
+    /// automatically on first search instead of waiting for a manual download ask.
+    pub auto_download: bool,
 }
 
 impl NavigatorConfig {
@@ -81,6 +85,7 @@ impl NavigatorConfig {
             platform: Platform::current(),
             stop_after: STOP_AFTER,
             clock: Arc::new(SystemClock),
+            auto_download: true,
         }
     }
 }

@@ -149,7 +149,7 @@ mod tests {
         let text = DARK_FILE
             .replace("name = \"Dark\"", "name = \"Sepia\"")
             .replace("appearance = \"dark\"", "appearance = \"light\"")
-            .replace("window = \"#131313\"", "window = \"#f4ecd8\"");
+            .replace("window = \"#0d0e11\"", "window = \"#f4ecd8\"");
         ThemeDefinition::from_toml(&text).expect("a whole file")
     }
 
@@ -180,8 +180,8 @@ mod tests {
     #[test]
     fn the_dark_theme_holds_the_mocks_colours() {
         let palette = dark().palette;
-        assert_eq!(palette.pane, hex(0x171717));
-        assert_eq!(palette.accent, hex(0x1447e6));
+        assert_eq!(palette.pane, hex(0x16171b));
+        assert_eq!(palette.accent, hex(0x2e55d4));
         assert_eq!(palette.add_ground, hex(0x16281f));
         assert_eq!(palette.del_word, hex(0x5a2a2e));
         assert_eq!(palette.syn_keyword, hex(0xf092c0));
@@ -197,10 +197,10 @@ mod tests {
             0x7f7f7f, 0xfca5a5, 0x86efac, 0xfde047, 0x93c5fd, 0xd8b4fe, 0x67e8f9, 0xffffff,
         ];
         assert_eq!(terminal.ansi, before.map(hex));
-        assert_eq!(terminal.foreground, hex(0xfafafa));
-        assert_eq!(terminal.background, hex(0x171717));
-        assert_eq!(terminal.cursor, hex(0xfafafa));
-        assert_eq!(terminal.selection, hexa(0x1447e666));
+        assert_eq!(terminal.foreground, hex(0xf3f4f6));
+        assert_eq!(terminal.background, hex(0x16171b));
+        assert_eq!(terminal.cursor, hex(0xf3f4f6));
+        assert_eq!(terminal.selection, hexa(0x2e55d466));
     }
 
     #[test]
@@ -213,11 +213,11 @@ mod tests {
         }
         let light = light();
         assert_eq!(light.terminal.selection, light.palette.selection);
-        // The dark terminal's selection is stronger (40% against 24%): text selected on the terminal's
+        // The dark terminal's selection is stronger (40% against 21%): text selected on the terminal's
         // ground must still show.
         let dark = dark();
         assert_ne!(dark.terminal.selection, dark.palette.selection);
-        assert_eq!(dark.terminal.selection, hexa(0x1447e666));
+        assert_eq!(dark.terminal.selection, hexa(0x2e55d466));
     }
 
     #[test]

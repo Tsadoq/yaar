@@ -1106,11 +1106,11 @@ mod tests {
         emulator.set_colours(dark.terminal);
         assert_eq!(
             replies_to(&mut emulator, "\x1b]11;?\x1b\\"),
-            "\x1b]11;rgb:1717/1717/1717\x1b\\"
+            "\x1b]11;rgb:1616/1717/1b1b\x1b\\"
         );
         assert_eq!(
             replies_to(&mut emulator, "\x1b]10;?\x07"),
-            "\x1b]10;rgb:fafa/fafa/fafa\x07"
+            "\x1b]10;rgb:f3f3/f4f4/f6f6\x07"
         );
         assert_eq!(
             replies_to(&mut emulator, "\x1b]4;1;?\x07"),

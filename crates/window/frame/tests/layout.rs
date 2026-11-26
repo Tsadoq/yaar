@@ -4,10 +4,13 @@
 mod common;
 
 use gpui_kit::{
-    AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, Pixels, Render,
-    Size, Styled, TestAppContext, VisualTestContext, Window, div, px, size,
+    AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, Modifiers,
+    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Render, Size, Styled, TestAppContext,
+    VisualTestContext, Window, div, point, px, size,
 };
-use yaar_frame::{Beside, BuildPane, FULL_WIDTH, MovePanes, Pane, TITLEBAR_HEIGHT, TOP_INSET};
+use yaar_frame::{
+    Beside, BuildPane, FULL_WIDTH, FocusNextPane, MovePanes, Pane, TITLEBAR_HEIGHT, TOP_INSET,
+};
 use yaar_ui::metrics::GUTTER;
 
 use common::{drawn, open_frame, pressed};
@@ -238,4 +241,78 @@ fn a_window_with_one_pane_gives_it_the_room_and_the_key_of_move_panes_changes_no
         cx.simulate_keystrokes(&key);
     }
     assert_eq!(beside(&shown.frame, &mut cx), Beside::Right);
+}
+
+#[gpui_kit::test]
+fn the_focused_pane_draws_the_active_focus_rule_and_moves_it_when_focus_switches(
+    cx: &mut TestAppContext,
+) {
+    let (_shown, mut cx) = open_frame(WINDOW, vec![plain("first"), plain("second")], cx);
+
+    assert!(
+        drawn("frame-pane-first-focus", &mut cx).is_some(),
+        "first pane starts focused"
+    );
+    assert_eq!(drawn("frame-pane-second-focus", &mut cx), None);
+
+    cx.simulate_keystrokes(&pressed::<FocusNextPane>());
+    assert_eq!(drawn("frame-pane-first-focus", &mut cx), None);
+    assert!(
+        drawn("frame-pane-second-focus", &mut cx).is_some(),
+        "focus indicator follows next pane"
+    );
+
+    let first = pane("first", &mut cx);
+    cx.simulate_click(first.center(), Modifiers::none());
+    assert!(
+        drawn("frame-pane-first-focus", &mut cx).is_some(),
+        "clicking back into the first pane moves the focus indicator immediately"
+    );
+    assert_eq!(drawn("frame-pane-second-focus", &mut cx), None);
+}
+
+#[gpui_kit::test]
+fn dragging_the_split_handle_resizes_the_panes_and_double_click_resets_the_split(
+    cx: &mut TestAppContext,
+) {
+    let (_shown, mut cx) = open_frame(WINDOW, vec![plain("first"), plain("second")], cx);
+    let initial_first = pane("first", &mut cx);
+    let handle = drawn("frame-split-handle", &mut cx).expect("split handle is drawn");
+
+    // Drag left by 160px to shrink the first pane.
+    let target = point(handle.center().x - px(160.), handle.center().y);
+    cx.simulate_mouse_down(handle.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
+
+    let resized_first = pane("first", &mut cx);
+    let resized_second = pane("second", &mut cx);
+    assert!(
+        resized_first.size.width < initial_first.size.width - px(100.),
+        "dragging left shrunk the first pane: before={initial_first:?} after={resized_first:?}"
+    );
+    assert_eq!(
+        resized_second.left() - resized_first.right(),
+        GUTTER,
+        "gutter stays intact after resize"
+    );
+
+    // Double-click the handle to reset back to the default 62/38 split.
+    let handle = drawn("frame-split-handle", &mut cx).expect("split handle is drawn");
+    cx.simulate_click(handle.center(), Modifiers::none());
+    cx.simulate_event(MouseDownEvent {
+        position: handle.center(),
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position: handle.center(),
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 2,
+    });
+    let (first, second) = (pane("first", &mut cx), pane("second", &mut cx));
+    assert_split(Beside::Right, first, second);
 }

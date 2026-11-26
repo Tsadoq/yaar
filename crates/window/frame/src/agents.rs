@@ -282,4 +282,13 @@ impl TerminalList {
         }
         self.ask_again_if_awaited(cx);
     }
+
+    pub fn closed(&mut self, terminal: &TerminalId, cx: &mut Context<Self>) {
+        let before = self.terminals.len();
+        self.terminals.retain(|held| held.id != *terminal);
+        if self.terminals.len() != before {
+            cx.notify();
+            self.ask_again_if_awaited(cx);
+        }
+    }
 }

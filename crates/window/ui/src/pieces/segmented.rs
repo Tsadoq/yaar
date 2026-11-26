@@ -76,6 +76,13 @@ impl RenderOnce for Segmented {
                     .whitespace_nowrap()
                     .cursor_pointer()
                     .when(on, |segment| segment.bg(palette.raised))
+                    .when(!on && handler.is_some(), |segment| {
+                        segment.hover(move |style| {
+                            style
+                                .bg(palette.raised.opacity(0.50))
+                                .text_color(palette.text)
+                        })
+                    })
                     .when_some(handler, |segment, handler| {
                         segment.on_click(move |_, window, cx| handler(index, window, cx))
                     })

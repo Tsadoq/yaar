@@ -3,12 +3,12 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::*;
-use yaar_diff::{FileDiff, Row, Side};
+use yaar_diff::{Row, Side};
 use yaar_frame::AskError;
 use yaar_link::{
     ChangedFile, Fact, FileStatus, FlowForm, HistoryEntry, Reply, Request, Step, TurnId,
@@ -116,14 +116,66 @@ impl Live {
         }
     }
 
+    fn file_of(&self, path: &Path) -> Option<&ShownFile> {
+        self.files.iter().find(|held| {
+            held.file.path == path
+                || matches!(&held.file.status, FileStatus::Renamed { from } if from == path)
+        })
+    }
+
     fn heading_of(&self, path: &Path) -> Option<usize> {
-        self.files
-            .iter()
-            .find(|held| {
-                held.file.path == path
-                    || matches!(&held.file.status, FileStatus::Renamed { from } if from == path)
-            })
-            .map(|held| held.rows.start)
+        self.file_of(path).map(|held| held.rows.start)
+    }
+
+    fn edit_row_of(&self, path: &Path, lines: Option<&[RangeInclusive<u32>]>) -> Option<usize> {
+        let held = self.file_of(path)?;
+        if !matches!(held.content, FileContent::Diff(_)) {
+            return Some(held.rows.start);
+        }
+        let start = held.rows.start;
+        let file_rows = &self.rows[held.rows.clone()];
+        if let Some(ranges) = lines.filter(|ranges| !ranges.is_empty()) {
+            let in_range = |row: &PaneRow| match row {
+                PaneRow::Diff { row, .. } => row
+                    .line(Side::New)
+                    .is_some_and(|line| ranges.iter().any(|range| range.contains(&(line + 1)))),
+                _ => false,
+            };
+            if let Some(offset) = file_rows.iter().position(|row| {
+                in_range(row)
+                    && !matches!(
+                        row,
+                        PaneRow::Diff {
+                            row: Row::Context { .. },
+                            ..
+                        }
+                    )
+            }) {
+                return Some(start + offset);
+            }
+            if let Some(offset) = file_rows.iter().position(in_range) {
+                return Some(start + offset);
+            }
+            let first_line = *ranges[0].start();
+            if let Some(offset) = file_rows.iter().position(|row| match row {
+                PaneRow::Diff { row, .. } => row
+                    .line(Side::New)
+                    .is_some_and(|line| line + 1 >= first_line),
+                _ => false,
+            }) {
+                return Some(start + offset);
+            }
+        }
+        let first_changed = file_rows.iter().position(|row| {
+            matches!(
+                row,
+                PaneRow::Diff {
+                    row: Row::Added { .. } | Row::Removed { .. } | Row::Changed { .. },
+                    ..
+                }
+            )
+        });
+        Some(first_changed.map_or(start, |offset| start + offset))
     }
 
     fn locate(&self, position: &Position) -> Option<usize> {
@@ -237,7 +289,7 @@ impl ReviewPane {
         if on {
             self.live_ask(cx);
             self.live_pump(cx);
-            self.live_follow_scroll();
+            self.live_follow_scroll(cx);
         }
     }
 
@@ -354,15 +406,30 @@ impl ReviewPane {
                     .iter()
                     .position(|row| matches!(row, PaneRow::Read { path: held } if held == path))
             }),
-            Step::Edit { path, .. } | Step::Write { path } => self.live.heading_of(path),
+            Step::Edit { path, lines } => self.live.edit_row_of(path, lines.as_deref()),
+            Step::Write { path } => self.live.heading_of(path),
             Step::Command { .. } => None,
         }
     }
 
     pub(crate) fn scroll_live_to(&mut self, row: usize) {
-        self.live
-            .scroll
-            .scroll_to_item(row, ScrollStrategy::Nearest);
+        self.live.scroll.scroll_to_item(row, ScrollStrategy::Center);
+        if let Some(PaneRow::Diff {
+            path,
+            row: diff_row,
+        }) = self.live.rows.get(row)
+            && let Some((side, line)) = diff_row
+                .line(Side::New)
+                .map(|line| (Side::New, line))
+                .or_else(|| diff_row.line(Side::Old).map(|line| (Side::Old, line)))
+        {
+            self.live.position = Some(Position {
+                path: path.clone(),
+                side,
+                line,
+            });
+            self.live.position_row = Some(row);
+        }
         self.live.scrolled_to = self.at.clone();
     }
 
@@ -478,11 +545,11 @@ impl ReviewPane {
     fn live_remade(&mut self, cx: &mut Context<Self>) {
         self.live_make_rows(cx);
         if self.live.on_screen {
-            self.live_follow_scroll();
+            self.live_follow_scroll(cx);
         }
     }
 
-    fn live_follow_scroll(&mut self) {
+    fn live_follow_scroll(&mut self, cx: &mut Context<Self>) {
         if self.following != Following::On {
             return;
         }
@@ -494,6 +561,27 @@ impl ReviewPane {
         }
         if let Some(row) = self.live_row_of(&at) {
             self.scroll_live_to(row);
+            cx.notify();
+        }
+    }
+
+    fn at_step_touches(&self, path: &Path) -> bool {
+        let (Some(at), Some(shown)) = (self.at.as_ref(), self.live.change.as_ref()) else {
+            return false;
+        };
+        if at.turn != shown.turn {
+            return false;
+        }
+        match self.flow.step(at) {
+            Some(Step::Edit {
+                path: step_path, ..
+            } | Step::Write { path: step_path }) => {
+                step_path == path
+                    || self.live.file(path).is_some_and(|file| {
+                        matches!(&file.status, FileStatus::Renamed { from } if from == step_path)
+                    })
+            }
+            _ => false,
         }
     }
 
@@ -567,7 +655,9 @@ impl ReviewPane {
         let mut to_read = Vec::new();
         for file in files {
             let kept = before.remove(&file.path).filter(|held| held.file == file);
-            if kept.is_none() || everything || named.contains(&file.path) {
+            let named_hit = named.contains(&file.path)
+                || matches!(&file.status, FileStatus::Renamed { from } if named.contains(from));
+            if kept.is_none() || everything || named_hit {
                 to_read.push(file.path.clone());
             }
             self.live.files.push(match kept {
@@ -581,6 +671,9 @@ impl ReviewPane {
             });
         }
         for path in to_read {
+            if self.at_step_touches(&path) {
+                self.live.scrolled_to = None;
+            }
             if !self.live.queue.contains(&path) {
                 self.live.queue.push_back(path);
             }
@@ -634,13 +727,10 @@ impl ReviewPane {
                     Ok((old, new)) => {
                         // The diff of a large file takes long enough to be seen: it is made off the
                         // thread that draws.
-                        let diff = cx
-                            .background_spawn(async move { FileDiff::new(&old, &new) })
+                        let (diff, max_chars) = cx
+                            .background_spawn(async move { crate::compute_diff(&old, &new) })
                             .await;
-                        FileContent::Diff(Box::new(ShownDiff {
-                            diff,
-                            emphasis: RefCell::default(),
-                        }))
+                        FileContent::Diff(Box::new(ShownDiff::from_parts(diff, max_chars)))
                     }
                     Err(why) => FileContent::Unshown(why),
                 },
@@ -668,6 +758,7 @@ impl ReviewPane {
             return;
         }
         self.live.in_flight = self.live.in_flight.saturating_sub(1);
+        let mut applied = false;
         if self.live.asked.get(path) == Some(&sequence)
             && let Some(held) = self
                 .live
@@ -676,6 +767,10 @@ impl ReviewPane {
                 .find(|held| held.file.path == path)
         {
             held.content = content;
+            applied = true;
+        }
+        if applied && self.at_step_touches(path) {
+            self.live.scrolled_to = None;
         }
         self.live_remade(cx);
         self.live_pump(cx);

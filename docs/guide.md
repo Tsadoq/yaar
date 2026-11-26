@@ -63,7 +63,8 @@ screen.
   for each agent CLI. Cmd-Shift-T opens the chosen CLI, and Cmd-Alt-C chooses the next.
   The launcher starts the CLI through your login shell, so it is the same program you type
   in a shell.
-- Cmd-] and Cmd-[ move between terminals, and Cmd-D shows two side by side.
+- Cmd-] and Cmd-[ move between terminals, Cmd-Shift-W (or a tab's close button) closes a
+  terminal, and Cmd-D shows two side by side.
 - Cmd-Alt-P moves the pane to the left of the diff, below it, and back to the right.
 - The window's title is the one the program of the focused terminal sets.
 
@@ -304,6 +305,7 @@ last started shows as one no agent made. The app's data and cache folders are li
 | Cmd-Alt-B | Ctrl-Alt-B | Lets the width of the window choose the form of the sidebar again | anywhere |
 | Cmd-Alt-Down, Cmd-Alt-Up | Ctrl-Alt-Down, Ctrl-Alt-Up | Next and previous worktree | anywhere, but on macOS not in the field for the base |
 | Cmd-T | Ctrl-T | Opens a terminal for the worktree on screen | anywhere |
+| Cmd-Shift-W | Ctrl-Shift-W | Closes the focused terminal | anywhere |
 | Cmd-Shift-T | Ctrl-Shift-T | Opens a terminal that runs the chosen agent CLI, for the worktree on screen | anywhere |
 | Cmd-Alt-C | Ctrl-Alt-C | Chooses the next agent CLI for Cmd-Shift-T, and after the last the first | anywhere |
 | Cmd-Shift-R | Ctrl-Shift-R | Resumes the first session of the worktree on screen that a restart cut off and that has no resume open | anywhere |
@@ -429,7 +431,7 @@ as GPUI writes them.
 | `shift-pageup`, `shift-pagedown`: scroll the history | the same |
 | `cmd-c`, `cmd-v`: copy and paste | `ctrl-shift-c`, `ctrl-shift-v` |
 | `cmd-k`, `cmd-a`, `cmd-home`, `cmd-end`, `cmd-up`, `cmd-down`: empty the history and the screen above the prompt's line, select everything, scroll to the top, to the bottom, one line up, one line down; none sends a byte to the program | none: the keys reach the program |
-| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-,`, `cmd-shift-n`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-w`, `cmd-h`, `cmd-alt-h`, `cmd-m`, `cmd-q`, `cmd-alt-q`, `cmd-alt-v`, `cmd-alt-x`, `cmd-alt-a`, `cmd-shift-t`, `cmd-alt-c`, `cmd-shift-r`, `cmd-alt-e`, `cmd-alt-shift-e` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
+| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-,`, `cmd-shift-n`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-shift-w`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-w`, `cmd-h`, `cmd-alt-h`, `cmd-m`, `cmd-q`, `cmd-alt-q`, `cmd-alt-v`, `cmd-alt-x`, `cmd-alt-a`, `cmd-shift-t`, `cmd-alt-c`, `cmd-shift-r`, `cmd-alt-e`, `cmd-alt-shift-e` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
 
 On Linux the keys of the app that are not kept, New Terminal, Split View, Quit and the rest,
 work only outside a terminal: in a terminal `ctrl-t`, `ctrl-d`, `ctrl-q` and the others

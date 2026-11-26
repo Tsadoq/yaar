@@ -256,7 +256,7 @@ fn the_terminal_answers_a_question_about_its_colours_from_the_theme_applied(
     });
     assert_eq!(
         ask(&mut panes, &id, &mut cx),
-        format!("\x1b]11;{}\x07", rgb(0x17, 0x17, 0x17))
+        format!("\x1b]11;{}\x07", rgb(0x16, 0x17, 0x1b))
     );
 
     panes
@@ -289,7 +289,7 @@ fn a_terminal_opened_under_the_dark_theme_answers_with_it_at_once(cx: &mut TestA
     let (_, bytes) = panes.keeper.input(&mut cx);
     assert_eq!(
         String::from_utf8(bytes).expect("text"),
-        format!("\x1b]10;{}\x07", rgb(0xfa, 0xfa, 0xfa))
+        format!("\x1b]10;{}\x07", rgb(0xf3, 0xf4, 0xf6))
     );
 }
 

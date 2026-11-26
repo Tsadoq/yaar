@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    AnyElement, App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::state_dot::dot;
@@ -21,7 +21,8 @@ struct Tab {
 }
 
 /// A row of tabs. A tab keyed `k` carries the selector `<selector>-<k>`, its count
-/// `<selector>-<k>-count` and its dot `<selector>-<k>-dot`.
+/// `<selector>-<k>-count`, its dot `<selector>-<k>-dot`, and its close button
+/// `<selector>-<k>-close`.
 #[derive(IntoElement)]
 pub struct Tabs {
     id: ElementId,
@@ -31,6 +32,7 @@ pub struct Tabs {
     trailing: Vec<AnyElement>,
     selector: Option<SharedString>,
     on_select: Option<OnSelect>,
+    on_close: Option<OnSelect>,
 }
 
 impl Tabs {
@@ -43,6 +45,7 @@ impl Tabs {
             trailing: Vec::new(),
             selector: None,
             on_select: None,
+            on_close: None,
         }
     }
 
@@ -88,6 +91,11 @@ impl Tabs {
         self.on_select = Some(Rc::new(handler));
         self
     }
+
+    pub fn on_close(mut self, handler: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_close = Some(Rc::new(handler));
+        self
+    }
 }
 
 impl RenderOnce for Tabs {
@@ -104,6 +112,27 @@ impl RenderOnce for Tabs {
             let on = self.selected == Some(index);
             let own = part(&selector, &tab.key);
             let handler = self.on_select.clone();
+            let close = self.on_close.clone().map(|close_handler| {
+                let close_button = div()
+                    .id(ElementId::NamedChild(
+                        parent.clone(),
+                        SharedString::from(format!("{}-close", tab.key)),
+                    ))
+                    .px(SPACE_1)
+                    .rounded(RADIUS_CONTROL)
+                    .text_color(palette.text_muted)
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(palette.edge).text_color(palette.text))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
+                    })
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        close_handler(index, window, cx);
+                    })
+                    .child("\u{d7}");
+                marked(close_button, part(&own, "close"))
+            });
             let button = div()
                 .id(ElementId::NamedChild(parent.clone(), tab.key))
                 .flex()
@@ -117,6 +146,13 @@ impl RenderOnce for Tabs {
                 .whitespace_nowrap()
                 .cursor_pointer()
                 .when(on, |button| button.bg(palette.raised))
+                .when(!on, |button| {
+                    button.hover(move |style| {
+                        style
+                            .bg(palette.raised.opacity(0.55))
+                            .text_color(palette.text)
+                    })
+                })
                 .when_some(handler, |button, handler| {
                     button.on_click(move |_, window, cx| handler(index, window, cx))
                 })
@@ -127,7 +163,8 @@ impl RenderOnce for Tabs {
                 .child(tab.label)
                 .when_some(tab.count, |button, count| {
                     button.child(CountBadge::new(count).selector_of(part(&own, "count")))
-                });
+                })
+                .children(close);
             marked(button, own)
         });
         let row = div()

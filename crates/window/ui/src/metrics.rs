@@ -1,6 +1,12 @@
 use std::time::Duration;
 
-use gpui_kit::{BoxShadow, CursorStyle, FontFeatures, Pixels, Styled, hsla, point, px};
+use gpui_kit::{
+    AnyView, App, AppContext, BoxShadow, Context, CursorStyle, FontFeatures, IntoElement,
+    ParentElement, Pixels, Render, SharedString, Styled, Window, div, hsla, point, px,
+};
+
+use crate::themes::palette;
+use crate::typography::{TypeRole, Typed};
 
 pub const RADIUS_WINDOW: Pixels = px(12.);
 pub const RADIUS_CARD: Pixels = px(10.);
@@ -33,6 +39,15 @@ fn black_shadow(offset_y: f32, blur: f32, alpha: f32) -> Vec<BoxShadow> {
     }]
 }
 
+/// Subtle elevation under a pane so it lifts gently off the window ground.
+pub fn shadow_pane(dark: bool) -> Vec<BoxShadow> {
+    if dark {
+        black_shadow(1., 6., 0.28)
+    } else {
+        black_shadow(1., 3., 0.06)
+    }
+}
+
 /// Under a popover, a menu or a toast.
 pub fn shadow_float() -> Vec<BoxShadow> {
     black_shadow(6., 20., 0.5)
@@ -43,6 +58,32 @@ pub fn shadow_card() -> Vec<BoxShadow> {
     black_shadow(10., 30., 0.55)
 }
 
+struct TextTooltip(SharedString);
+
+impl Render for TextTooltip {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = palette(cx);
+        div()
+            .px(SPACE_4)
+            .py(SPACE_2)
+            .bg(palette.raised)
+            .border_1()
+            .border_color(palette.edge)
+            .rounded(RADIUS_CONTROL)
+            .shadow(shadow_float())
+            .typed(TypeRole::Small)
+            .text_color(palette.text)
+            .whitespace_nowrap()
+            .child(self.0.clone())
+    }
+}
+
+/// A styled tooltip view for native GPUI `.tooltip(...)` handlers.
+pub fn tooltip_element(text: impl Into<SharedString>, cx: &mut App) -> AnyView {
+    let text = text.into();
+    cx.new(|_| TextTooltip(text)).into()
+}
+
 /// Equal-width digits. A function, not a constant: the feature list is a shared allocation.
 pub fn tabular() -> FontFeatures {
     FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)]))
@@ -51,6 +92,16 @@ pub fn tabular() -> FontFeatures {
 /// Text-beam cursor for painted terminal surfaces.
 pub fn ibeam<T: Styled>(element: T) -> T {
     element.cursor(CursorStyle::IBeam)
+}
+
+/// Column-resize cursor for vertical split handles.
+pub fn cursor_col_resize<T: Styled>(el: T) -> T {
+    el.cursor(CursorStyle::ResizeColumn)
+}
+
+/// Row-resize cursor for horizontal split handles.
+pub fn cursor_row_resize<T: Styled>(el: T) -> T {
+    el.cursor(CursorStyle::ResizeRow)
 }
 
 #[cfg(test)]

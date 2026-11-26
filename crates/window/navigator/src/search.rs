@@ -164,6 +164,31 @@ pub fn when_none(row: &Row, platform: Option<Platform>) -> State {
     }
 }
 
+pub(crate) fn on_search_path(
+    row: &Row,
+    search_path: &[PathBuf],
+    environment: &[(OsString, OsString)],
+    platform: Option<Platform>,
+) -> bool {
+    let vars = Vars {
+        platform: platform.map(|p| p.name().to_string()).unwrap_or_default(),
+        env: Some(environment.to_vec()),
+        ..Vars::default()
+    };
+    row.servers.iter().any(|server| {
+        server.machine.iter().any(|name| {
+            let Ok(name) = expand(name, &vars) else {
+                return false;
+            };
+            search_path
+                .iter()
+                .filter(|folder| folder.is_absolute())
+                .map(|folder| folder.join(&name))
+                .any(|program| is_executable(&program))
+        })
+    })
+}
+
 pub fn inside(program: &Path, worktrees: &[&Path]) -> bool {
     let program = resolved(program);
     worktrees

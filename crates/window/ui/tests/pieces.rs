@@ -13,6 +13,7 @@ use gpui_kit::{
     VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px, size,
 };
 use yaar_ui::colour::composited;
+use yaar_ui::diff::GutterPlus;
 use yaar_ui::pieces::{
     Avatar, Banner, Button, ButtonKind, Card, Chip, CountBadge, Divider, EmptyState, Field,
     ListRow, Pane, Pill, Popover, SectionLabel, Segmented, State, StateDot, Tabs, Toast, Toggle,
@@ -503,6 +504,50 @@ fn a_mono_tab_row_is_still_one_row_of_tabs_that_report_their_index(cx: &mut Test
     );
     shown.click("tabs-claude");
     assert_eq!(picked.get(), 11);
+}
+
+#[gpui_kit::test]
+fn clicking_a_tab_close_button_reports_close_without_selecting_the_tab(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let selected = Rc::new(RefCell::new(Vec::new()));
+        let closed = Rc::new(RefCell::new(Vec::new()));
+        let (heard_select, heard_close) = (selected.clone(), closed.clone());
+        let mut shown = Shown::open(theme, cx, move || {
+            let (heard_select, heard_close) = (heard_select.clone(), heard_close.clone());
+            Tabs::new("tabs")
+                .mono()
+                .tab("one", "Shell", None, None)
+                .tab("two", "Claude Code", None, Some(State::Working))
+                .selected(0)
+                .selector("tabs")
+                .on_select(move |index, _, _| heard_select.borrow_mut().push(index))
+                .on_close(move |index, _, _| heard_close.borrow_mut().push(index))
+                .into_any_element()
+        });
+        assert!(shown.is_drawn("tabs-one-close"), "{theme}");
+        assert!(shown.is_drawn("tabs-two-close"), "{theme}");
+        assert!(
+            inside(shown.bounds("tabs-two"), shown.bounds("tabs-two-close")),
+            "{theme}"
+        );
+
+        shown.click("tabs-two-close");
+        assert_eq!(*closed.borrow(), [1], "{theme}");
+        assert!(
+            selected.borrow().is_empty(),
+            "{theme}: closing a tab must not select it first"
+        );
+
+        let tab_bounds = shown.bounds("tabs-two");
+        let label_point = point(tab_bounds.left() + px(12.), tab_bounds.center().y);
+        shown.cx.simulate_click(label_point, Modifiers::none());
+        assert_eq!(*selected.borrow(), [1], "{theme}");
+        assert_eq!(*closed.borrow(), [1], "{theme}");
+    }
+
+    let mut plain = Shown::open(LIGHT, cx, tabs);
+    assert!(!plain.is_drawn("tabs-changes-close"));
+    assert!(!plain.is_drawn("tabs-flow-close"));
 }
 
 #[gpui_kit::test]
@@ -1138,6 +1183,33 @@ fn an_empty_state_centres_its_title_lines_and_action(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn an_empty_state_wraps_long_lines_inside_a_narrow_pane(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .w(px(300.))
+                .flex()
+                .flex_col()
+                .child(
+                    EmptyState::new("No terminal open")
+                        .line(
+                            "Start an agent CLI (Cmd-Shift-T) or a shell (Cmd-T) in this workspace.",
+                        )
+                        .action(Button::new("go", "Open Claude Code").selector("go"))
+                        .selector("empty"),
+                )
+                .into_any_element()
+        },
+        |shown| {
+            let empty = shown.bounds("empty");
+            assert!(empty.size.width <= px(300.), "{empty:?}");
+            assert!(inside(empty, shown.bounds("go")));
+        },
+    );
+}
+
+#[gpui_kit::test]
 fn a_strong_divider_is_painted_in_edge_and_a_plain_one_in_separator(cx: &mut TestAppContext) {
     in_both_themes(
         cx,
@@ -1534,4 +1606,177 @@ fn a_toast_clamps_its_width_to_a_narrow_viewport(cx: &mut TestAppContext) {
         "toast width {:?} exceeds viewport - 40",
         toast.size.width
     );
+}
+
+#[gpui_kit::test]
+fn a_focused_pane_highlights_its_border_and_draws_a_top_focus_bar(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    Pane::new()
+                        .focused(true)
+                        .w(px(200.))
+                        .h(px(100.))
+                        .selector("focused")
+                        .child(div().child("active")),
+                )
+                .child(
+                    Pane::new()
+                        .w(px(200.))
+                        .h(px(100.))
+                        .selector("idle")
+                        .child(div().child("inactive")),
+                )
+                .into_any_element()
+        },
+        |shown| {
+            let palette = shown.palette();
+            assert_eq!(shown.border("focused"), palette.focus.opacity(0.55));
+            assert_eq!(shown.border("idle"), palette.edge);
+            assert!(shown.is_drawn("focused-focus"));
+            assert!(!shown.is_drawn("idle-focus"));
+            assert_eq!(
+                shown.ground("focused-focus"),
+                Some(palette.focus.opacity(0.85))
+            );
+            let bar = shown.bounds("focused-focus");
+            assert_eq!(bar.size.height, px(2.));
+            assert_eq!(shown.bounds("focused").size, shown.bounds("idle").size);
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn an_elevated_and_accented_card_lifts_above_the_pane_with_a_left_bar(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let mut shown = Shown::open(theme, cx, || {
+            Card::new()
+                .elevated()
+                .w(px(240.))
+                .selector("card")
+                .child(div().child("thread"))
+                .into_any_element()
+        });
+        let palette = shown.palette();
+        let lifted = composited(palette.raised.opacity(0.45), palette.pane);
+        assert_eq!(shown.ground("card"), Some(lifted), "{theme}");
+        assert!(!shown.is_drawn("card-accent"), "{theme}");
+
+        let accent = palette.ok;
+        let mut accented = Shown::open(theme, cx, move || {
+            Card::new()
+                .elevated()
+                .accent(accent)
+                .w(px(240.))
+                .selector("card")
+                .child(div().child("thread"))
+                .into_any_element()
+        });
+        assert_eq!(accented.ground("card"), Some(lifted), "{theme}");
+        assert_eq!(accented.ground("card-accent"), Some(accent), "{theme}");
+        assert_eq!(accented.bounds("card-accent").size.width, px(2.));
+    }
+}
+
+#[gpui_kit::test]
+fn a_list_row_accent_bar_paints_accent_text_and_focus_takes_precedence(cx: &mut TestAppContext) {
+    in_both_themes(
+        cx,
+        || {
+            div()
+                .w(px(240.))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(
+                    ListRow::new("active")
+                        .accent_bar(true)
+                        .selector("active")
+                        .child("Workspace"),
+                )
+                .child(
+                    ListRow::new("both")
+                        .accent_bar(true)
+                        .focused(true)
+                        .selector("both")
+                        .child("Focused workspace"),
+                )
+                .child(ListRow::new("plain").selector("plain").child("Plain"))
+                .into_any_element()
+        },
+        |shown| {
+            let palette = shown.palette();
+            assert_eq!(shown.ground("active-bar"), Some(palette.accent_text));
+            assert_eq!(shown.bounds("active-bar").size.width, px(2.));
+            assert_eq!(shown.ground("both-bar"), Some(palette.focus));
+            assert!(!shown.is_drawn("plain-bar"));
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn a_gutter_plus_reveals_on_group_hover_and_escalates_on_direct_hover(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let mut shown = Shown::open(theme, cx, || {
+            div()
+                .group("diff-row")
+                .w(px(200.))
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(
+                    GutterPlus::new("plus")
+                        .reveal_on_group_hover("diff-row")
+                        .selector("plus"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .debug_selector(|| "code".into())
+                        .child("let x = 1;"),
+                )
+                .into_any_element()
+        });
+        let palette = shown.palette();
+        assert_eq!(shown.ground("plus"), None, "{theme}: hidden at rest");
+        shown.hover("code");
+        assert_eq!(
+            shown.ground("plus"),
+            Some(palette.raised),
+            "{theme}: revealed on row hover"
+        );
+        shown.hover("plus");
+        assert_eq!(
+            shown.ground("plus"),
+            Some(palette.accent),
+            "{theme}: accented on direct hover"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn hovering_an_unselected_interactive_segment_tints_its_ground(cx: &mut TestAppContext) {
+    for theme in THEMES {
+        let mut shown = Shown::open(theme, cx, || {
+            Segmented::new("mode")
+                .segment("unified", "Unified")
+                .segment("split", "Split")
+                .selected(0)
+                .selector("mode")
+                .on_select(|_, _, _| {})
+                .into_any_element()
+        });
+        let palette = shown.palette();
+        assert_eq!(shown.ground("mode-split"), None, "{theme}");
+        shown.hover("mode-split");
+        assert_eq!(
+            shown.ground("mode-split"),
+            Some(palette.raised.opacity(0.50)),
+            "{theme}"
+        );
+    }
 }

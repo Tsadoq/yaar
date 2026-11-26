@@ -552,3 +552,51 @@ fn the_add_control_opens_a_menu_whose_items_prompt_for_a_folder_or_start_a_new_w
         "new worktree was dispatched"
     );
 }
+
+#[gpui_kit::test]
+fn the_settings_button_in_the_sidebar_footer_opens_and_closes_settings_in_both_full_and_rail_forms(
+    cx: &mut TestAppContext,
+) {
+    let (shown, mut cx) = showing(&two_repositories(), WIDE, cx);
+    let screen_open = |cx: &mut VisualTestContext| {
+        shown
+            .frame
+            .read_with(cx, |frame, _| frame.settings_screen().is_some())
+    };
+    let click_settings = |cx: &mut VisualTestContext| {
+        let button = drawn("sidebar-settings", cx).expect("the settings button is drawn");
+        let sidebar = drawn("sidebar", cx).expect("the sidebar is drawn");
+        assert!(
+            sidebar.left() <= button.left()
+                && button.right() <= sidebar.right()
+                && sidebar.top() <= button.top()
+                && button.bottom() <= sidebar.bottom(),
+            "settings button {button:?} lies inside the sidebar {sidebar:?}"
+        );
+        cx.simulate_click(button.center(), Modifiers::none());
+    };
+
+    assert_eq!(form(&shown.sidebar, &mut cx), SidebarForm::Full);
+    assert!(!screen_open(&mut cx));
+    click_settings(&mut cx);
+    assert!(screen_open(&mut cx), "full form click opens settings");
+    assert!(drawn("settings-screen", &mut cx).is_some());
+    click_settings(&mut cx);
+    assert!(
+        !screen_open(&mut cx),
+        "full form second click closes settings"
+    );
+    assert_eq!(drawn("settings-screen", &mut cx), None);
+
+    cx.simulate_resize(wide(RAIL_BELOW - px(1.)));
+    assert_eq!(form(&shown.sidebar, &mut cx), SidebarForm::Rail);
+    click_settings(&mut cx);
+    assert!(screen_open(&mut cx), "rail form click opens settings");
+    assert!(drawn("settings-screen", &mut cx).is_some());
+    click_settings(&mut cx);
+    assert!(
+        !screen_open(&mut cx),
+        "rail form second click closes settings"
+    );
+    assert_eq!(drawn("settings-screen", &mut cx), None);
+}

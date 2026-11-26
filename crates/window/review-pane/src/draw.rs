@@ -12,6 +12,7 @@ use gpui_kit::*;
 use yaar_diff::{Hunk, Row, Side};
 use yaar_link::{
     Author, Base, BaseSource, CommentId, Comparison, FileStatus, NoComparison, ThreadId,
+    ThreadState,
 };
 use yaar_ui::diff::{
     DiffKind, DiffStats, GutterPlus, ViewedToggle, bar, gap_fill, ground, sign_colour, word,
@@ -134,6 +135,16 @@ impl Render for ReviewPane {
                 )
         });
         let comment_box = self.open_box.as_ref().map(|open| {
+            let header = div()
+                .debug_selector(|| "review-comment-box-header".to_owned())
+                .typed(TypeRole::CodeSmall)
+                .text_color(palette.text_muted)
+                .child(format!(
+                    "Comment on {}:{} ({})",
+                    open.view.at.path.display(),
+                    open.view.at.line + 1,
+                    side_name(open.view.at.side),
+                ));
             let footer = div()
                 .w_full()
                 .flex()
@@ -156,11 +167,15 @@ impl Render for ReviewPane {
                 );
             div()
                 .flex_none()
+                .flex()
+                .flex_col()
+                .gap(SPACE_2)
                 .px(SPACE_6)
                 .py(SPACE_4)
                 .border_t_1()
                 .border_color(palette.separator)
                 .on_action(cx.listener(Self::escape))
+                .child(header)
                 .child(
                     Field::textarea(&open.input)
                         .footer(footer)
@@ -265,7 +280,7 @@ impl Render for ReviewPane {
         });
         let list_view = list(
             self.list.clone(),
-            cx.processor(|pane, index: usize, _, cx| pane.draw_row(index, cx)),
+            cx.processor(|pane, index: usize, window, cx| pane.draw_row(index, window, cx)),
         )
         .size_full();
         let current_width = self.list.viewport_bounds().size.width;
@@ -275,6 +290,7 @@ impl Render for ReviewPane {
                 let width = pane.list.viewport_bounds().size.width;
                 if width > px(0.) && width != pane.list_width {
                     pane.list_width = width;
+                    pane.h_scroll = pane.h_scroll.min(pane.max_h_scroll());
                     if !pane.rows.is_empty() {
                         let top = pane.list.logical_scroll_top();
                         pane.sync_list(Some(top));
@@ -291,7 +307,18 @@ impl Render for ReviewPane {
                 .flex()
                 .flex_col()
                 .children(refused)
-                .child(self.with_keys(div().flex_1().min_h_0().child(list_view), cx)),
+                .child(
+                    self.with_keys(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .on_scroll(cx.listener(|pane, event: &ScrollEvent, _, cx| {
+                                pane.scroll_horizontal(event, cx);
+                            }))
+                            .child(list_view),
+                        cx,
+                    ),
+                ),
         );
         pane.children(bar).children(servers).child(
             body.children(start)
@@ -415,8 +442,9 @@ impl ReviewPane {
         }
     }
 
-    fn draw_row(&self, index: usize, cx: &Context<Self>) -> AnyElement {
+    fn draw_row(&self, index: usize, window: &Window, cx: &Context<Self>) -> AnyElement {
         let palette = palette(cx);
+        let focused = self.focus.is_focused(window);
         match &self.rows[index] {
             PaneRow::Commit { id, summary } => div()
                 .debug_selector(|| format!("review-row-{index}"))
@@ -425,9 +453,10 @@ impl ReviewPane {
                 .flex()
                 .items_center()
                 .gap(SPACE_4)
-                .px(SPACE_6)
+                .px(SPACE_5)
                 .overflow_hidden()
                 .whitespace_nowrap()
+                .bg(palette.fold_ground)
                 .border_b_1()
                 .border_color(palette.separator)
                 .child(
@@ -471,7 +500,7 @@ impl ReviewPane {
                     .py(SPACE_2)
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .bg(palette.pane)
+                    .bg(palette.fold_ground)
                     .border_t_1()
                     .border_b_1()
                     .border_color(palette.separator)
@@ -495,11 +524,11 @@ impl ReviewPane {
                     );
                 }
                 header = header.children(shared).child(div().flex_1());
-                let mut viewed_box = ViewedToggle::new(("review-viewed", index), viewed).on_click(
-                    cx.listener(move |pane, _: &ClickEvent, _, cx| {
+                let mut viewed_box = ViewedToggle::new(("review-viewed", index), viewed)
+                    .tooltip("Mark file as viewed (r)")
+                    .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
                         pane.toggle_viewed_path(file_path.clone(), cx);
-                    }),
-                );
+                    }));
                 if viewed {
                     viewed_box = viewed_box.selector(format!("review-viewed-{index}"));
                 }
@@ -525,7 +554,7 @@ impl ReviewPane {
                     .items_center()
                     .overflow_hidden()
                     .whitespace_nowrap();
-                self.draw_diff(row, index, path, shown, cx)
+                self.draw_diff(row, index, path, shown, focused, cx)
                     .into_any_element()
             }
             PaneRow::Thread { thread } => self.draw_thread_card(index, thread, cx),
@@ -566,7 +595,7 @@ impl ReviewPane {
 
     fn thread_indent(&self) -> Pixels {
         match self.layout {
-            Layout::Unified => px(60.),
+            Layout::Unified => px(100.),
             Layout::Split => SPACE_6,
         }
     }
@@ -611,6 +640,7 @@ impl ReviewPane {
             SharedString::from(format!("review-thread-resolve-{id}")),
             if resolved { "Reopen" } else { "Resolve" },
         )
+        .kind(ButtonKind::Ghost)
         .small()
         .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| {
             pane.resolve_or_reopen_thread(resolve_id.clone(), !resolved, cx);
@@ -639,6 +669,8 @@ impl ReviewPane {
             .child(resolve_button);
 
         let card = Card::new()
+            .elevated()
+            .accent(thread_accent(thread.state, &palette))
             .part(if has_comments {
                 CardPart::Top
             } else {
@@ -708,7 +740,7 @@ impl ReviewPane {
             (Author::Reviewer, None) => (
                 Avatar::you(),
                 "You".to_owned(),
-                Some(Chip::new("Draft").tone(Tone::Warn)),
+                (thread.comments.len() > 1).then(|| Chip::new("Draft").tone(Tone::Warn)),
             ),
         };
 
@@ -820,6 +852,7 @@ impl ReviewPane {
                         SharedString::from(format!("thread-attach-{attach_tid}")),
                         "Attach only this",
                     )
+                    .kind(ButtonKind::Ghost)
                     .small()
                     .on_click(cx.listener(
                         move |pane, _: &ClickEvent, _, cx| {
@@ -830,6 +863,8 @@ impl ReviewPane {
         });
 
         let mut card = Card::new()
+            .elevated()
+            .accent(thread_accent(thread.state, &palette))
             .part(if is_last {
                 CardPart::Bottom
             } else {
@@ -857,6 +892,7 @@ impl ReviewPane {
         index: usize,
         path: &Path,
         shown: &Row,
+        focused: bool,
         cx: &Context<Self>,
     ) -> Div {
         let palette = palette(cx);
@@ -868,9 +904,10 @@ impl ReviewPane {
             .as_ref()
             .filter(|_| self.position_row == Some(index))
             .map(|position| position.side);
+        let active_bar = cursor_bar_colour(focused, &palette);
         let focus_bar = |here: bool| {
             if here {
-                palette.focus
+                active_bar
             } else {
                 transparent_black()
             }
@@ -888,8 +925,17 @@ impl ReviewPane {
                 .child(line.map(|line| (line + 1).to_string()).unwrap_or_default())
         };
         let name = on.and_then(|_| self.name_range());
+        let h_scroll = self.h_scroll;
         let text = |side: Side, line: u32, kind: DiffKind, name: Option<Range<usize>>| {
-            line_text(diff, path, (index, side, line), kind, name, &palette)
+            line_text(
+                diff,
+                path,
+                (index, side, line),
+                kind,
+                name,
+                h_scroll,
+                &palette,
+            )
         };
         let go = |side: Side, layout: TextLayout| {
             cx.listener(move |pane, event: &MouseDownEvent, window, cx| {
@@ -901,6 +947,7 @@ impl ReviewPane {
                 pane.moved_over(Spot::Diff { index, side }, &layout, event, window, cx);
             })
         };
+        let group_name = SharedString::from(format!("diff-row-{index}"));
         let gutter = |side: Side, active: bool| {
             div()
                 .flex_none()
@@ -912,6 +959,8 @@ impl ReviewPane {
                 .child(
                     GutterPlus::new(("diff-plus", index * 2 + usize::from(side == Side::New)))
                         .visible(active)
+                        .reveal_on_group_hover(group_name.clone())
+                        .tooltip("Add comment (c)")
                         .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
                             pane.open_comment_at(index, side, window, cx);
                         })),
@@ -919,8 +968,18 @@ impl ReviewPane {
         };
 
         match (self.layout, shown) {
-            (_, Row::Skipped { old, .. }) => row
-                .pl(px(98.))
+            (Layout::Split, Row::Skipped { old, .. }) => row
+                .justify_center()
+                .px(SPACE_6)
+                .bg(palette.fold_ground)
+                .typed(TypeRole::Meta)
+                .text_color(palette.text_dim)
+                .child(match old.len() {
+                    1 => "⋯ 1 unchanged line".to_owned(),
+                    lines => format!("⋯ {lines} unchanged lines"),
+                }),
+            (Layout::Unified, Row::Skipped { old, .. }) => row
+                .pl(px(115.))
                 .pr(SPACE_6)
                 .bg(palette.fold_ground)
                 .typed(TypeRole::Meta)
@@ -941,6 +1000,7 @@ impl ReviewPane {
                 };
                 let (text, layout) = text(side, line, kind, name);
                 let row = row
+                    .group(group_name.clone())
                     .border_l_2()
                     .border_color(focus_bar(on.is_some()))
                     .on_mouse_down(MouseButton::Left, go(side, layout.clone()))
@@ -1006,12 +1066,27 @@ impl ReviewPane {
                         None => half,
                     }
                 };
-                row.child(half(Side::Old, DiffKind::Removed))
+                row.group(group_name.clone())
+                    .child(half(Side::Old, DiffKind::Removed))
                     .child(Divider::vertical())
                     .child(half(Side::New, DiffKind::Added))
             }
         }
     }
+}
+
+pub(crate) type Colour = Hsla;
+
+pub(crate) fn thread_accent(state: ThreadState, palette: &Palette) -> Colour {
+    match state {
+        ThreadState::Draft | ThreadState::WaitsForReviewer => palette.warn,
+        ThreadState::Addressed | ThreadState::Resolved => palette.ok,
+        ThreadState::Sent => palette.link,
+    }
+}
+
+pub(crate) fn cursor_bar_colour(focused: bool, palette: &Palette) -> Colour {
+    if focused { palette.focus } else { palette.edge }
 }
 
 pub(crate) fn side_name(side: Side) -> &'static str {
@@ -1107,6 +1182,7 @@ fn line_text(
     (index, side, line): (usize, Side, u32),
     kind: DiffKind,
     name: Option<Range<usize>>,
+    h_scroll: Pixels,
     palette: &Palette,
 ) -> (Div, TextLayout) {
     let text = diff.text(side, line);
@@ -1125,6 +1201,7 @@ fn line_text(
         &drawn,
         highlights,
         name,
+        h_scroll,
         palette.focus,
         palette.text,
     )
@@ -1137,6 +1214,7 @@ pub(crate) fn code_text(
     text: &str,
     highlights: Vec<(Range<usize>, HighlightStyle)>,
     name: Option<Range<usize>>,
+    h_scroll: Pixels,
     name_mark: Hsla,
     text_colour: Hsla,
 ) -> (Div, TextLayout) {
@@ -1168,6 +1246,7 @@ pub(crate) fn code_text(
         .whitespace_nowrap()
         .typed(TypeRole::Code)
         .text_color(text_colour)
+        .when(h_scroll > px(0.), |el| el.ml(-h_scroll))
         .child(styled)
         .children(over);
     (
@@ -1251,5 +1330,34 @@ pub(crate) fn unshown_sentence(why: Unshown) -> &'static str {
         Unshown::Binary => "Not text: its lines are not shown",
         Unshown::TooLarge => "Too large to show",
         Unshown::Refused => "The Keeper could not read this file",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use yaar_link::ThreadState;
+    use yaar_ui::themes::{DARK, Themes};
+
+    use super::{cursor_bar_colour, thread_accent};
+
+    #[test]
+    fn unfocused_diff_cursor_bar_dims_to_edge() {
+        let palette = Themes::built_in().named(DARK).expect("dark theme").palette;
+        assert_eq!(cursor_bar_colour(true, &palette), palette.focus);
+        assert_eq!(cursor_bar_colour(false, &palette), palette.edge);
+        assert_ne!(palette.focus, palette.edge);
+    }
+
+    #[test]
+    fn thread_card_accent_matches_thread_state() {
+        let palette = Themes::built_in().named(DARK).expect("dark theme").palette;
+        assert_eq!(thread_accent(ThreadState::Draft, &palette), palette.warn);
+        assert_eq!(
+            thread_accent(ThreadState::WaitsForReviewer, &palette),
+            palette.warn
+        );
+        assert_eq!(thread_accent(ThreadState::Addressed, &palette), palette.ok);
+        assert_eq!(thread_accent(ThreadState::Resolved, &palette), palette.ok);
+        assert_eq!(thread_accent(ThreadState::Sent, &palette), palette.link);
     }
 }

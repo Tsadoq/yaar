@@ -1,9 +1,10 @@
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window, div, px,
 };
 
 use super::{Button, marked};
-use crate::metrics::SPACE_5;
+use crate::metrics::{SPACE_3, SPACE_5};
 use crate::themes::palette;
 use crate::typography::{TypeRole, Typed};
 
@@ -57,11 +58,16 @@ impl RenderOnce for EmptyState {
         let palette = palette(cx);
         let lines = self.lines.into_iter().map(|line| {
             div()
+                .w_full()
+                .min_w_0()
+                .max_w(px(360.))
                 .typed(TypeRole::Body)
                 .text_color(palette.text_muted)
                 .child(line)
         });
         let state = div()
+            .w_full()
+            .min_w_0()
             .flex()
             .flex_col()
             .items_center()
@@ -71,6 +77,8 @@ impl RenderOnce for EmptyState {
             .text_center()
             .child(
                 div()
+                    .w_full()
+                    .min_w_0()
                     .typed(if self.display {
                         TypeRole::Display
                     } else {
@@ -80,7 +88,19 @@ impl RenderOnce for EmptyState {
                     .child(self.title),
             )
             .children(lines)
-            .children(self.actions);
+            .when(!self.actions.is_empty(), |state| {
+                state.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .justify_center()
+                        .gap(SPACE_3)
+                        .children(self.actions),
+                )
+            });
         marked(state, self.selector)
     }
 }

@@ -14,6 +14,7 @@ use ring::digest::{Context, SHA256};
 use ureq::tls::{Certificate, RootCerts, TlsConfig, TlsProvider};
 use url::{Host, Url};
 
+use crate::NavigatorConfig;
 use crate::registry::{Archive, Download, Platform, Registry};
 
 /// A fixed name that names neither the user, the machine, the project nor the app's version.
@@ -527,6 +528,60 @@ pub fn missing(registry: &Registry, platform: Platform, servers: &Path) -> Vec<S
         .filter(|(name, download)| !holds(servers, name, download))
         .map(|(name, _)| (*name).to_owned())
         .collect()
+}
+
+/// Ensures every built-in language server pinned for `config.platform` is available: skips rows
+/// that already have the pinned download in `config.servers` or a machine server on
+/// `config.search_path`, and fetches and verifies the rest.
+pub fn install_builtin_servers(
+    config: &NavigatorConfig,
+) -> Result<Vec<String>, Vec<(String, String)>> {
+    let Some(platform) = config.platform else {
+        return Ok(Vec::new());
+    };
+    let (registry, errors) = Registry::read(&config.builtin, None);
+    if !errors.is_empty() {
+        return Err(errors
+            .into_iter()
+            .map(|error| {
+                (
+                    error.row.unwrap_or_else(|| "registry".to_owned()),
+                    error.reason,
+                )
+            })
+            .collect());
+    }
+    let mut downloader: Option<Result<Downloader, String>> = None;
+    let mut newly_installed = Vec::new();
+    let mut failures = Vec::new();
+    for row in registry.rows() {
+        let Some((server, download)) = row.download(platform) else {
+            continue;
+        };
+        if holds(&config.servers, &server.name, download)
+            || crate::search::on_search_path(
+                row,
+                &config.search_path,
+                &config.environment,
+                Some(platform),
+            )
+        {
+            continue;
+        }
+        let client = downloader.get_or_insert_with(Downloader::new);
+        match client {
+            Ok(client) => match client.fetch(&server.name, download, &config.servers) {
+                Ok(_) => newly_installed.push(server.name.clone()),
+                Err(error) => failures.push((server.name.clone(), error.to_string())),
+            },
+            Err(reason) => failures.push((server.name.clone(), reason.clone())),
+        }
+    }
+    if failures.is_empty() {
+        Ok(newly_installed)
+    } else {
+        Err(failures)
+    }
 }
 
 #[cfg(test)]

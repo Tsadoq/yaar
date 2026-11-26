@@ -2,15 +2,18 @@
 //! the element whose listeners pause follow, and the view/form/follow controls call `steered`,
 //! never `acted`.
 
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use yaar_frame::SetBase;
 use yaar_link::{Comparison, FlowForm, SessionState, Step, TurnEnd};
 use yaar_ui::diff::DiffStats;
-use yaar_ui::metrics::{SPACE_3, SPACE_4, SPACE_5, SPACE_6};
-use yaar_ui::pieces::{Button, ButtonKind, Chip, EmptyState, Segmented, State, Tabs, Toggle, Tone};
+use yaar_ui::metrics::{SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_6, tabular};
+use yaar_ui::pieces::{
+    Button, ButtonKind, Chip, CountBadge, EmptyState, Segmented, State, StateDot, Tabs, Toggle,
+    Tone,
+};
 use yaar_ui::themes::palette;
 use yaar_ui::typography::{TypeRole, Typed};
 
@@ -20,7 +23,7 @@ use crate::{
     ReviewPane, TimelineEntry, ToggleFollow, ToggleLayout, View,
 };
 
-const TIMELINE_ROW_HEIGHT: Pixels = px(28.);
+const TIMELINE_ROW_HEIGHT: Pixels = px(30.);
 
 impl ReviewPane {
     pub(crate) fn render_bar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -69,6 +72,21 @@ impl ReviewPane {
             });
 
         let sessions = self.session_chips(cx);
+        let sessions_group = (!sessions.is_empty()).then(|| {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(SPACE_2)
+                .child(
+                    div()
+                        .typed(TypeRole::Small)
+                        .text_color(palette.text_dim)
+                        .whitespace_nowrap()
+                        .child("Reviewing:"),
+                )
+                .children(sessions)
+        });
         let server_chip = self.render_server_chip(cx);
 
         let (total_added, total_removed) = self.total_diff_stats();
@@ -151,6 +169,7 @@ impl ReviewPane {
                         Chip::new(label)
                             .mono()
                             .max_width(px(210.))
+                            .tooltip("Click to change comparison base branch")
                             .on_click("review-base-chip", |_, window, cx| {
                                 window.dispatch_action(Box::new(SetBase), cx)
                             }),
@@ -169,6 +188,7 @@ impl ReviewPane {
             .kind(ButtonKind::Primary)
             .small()
             .disabled(!has_review)
+            .tooltip("Queue unsent review comments for your next agent message (a)")
             .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
                 if attached {
                     pane.detach_review(&DetachReview, window, cx);
@@ -187,8 +207,12 @@ impl ReviewPane {
                 .gap(SPACE_3)
                 .child(
                     Button::new("review-mark-reviewed", "Mark reviewed")
+                        .kind(ButtonKind::Ghost)
                         .small()
                         .disabled(!has_review)
+                        .tooltip(
+                            "Mark current changes reviewed — future turns diff from here (Shift-R)",
+                        )
                         .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                             pane.mark_reviewed(&MarkReviewed, window, cx);
                         })),
@@ -196,7 +220,9 @@ impl ReviewPane {
                 .child(attach)
                 .child(
                     Button::new("review-commit", "Commit…")
+                        .kind(ButtonKind::Ghost)
                         .small()
+                        .tooltip("Stage all changes and commit with a message (Shift-C)")
                         .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                             pane.commit(&Commit, window, cx);
                         })),
@@ -204,7 +230,7 @@ impl ReviewPane {
 
             row = row
                 .children(reviewed_chip)
-                .children(sessions)
+                .children(sessions_group)
                 .children(server_chip)
                 .children(file_stats)
                 .child(div().flex_1())
@@ -246,6 +272,7 @@ impl ReviewPane {
         let follow = Toggle::new("flow-follow", follow_label)
             .on(self.following == Following::On)
             .paused(matches!(self.following, Following::Paused { .. }))
+            .tooltip("Automatically follow the agent's live reads and edits (Shift-F)")
             .selector("flow-follow")
             .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                 pane.toggle_follow(&ToggleFollow, window, cx);
@@ -300,7 +327,8 @@ impl ReviewPane {
             .items_center()
             .gap(SPACE_4)
             .px(SPACE_5)
-            .py(SPACE_3)
+            .py(SPACE_2)
+            .bg(palette.fold_ground)
             .overflow_hidden()
             .whitespace_nowrap()
             .border_b_1()
@@ -421,36 +449,7 @@ impl ReviewPane {
         let palette = palette(cx);
         let entry = &self.flow.entries()[index];
         let words = entry_words(entry);
-        let (role, text_colour, dot_colour, heading) = match entry {
-            TimelineEntry::Turn { .. } => (TypeRole::Label, palette.text_dim, None, true),
-            TimelineEntry::Step { step, .. } => {
-                let dot = match step {
-                    Step::Read { .. } => palette.text_dim,
-                    Step::Edit { .. } | Step::Write { .. } => palette.ok,
-                    Step::Command { .. } => palette.info,
-                };
-                (
-                    TypeRole::CodeSmall,
-                    if at { palette.link } else { palette.text },
-                    Some(dot),
-                    false,
-                )
-            }
-            TimelineEntry::End { how, .. } => {
-                let colour = match how {
-                    Some(TurnEnd::Finished) => palette.ok,
-                    Some(TurnEnd::Interrupted) => palette.warn,
-                    None => palette.text_muted,
-                };
-                (TypeRole::Meta, colour, Some(colour), false)
-            }
-        };
-        let label = if heading {
-            words.to_uppercase()
-        } else {
-            words.clone()
-        };
-        div()
+        let base = div()
             .debug_selector(|| format!("flow-entry-{index}"))
             .h(TIMELINE_ROW_HEIGHT)
             .w_full()
@@ -460,41 +459,164 @@ impl ReviewPane {
             .px(SPACE_6)
             .overflow_hidden()
             .whitespace_nowrap()
-            .border_l_2()
-            .border_color(if at {
-                palette.focus
-            } else {
-                transparent_black()
-            })
-            .when(heading, |row| row.bg(palette.window))
-            .when(reviewer && !heading, |row| row.bg(palette.raised))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |pane, _: &MouseDownEvent, _, cx| {
                     pane.click_timeline_entry(index, cx)
                 }),
-            )
-            .children(dot_colour.map(|colour| {
-                div()
-                    .flex_none()
-                    .typed(TypeRole::Meta)
-                    .text_color(colour)
-                    .child("●")
-            }))
-            .child(
-                // The words are in the selector: a test reads what was handed to the text system.
-                div()
-                    .debug_selector({
-                        let words = words.clone();
-                        move || format!("flow-entry-text-{index}:{words}")
+            );
+
+        match entry {
+            TimelineEntry::Turn { turn, .. } => {
+                let step_count = self.flow.step_count(turn);
+                let running = self.flow.is_running(turn);
+                let dot = StateDot::new(if running { State::Working } else { State::Idle });
+                base.bg(palette.window)
+                    .border_t_1()
+                    .border_b_1()
+                    .border_color(palette.separator)
+                    .child(dot)
+                    .child(
+                        // The words are in the selector: a test reads what was handed to the text
+                        // system.
+                        div()
+                            .debug_selector({
+                                let words = words.clone();
+                                move || format!("flow-entry-text-{index}:{words}")
+                            })
+                            .min_w_0()
+                            .truncate()
+                            .typed(TypeRole::Label)
+                            .text_color(palette.text)
+                            .child(words.to_uppercase()),
+                    )
+                    .child(div().flex_1())
+                    .when(step_count > 0, |row| row.child(CountBadge::new(step_count)))
+                    .when(step_count == 0 && running, |row| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .typed(TypeRole::Tiny)
+                                .text_color(palette.text_dim)
+                                .child("Working…"),
+                        )
                     })
-                    .min_w_0()
-                    .truncate()
-                    .typed(role)
-                    .text_color(text_colour)
-                    .child(label),
-            )
+            }
+            TimelineEntry::Step { number, step, .. } => {
+                let (badge_label, badge_tone, detail, extra) = match step {
+                    Step::Read { path } => ("READ", Tone::Plain, path.display().to_string(), None),
+                    Step::Edit { path, lines } => {
+                        let spans = format_line_ranges(lines.as_deref());
+                        let extra = (!spans.is_empty()).then(|| format!("lines {spans}"));
+                        ("EDIT", Tone::Ok, path.display().to_string(), extra)
+                    }
+                    Step::Write { path } => ("WRITE", Tone::Ok, path.display().to_string(), None),
+                    Step::Command { command } => (
+                        "RUN",
+                        Tone::Info,
+                        command.lines().next().unwrap_or_default().to_owned(),
+                        None,
+                    ),
+                };
+                let text_colour = if at { palette.link } else { palette.text };
+                base.border_l_2()
+                    .border_color(if at {
+                        palette.focus
+                    } else {
+                        transparent_black()
+                    })
+                    .when(reviewer, |row| row.bg(palette.raised))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(22.))
+                            .flex()
+                            .justify_end()
+                            .typed(TypeRole::Tiny)
+                            .font_features(tabular())
+                            .text_color(palette.text_dim)
+                            .child(number.to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(62.))
+                            .flex()
+                            .items_center()
+                            .child(Chip::new(badge_label).tone(badge_tone)),
+                    )
+                    .child(
+                        // The words are in the selector: a test reads what was handed to the text
+                        // system.
+                        div()
+                            .debug_selector({
+                                let words = words.clone();
+                                move || format!("flow-entry-text-{index}:{words}")
+                            })
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(SPACE_3)
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .typed(TypeRole::CodeSmall)
+                                    .text_color(text_colour)
+                                    .child(detail),
+                            )
+                            .children(extra.map(|spans| {
+                                div()
+                                    .flex_none()
+                                    .typed(TypeRole::Small)
+                                    .text_color(palette.text_dim)
+                                    .whitespace_nowrap()
+                                    .child(spans)
+                            })),
+                    )
+            }
+            TimelineEntry::End { how, .. } => {
+                let (colour, state) = match how {
+                    Some(TurnEnd::Finished) => (palette.ok, State::Ok),
+                    Some(TurnEnd::Interrupted) => (palette.warn, State::NeedsYou),
+                    None => (palette.text_muted, State::Idle),
+                };
+                base.border_l_2()
+                    .border_color(transparent_black())
+                    .when(reviewer, |row| row.bg(palette.raised))
+                    .child(StateDot::new(state))
+                    .child(
+                        div()
+                            .debug_selector({
+                                let words = words.clone();
+                                move || format!("flow-entry-text-{index}:{words}")
+                            })
+                            .min_w_0()
+                            .truncate()
+                            .typed(TypeRole::Meta)
+                            .text_color(colour)
+                            .child(words),
+                    )
+            }
+        }
     }
+}
+
+pub(crate) fn format_line_ranges(lines: Option<&[RangeInclusive<u32>]>) -> String {
+    lines
+        .into_iter()
+        .flatten()
+        .map(|range| {
+            if range.start() == range.end() {
+                range.start().to_string()
+            } else {
+                format!("{}-{}", range.start(), range.end())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn entry_words(entry: &TimelineEntry) -> String {
@@ -503,15 +625,7 @@ fn entry_words(entry: &TimelineEntry) -> String {
         TimelineEntry::Step { step, .. } => match step {
             Step::Read { path } => format!("Read {}", path.display()),
             Step::Edit { path, lines } => {
-                let lines =
-                    lines
-                        .iter()
-                        .flatten()
-                        .map(|range| match range.start() == range.end() {
-                            true => range.start().to_string(),
-                            false => format!("{}-{}", range.start(), range.end()),
-                        });
-                let lines = lines.collect::<Vec<_>>().join(", ");
+                let lines = format_line_ranges(lines.as_deref());
                 match lines.is_empty() {
                     true => format!("Edit {}", path.display()),
                     false => format!("Edit {} lines {lines}", path.display()),

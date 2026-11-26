@@ -134,6 +134,21 @@ impl ReviewPane {
         self.navigate.file_scroll.scroll_to_item(item, strategy);
     }
 
+    pub(crate) fn scroll_file_to_comment(&self, thread: &ThreadId, comment: &CommentId) {
+        if self.navigate.file.is_none() {
+            return;
+        }
+        let items = self.file_items();
+        if let Some(item) = items
+            .iter()
+            .position(|item| matches!(item, FileItem::Comment(t, c) if t == thread && c == comment))
+        {
+            self.navigate
+                .file_scroll
+                .scroll_to_item(item, ScrollStrategy::Nearest);
+        }
+    }
+
     pub(crate) fn go_back(
         &mut self,
         _: &crate::GoBack,
@@ -280,6 +295,7 @@ impl ReviewPane {
             window,
             cx,
         );
+        self.scroll_file_to(shown.line, ScrollStrategy::Center);
         true
     }
 
@@ -397,6 +413,7 @@ impl ReviewPane {
                     &text[..end],
                     highlights,
                     name,
+                    px(0.),
                     palette.focus,
                     palette.text,
                 );

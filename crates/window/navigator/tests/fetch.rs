@@ -1226,3 +1226,166 @@ fn the_reason_a_download_failed_is_one_line_on_the_standard_error() {
     assert!(ours[0].contains("standin"), "{}", ours[0]);
     assert!(ours[0].contains("pinned"), "{}", ours[0]);
 }
+
+#[test]
+fn with_auto_download_opening_a_file_downloads_a_missing_builtin_server_without_asking() {
+    let scratch = Scratch::new();
+    // No marker file (`main.sil`): opening/asking on `lib.sil` triggers the first search.
+    let repo = scratch.repository("project", &[("lib.sil", "def alpha\nuse alpha\n")]);
+    let one = archive_of("1");
+    let loopback = Loopback::serve(vec![("standin-1.tar.gz".to_owned(), one.clone())]);
+    let log = scratch.root.join("standin.log");
+    let row = row_with(
+        &log,
+        &download_of("1", &loopback.url("standin-1.tar.gz"), &one),
+    );
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+
+    let mut config = scratch.config(&row);
+    config.auto_download = true;
+    let mut running = Running::start(config);
+    running.show(&repo, &ws, &repository);
+
+    // Asking on a file of the language triggers the download automatically, with no Ask::Download.
+    let at = place(&repo, &ws, Tree::Worktree, "lib.sil", 2, "alpha", 0);
+    let _ = running.hover(at.clone(), DEADLINE);
+
+    let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    assert_eq!(ready.program, Some(program_of(&scratch, "1")));
+    assert!(shows_downloading(&running.told));
+    assert_eq!(lines(&loopback), ["GET /standin-1.tar.gz"]);
+    let record = installed(&servers_of(&scratch), "standin").expect("version 1 is installed");
+    assert_eq!(record.version, "1");
+    assert_eq!(record.sha256, sha256(&one));
+
+    let answer = running.hover(at, DEADLINE);
+    assert!(
+        !answer.guessed,
+        "once auto-downloaded, the server answers directly"
+    );
+    running.end();
+}
+
+#[test]
+fn a_failed_auto_download_falls_back_to_missing_with_offer_and_does_not_loop_retry() {
+    let scratch = Scratch::new();
+    let first = scratch.repository("first", &[("main.sil", "def alpha\n")]);
+    let second = scratch.repository("second", &[("main.sil", "def alpha\n")]);
+    let one = archive_of("1");
+    let loopback = Loopback::serve(vec![("standin-1.tar.gz".to_owned(), one.clone())]);
+    loopback.status("standin-1.tar.gz", 500);
+    let log = scratch.root.join("standin.log");
+    let row = row_with(
+        &log,
+        &download_of("1", &loopback.url("standin-1.tar.gz"), &one),
+    );
+    let (ws1, ws2) = (workspace_id('1'), workspace_id('2'));
+
+    let mut config = scratch.config(&row);
+    config.auto_download = true;
+    let mut running = Running::start(config);
+    running.show(&first, &ws1, &repository_id('1'));
+
+    running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
+        matches!(state.state, State::Downloading { .. })
+    });
+    let missing = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
+        matches!(state.state, State::Missing { .. })
+    });
+    assert_eq!(
+        missing.state,
+        State::Missing {
+            offer: Some(offer_of("1", &one))
+        }
+    );
+    assert_eq!(installed(&servers_of(&scratch), "standin"), None);
+
+    // Showing another workspace for the same language must not loop-retry automatically.
+    running.ask(Ask::Workspaces(vec![
+        root_of(&first, &ws1, '1'),
+        root_of(&second, &ws2, '2'),
+    ]));
+    running.ask(Ask::OnScreen(Some(ws2.clone())));
+    running.wait_state(&ws2, "standin", None, DEADLINE, |state| {
+        state.state
+            == State::Missing {
+                offer: Some(offer_of("1", &one)),
+            }
+    });
+    barrier(&mut running, &first, &ws1);
+    assert_eq!(
+        lines(&loopback),
+        ["GET /standin-1.tar.gz"],
+        "failed automatic download is attempted only once"
+    );
+
+    // A manual Ask::Download still works once the server recovers.
+    loopback.clear_status("standin-1.tar.gz");
+    running.ask(Ask::Download {
+        language: "standin".to_owned(),
+    });
+    let ready = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    assert_eq!(ready.program, Some(program_of(&scratch, "1")));
+    assert_eq!(
+        lines(&loopback),
+        ["GET /standin-1.tar.gz", "GET /standin-1.tar.gz"]
+    );
+    running.end();
+}
+
+#[test]
+fn install_builtin_servers_fetches_missing_skips_installed_or_on_path_and_reports_failures() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Scratch::new();
+    let one = archive_of("1");
+    let loopback = Loopback::serve(vec![("standin-1.tar.gz".to_owned(), one.clone())]);
+    let log = scratch.root.join("standin.log");
+    let row = row_with(
+        &log,
+        &download_of("1", &loopback.url("standin-1.tar.gz"), &one),
+    );
+
+    // 1. Missing: downloads and verifies.
+    let config = scratch.config(&row);
+    let installed_now =
+        yaar_navigator::download::install_builtin_servers(&config).expect("install succeeds");
+    assert_eq!(installed_now, vec!["standin".to_owned()]);
+    assert_eq!(lines(&loopback), ["GET /standin-1.tar.gz"]);
+    assert_eq!(
+        installed(&servers_of(&scratch), "standin").unwrap().version,
+        "1"
+    );
+
+    // 2. Already installed at pinned version: skips download.
+    let again = yaar_navigator::download::install_builtin_servers(&config)
+        .expect("second install succeeds");
+    assert!(again.is_empty(), "{again:?}");
+    assert_eq!(lines(&loopback), ["GET /standin-1.tar.gz"]);
+
+    // 3. Machine candidate already on search_path: skips download even when servers dir is empty.
+    let on_path = Scratch::new();
+    let machine_bin = on_path.root.join("bin").join("standin-lsp");
+    std::fs::create_dir_all(machine_bin.parent().unwrap()).expect("bin dir");
+    std::fs::write(&machine_bin, "#!/bin/sh\nexit 0\n").expect("write machine server");
+    std::fs::set_permissions(&machine_bin, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod machine server");
+    let skipped = yaar_navigator::download::install_builtin_servers(&on_path.config(&row))
+        .expect("path skip succeeds");
+    assert!(skipped.is_empty(), "{skipped:?}");
+    assert_eq!(installed(&servers_of(&on_path), "standin"), None);
+    assert_eq!(lines(&loopback), ["GET /standin-1.tar.gz"]);
+
+    // 4. Download failure returns Err naming the failing server.
+    let failing = Scratch::new();
+    loopback.status("standin-1.tar.gz", 500);
+    let err = yaar_navigator::download::install_builtin_servers(&failing.config(&row))
+        .expect_err("HTTP 500 fails install");
+    assert_eq!(err.len(), 1, "{err:?}");
+    assert_eq!(err[0].0, "standin");
+    assert!(err[0].1.contains("500"), "{err:?}");
+}

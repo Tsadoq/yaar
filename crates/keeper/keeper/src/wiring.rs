@@ -86,7 +86,8 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         | RequestKind::GetChanges
         | RequestKind::ReadFile
         | RequestKind::OpenTerminal
-        | RequestKind::ResizeTerminal => Answerer::Here,
+        | RequestKind::ResizeTerminal
+        | RequestKind::CloseTerminal => Answerer::Here,
         // Saves keep typing order and a reading after a save must find it. A copy or a mark of
         // reviewed can take a second on a large repository, which the connection's thread must not
         // wait for.
@@ -142,7 +143,9 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // read between two changes and sent after the later fact, it would pass for the newer list.
         RequestKind::ListWorkspaces => true,
         RequestKind::GetChanges | RequestKind::ReadFile => false,
-        RequestKind::OpenTerminal | RequestKind::ResizeTerminal => false,
+        RequestKind::OpenTerminal | RequestKind::ResizeTerminal | RequestKind::CloseTerminal => {
+            false
+        }
         // Their facts carry only the workspace's id and a Window told one reads again, so their
         // order does not matter; none may wait behind a recording or the user's git.
         RequestKind::GetReviews
@@ -319,6 +322,15 @@ impl Parts {
                         reason: other.to_string(),
                     },
                 }),
+            Request::CloseTerminal { terminal } => {
+                if self.terminals.remove(&terminal) {
+                    self.dock
+                        .stop_one(&yaar_dock::TerminalId::new(terminal.as_str()));
+                    Ok(Reply::Done)
+                } else {
+                    Err(Refusal::UnknownTerminal { terminal })
+                }
+            }
             Request::GetReviews { workspace } => {
                 get_reviews(workspaces, reviews, &kept.store, workspace).map(Reply::Reviews)
             }
@@ -657,8 +669,11 @@ impl Terminals {
         }
     }
 
-    fn remove(&self, terminal: &yaar_link::TerminalId) {
-        self.held().retain(|held| held.id != *terminal);
+    fn remove(&self, terminal: &yaar_link::TerminalId) -> bool {
+        let mut held = self.held();
+        let before = held.len();
+        held.retain(|held| held.id != *terminal);
+        held.len() != before
     }
 
     fn list(&self) -> Vec<yaar_link::TerminalInfo> {

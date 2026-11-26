@@ -452,3 +452,72 @@ fn a_window_of_another_version_cannot_type_into_a_terminal() {
     let window = scratch.window();
     window.stop(keeper);
 }
+
+#[test]
+fn close_terminal_stops_one_running_terminal_and_refuses_an_unknown_one() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper(Duration::from_secs(60));
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let first = window.open_terminal(&workspace, SIZE);
+    let Ok(Reply::TerminalOpened { terminal: second }) =
+        window.ask_amid_output(Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: Program::Shell,
+            size: SIZE,
+        })
+    else {
+        panic!("expected second terminal to open");
+    };
+
+    assert_eq!(
+        window.ask_amid_output(Request::CloseTerminal {
+            terminal: first.clone(),
+        }),
+        Ok(Reply::Done)
+    );
+
+    let list_id = window.send(Request::ListTerminals);
+    let mut saw_ended = false;
+    let listed = loop {
+        match window.next() {
+            Message::Reply { to, reply } if to == list_id => match reply {
+                Ok(Reply::Terminals(listed)) => break listed,
+                other => panic!("expected terminals list: {other:?}"),
+            },
+            Message::Fact(Fact::TerminalEnded { terminal, .. }) if terminal == first => {
+                saw_ended = true;
+            }
+            Message::Output { .. } => {}
+            other => panic!("unexpected frame while listing terminals: {other:?}"),
+        }
+    };
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, second);
+
+    while !saw_ended {
+        match window.next() {
+            Message::Fact(Fact::TerminalEnded { terminal, .. }) if terminal == first => {
+                saw_ended = true;
+            }
+            Message::Output { .. } => {}
+            other => panic!("unexpected frame while waiting for closed terminal to end: {other:?}"),
+        }
+    }
+
+    assert_eq!(
+        window.ask_amid_output(Request::CloseTerminal {
+            terminal: first.clone(),
+        }),
+        Err(Refusal::UnknownTerminal { terminal: first })
+    );
+    let unknown = TerminalId::new("0".repeat(32));
+    assert_eq!(
+        window.ask_amid_output(Request::CloseTerminal {
+            terminal: unknown.clone(),
+        }),
+        Err(Refusal::UnknownTerminal { terminal: unknown })
+    );
+    window.stop(keeper);
+}

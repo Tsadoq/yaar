@@ -489,6 +489,15 @@ impl Composed {
                     !states.cleaning() && states.sizes().is_some()
                 })
             }),
+            RequestKind::CloseTerminal => {
+                let Request::CloseTerminal { terminal } = passed else {
+                    panic!("the step of CloseTerminal waited for {passed:?}")
+                };
+                wait_until(cx, "the closed terminal to leave the pane", |cx| {
+                    self.terminals
+                        .read_with(cx, |pane, _| !pane.terminals().contains(terminal))
+                });
+            }
             RequestKind::AnswerConsent => {
                 let Request::AnswerConsent { answer, .. } = passed else {
                     panic!("the step of AnswerConsent waited for {passed:?}")
@@ -1402,6 +1411,20 @@ impl Composed {
                 RequestKind::ResolveAddressed => {
                     let (review, _) = self.agent_with_a_thread(cx);
                     let request = Request::ResolveAddressed { review };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::CloseTerminal => {
+                    let before: Vec<_> = self.terminals.read_with(cx, |pane, _| pane.terminals());
+                    self.press(&Self::control_titled("New Terminal"), cx);
+                    let mut opened = None;
+                    wait_until(cx, "the fresh terminal to close", |cx| {
+                        opened = self.terminals.read_with(cx, |pane, _| {
+                            pane.focused().filter(|id| !before.contains(id))
+                        });
+                        opened.is_some()
+                    });
+                    let terminal = opened.expect("a newly opened terminal is focused");
+                    let request = Request::CloseTerminal { terminal };
                     (Answer::Nothing, Box::new(move |passed| *passed == request))
                 }
             };

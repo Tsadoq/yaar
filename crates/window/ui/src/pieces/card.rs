@@ -1,10 +1,11 @@
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, IntoElement, ParentElement, Refineable as _, RenderOnce, SharedString,
+    AnyElement, App, Hsla, IntoElement, ParentElement, Refineable as _, RenderOnce, SharedString,
     StyleRefinement, Styled, Window, div, px,
 };
 
 use super::{marked, part};
+use crate::colour::composited;
 use crate::metrics::{RADIUS_CARD, SPACE_3, SPACE_5, SPACE_6};
 use crate::themes::palette;
 use crate::typography::{TypeRole, Typed};
@@ -27,6 +28,8 @@ pub struct Card {
     children: Vec<AnyElement>,
     dashed: bool,
     selected: bool,
+    elevated: bool,
+    accent: Option<Hsla>,
     part: CardPart,
     style: StyleRefinement,
     selector: Option<SharedString>,
@@ -39,6 +42,8 @@ impl Card {
             children: Vec::new(),
             dashed: false,
             selected: false,
+            elevated: false,
+            accent: None,
             part: CardPart::Whole,
             style: StyleRefinement::default(),
             selector: None,
@@ -58,6 +63,18 @@ impl Card {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Lifts the card subtly above the pane ground rather than receding to the window ground.
+    pub fn elevated(mut self) -> Self {
+        self.elevated = true;
+        self
+    }
+
+    /// Draws a two-pixel left accent bar inside the card without shifting its layout.
+    pub fn accent(mut self, colour: Hsla) -> Self {
+        self.accent = Some(colour);
         self
     }
 
@@ -106,14 +123,26 @@ impl RenderOnce for Card {
                 .child(header);
             marked(row, part(&self.selector, "header"))
         });
+        let accent_bar = self.accent.map(|colour| {
+            let bar = div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(2.))
+                .bg(colour);
+            marked(bar, part(&self.selector, "accent"))
+        });
         let dashed = self.dashed;
         let selected = self.selected;
+        let elevated = self.elevated;
         let border_colour = if selected {
             palette.focus
         } else {
             palette.edge
         };
         let mut card = div()
+            .relative()
             .flex()
             .overflow_hidden()
             .border_color(border_colour)
@@ -144,14 +173,18 @@ impl RenderOnce for Card {
                     .text_color(palette.text_muted)
             })
             .when(!dashed, |card| {
-                card.flex_col().bg(if selected {
+                let ground = if selected {
                     palette.raised
+                } else if elevated {
+                    composited(palette.raised.opacity(0.45), palette.pane)
                 } else {
                     palette.window
-                })
+                };
+                card.flex_col().bg(ground)
             })
             .children(header)
-            .children(self.children);
+            .children(self.children)
+            .children(accent_bar);
         card.style().refine(&self.style);
         marked(card, self.selector)
     }
