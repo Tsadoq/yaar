@@ -106,6 +106,13 @@ impl AgentList {
         }
     }
 
+    pub fn choose_cli(&mut self, agent: &str, cx: &mut Context<Self>) {
+        if self.clis.iter().any(|cli| cli.agent == agent) && self.chosen.as_deref() != Some(agent) {
+            self.chosen = Some(agent.to_owned());
+            cx.notify();
+        }
+    }
+
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let asked = self
             .link
