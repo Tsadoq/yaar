@@ -27,7 +27,7 @@ mod tree;
 mod turns;
 mod whose;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -556,6 +556,9 @@ pub struct ReviewPane {
     keep: bool,
     chosen: Option<ReviewId>,
     sessions: Vec<Session>,
+    session_picker_open: bool,
+    show_empty_past_sessions: bool,
+    session_picker_bounds: Rc<Cell<Bounds<Pixels>>>,
     view: View,
     form: FlowForm,
     at: Option<FlowAt>,
@@ -627,6 +630,9 @@ impl ReviewPane {
             keep: models.settings.read(cx).turn_end() == TurnEndSelects::KeepSelection,
             chosen: None,
             sessions: Vec::new(),
+            session_picker_open: false,
+            show_empty_past_sessions: false,
+            session_picker_bounds: Rc::default(),
             view: View::Changes,
             form: FlowForm::Timeline,
             at: None,

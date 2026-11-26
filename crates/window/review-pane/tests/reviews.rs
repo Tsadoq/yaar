@@ -155,6 +155,11 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
 
     tell_sessions(&mut stage, vec![session_a(), session_b()], &mut cx);
     assert!(drawn("review-session", &mut cx).is_none());
+    assert!(drawn("review-session-picker", &mut cx).is_some());
+    assert!(drawn("review-session-picker-name:Claude Code 1", &mut cx).is_some());
+    assert!(drawn("review-session-0", &mut cx).is_none());
+    click("review-session-picker", &mut cx);
+    assert!(drawn("review-session-popover", &mut cx).is_some());
     assert!(drawn("review-session-0", &mut cx).is_some());
     assert!(drawn("review-session-1", &mut cx).is_some());
     assert!(drawn("review-session-2", &mut cx).is_none());
@@ -162,6 +167,8 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
     assert!(drawn("review-session-name-1:Claude Code 2", &mut cx).is_some());
     assert_eq!(review_shown(&stage, &mut cx), Some(r1()));
     click("review-session-1", &mut cx);
+    assert!(drawn("review-session-popover", &mut cx).is_none());
+    assert!(drawn("review-session-picker-name:Claude Code 2", &mut cx).is_some());
     assert_eq!(review_shown(&stage, &mut cx), Some(r2()));
     assert_eq!(
         stage
@@ -213,6 +220,7 @@ fn the_text_drawn_for_a_session_is_its_title_and_not_the_name_of_its_agent(
 
     let other = session('b', short, SessionState::Works, Some(r2()));
     tell_sessions(&mut stage, vec![titled(long), other], &mut cx);
+    click("review-session-picker", &mut cx);
     let first = name_width(0, long, &mut cx);
     let second = name_width(1, short, &mut cx);
     assert!(
@@ -232,6 +240,7 @@ fn a_comment_on_a_change_no_agent_made_goes_to_the_review_on_screen(cx: &mut Tes
     let mut listed = outside();
     listed[0].file = file("outside.txt", FileStatus::Modified);
     stage.keeper.set_uncommitted(listed.clone());
+    click("review-session-picker", &mut cx);
     click("review-session-1", &mut cx);
     assert_eq!(review_shown(&stage, &mut cx), Some(r2()));
 
@@ -427,6 +436,7 @@ fn a_reviewer_who_moves_to_another_review_leaves_the_open_comment_box_and_a_turn
         matches!(&saved, Request::SaveDraft { review, text, .. } if *review == r1() && text == "x"),
         "{saved:?}"
     );
+    click("review-session-picker", &mut cx);
     click("review-session-1", &mut cx);
     assert_eq!(review_shown(&stage, &mut cx), Some(r2()));
     assert_eq!(box_of(&stage, &mut cx), None);
@@ -449,4 +459,96 @@ fn a_reviewer_who_moves_to_another_review_leaves_the_open_comment_box_and_a_turn
         })
     });
     assert_eq!(box_of(&stage, &mut cx).map(|open| open.review), Some(r2()));
+}
+
+#[gpui_kit::test]
+fn session_picker_groups_active_and_past_reviews_collapses_empty_ended_sessions_and_dismisses_on_escape(
+    cx: &mut TestAppContext,
+) {
+    let r3 = ReviewId::new("3".repeat(32));
+    let r4 = ReviewId::new("4".repeat(32));
+    let (models, keeper) = link_up(vec![workspace('1', "feature")], cx);
+    keeper.set_uncommitted(outside());
+    keeper.set_history(History {
+        workspace: id('1'),
+        start: Some(COMMIT.to_owned()),
+        entries: Vec::new(),
+    });
+    let mut past_with_thread = review_with(r2(), Some(session_id('b')), None);
+    past_with_thread.threads.push(thread_on_story('t'));
+    keeper.set_reviews(reviews_of(vec![
+        review_with(r1(), Some(session_id('a')), None),
+        past_with_thread,
+        review_with(r3.clone(), Some(session_id('c')), None),
+        review_with(r4.clone(), Some(session_id('d')), None),
+    ]));
+    let (mut stage, mut cx) = open_window(models, keeper, cx);
+    let changes = since_main(Vec::new(), vec![file("story.txt", FileStatus::Modified)]);
+    stage
+        .keeper
+        .show(&changes, |_| texts("a\nb\n", "a\nc\n"), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+    wait_until(&mut cx, "the reviews", |cx| {
+        stage.pane.read_with(cx, |pane, _| pane.review().is_some())
+    });
+
+    let active = session('a', "Claude Code 4", SessionState::Works, Some(r1()));
+    let ended_with_thread = session('b', "Claude Code 2", SessionState::NotRunning, Some(r2()));
+    let ended_empty_1 = session(
+        'c',
+        "Claude Code 1",
+        SessionState::NotRunning,
+        Some(r3.clone()),
+    );
+    let ended_empty_2 = session('d', "pi 1", SessionState::NotRunning, Some(r4.clone()));
+    tell_sessions(
+        &mut stage,
+        vec![active, ended_with_thread, ended_empty_1, ended_empty_2],
+        &mut cx,
+    );
+
+    assert_eq!(review_shown(&stage, &mut cx), Some(r1()));
+    assert!(drawn("review-session-picker", &mut cx).is_some());
+    assert!(drawn("review-session-picker-name:Claude Code 4", &mut cx).is_some());
+
+    // Opening the picker shows the active session and the ended session with comments, while
+    // collapsing the two empty ended sessions behind a toggle without deleting their reviews.
+    click("review-session-picker", &mut cx);
+    assert!(drawn("review-session-popover", &mut cx).is_some());
+    let active_bounds = drawn("review-session-0", &mut cx).expect("active session row");
+    let past_bounds = drawn("review-session-1", &mut cx).expect("past session with thread row");
+    assert!(
+        active_bounds.bottom() <= past_bounds.top(),
+        "active sessions appear above past reviews"
+    );
+    assert!(
+        drawn("review-session-2", &mut cx).is_none(),
+        "empty ended session 1 is collapsed by default"
+    );
+    assert!(
+        drawn("review-session-3", &mut cx).is_none(),
+        "empty ended session 2 is collapsed by default"
+    );
+    assert!(drawn("review-session-show-empty", &mut cx).is_some());
+
+    // Expanding reveals both empty ended sessions so their reviews remain reachable.
+    click("review-session-show-empty", &mut cx);
+    assert!(drawn("review-session-2", &mut cx).is_some());
+    assert!(drawn("review-session-3", &mut cx).is_some());
+    assert!(drawn("review-session-name-2:Claude Code 1", &mut cx).is_some());
+    assert!(drawn("review-session-name-3:pi 1", &mut cx).is_some());
+
+    // Escape dismisses the popover cleanly.
+    cx.update(|window, cx| stage.focus.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(drawn("review-session-popover", &mut cx).is_none());
+
+    // Reopening keeps the expanded choice so the user can still select an empty past review.
+    click("review-session-picker", &mut cx);
+    click("review-session-2", &mut cx);
+    assert_eq!(review_shown(&stage, &mut cx), Some(r3));
+    assert!(drawn("review-session-popover", &mut cx).is_none());
+    assert!(drawn("review-session-picker-name:Claude Code 1", &mut cx).is_some());
 }

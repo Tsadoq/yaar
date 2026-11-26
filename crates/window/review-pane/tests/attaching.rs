@@ -1174,10 +1174,14 @@ fn next_review_and_the_session_bar_reach_the_review_of_no_agent_and_come_back_fr
         })
     });
     assert_eq!(shown(&stage, &mut cx), Some(none.clone()));
+    assert!(is_drawn("review-session-picker", &mut cx));
+    assert!(is_drawn("review-session-picker-name:No agent", &mut cx));
+    click("review-session-picker", &mut cx);
     assert!(is_drawn("review-session-name-0:Claude Code 1", &mut cx));
     assert!(is_drawn("review-session-name-1:Claude Code 2", &mut cx));
     assert!(is_drawn("review-session-name-2:No agent", &mut cx));
     assert!(!is_drawn("review-session-3", &mut cx));
+    click("review-session-picker", &mut cx);
 
     cx.update(|window, cx| stage.focus.focus(window, cx));
     for wanted in [review_id(), b.clone(), none.clone(), review_id(), b.clone()] {
@@ -1185,8 +1189,10 @@ fn next_review_and_the_session_bar_reach_the_review_of_no_agent_and_come_back_fr
         assert_eq!(shown(&stage, &mut cx), Some(wanted));
     }
 
+    click("review-session-picker", &mut cx);
     click("review-session-2", &mut cx);
     assert_eq!(shown(&stage, &mut cx), Some(none));
+    click("review-session-picker", &mut cx);
     click("review-session-0", &mut cx);
     assert_eq!(shown(&stage, &mut cx), Some(review_id()));
 }

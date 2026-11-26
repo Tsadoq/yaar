@@ -39,6 +39,8 @@ impl ReviewPane {
             self.reviews_of = workspace.clone();
             self.reviews = None;
             self.chosen = None;
+            self.session_picker_open = false;
+            self.show_empty_past_sessions = false;
             self.saves.clear();
             self.reading_reviews = None;
             self.notice = None;

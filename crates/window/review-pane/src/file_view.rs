@@ -155,6 +155,9 @@ impl ReviewPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_session_picker(cx) {
+            return;
+        }
         self.acted(cx);
         self.follow_cursor();
         if self.drop_hover() {
