@@ -765,3 +765,62 @@ fn a_record_for_a_session_the_store_does_not_hold_is_refused_and_keeps_nothing()
     assert_eq!(store.session_cli_record(&sid(9)).expect("read"), None);
     assert_eq!(store.session_cli_record(&sid(1)).expect("read"), None);
 }
+
+#[test]
+fn dismissing_resumable_sessions_marks_only_cut_off_rows_gone_and_preserves_reviews() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    put_all(
+        &store,
+        &[session(1, 1), session(2, 1), session(3, 1), session(4, 2)],
+    );
+    store
+        .put_review(&review(10, 1, Some(&sid(1))))
+        .expect("put review 1");
+    store
+        .put_review(&review(11, 1, Some(&sid(2))))
+        .expect("put review 2");
+
+    store
+        .set_ended(&sid(1), EndedBy::KeeperStopped)
+        .expect("cut off 1");
+    store
+        .set_ended(&sid(2), EndedBy::KeeperStopped)
+        .expect("cut off 2");
+    store.set_ended(&sid(3), EndedBy::Cli).expect("end 3");
+    store
+        .set_ended(&sid(4), EndedBy::KeeperStopped)
+        .expect("cut off 4");
+
+    // Dismiss one session in workspace 1; leave the other and workspace 2 untouched.
+    let cleared = store
+        .dismiss_resumable(&workspace(1), Some(&sid(1)))
+        .expect("dismiss one");
+    assert_eq!(cleared, [sid(1)]);
+    assert_eq!(session_of(&store, 1).ended_by, Some(EndedBy::ProcessGone));
+    assert_eq!(session_of(&store, 1).ended, Some(1));
+    assert_eq!(session_of(&store, 2).ended_by, Some(EndedBy::KeeperStopped));
+    assert_eq!(session_of(&store, 3).ended_by, Some(EndedBy::Cli));
+    assert_eq!(session_of(&store, 4).ended_by, Some(EndedBy::KeeperStopped));
+
+    // Dismissing again is a no-op; dismissing all clears the remaining cut-off row in workspace 1.
+    assert_eq!(
+        store
+            .dismiss_resumable(&workspace(1), Some(&sid(1)))
+            .expect("idempotent"),
+        []
+    );
+    assert_eq!(
+        store
+            .dismiss_resumable(&workspace(1), None)
+            .expect("dismiss all"),
+        [sid(2)]
+    );
+    assert_eq!(session_of(&store, 2).ended_by, Some(EndedBy::ProcessGone));
+    assert_eq!(session_of(&store, 3).ended_by, Some(EndedBy::Cli));
+    assert_eq!(session_of(&store, 4).ended_by, Some(EndedBy::KeeperStopped));
+
+    // Reviews are completely untouched.
+    assert_eq!(agent_of(&store, 10), Some(id(1)));
+    assert_eq!(agent_of(&store, 11), Some(id(2)));
+}

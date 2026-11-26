@@ -122,6 +122,7 @@ request_kinds! {
     GetStateSizes = 39, Window;
     CleanUpStates = 40, User;
     CloseTerminal = 41, User;
+    DismissResumable = 42, Window;
 }
 
 impl RequestKind {
@@ -334,6 +335,13 @@ pub enum Request {
     CloseTerminal {
         terminal: TerminalId,
     },
+    /// Clears resumable offers for cut-off sessions in `workspace` without deleting their reviews.
+    /// `Some(session)` dismisses one session; `None` dismisses every resumable offer in the
+    /// workspace.
+    DismissResumable {
+        workspace: WorkspaceId,
+        session: Option<SessionId>,
+    },
 }
 
 impl Request {
@@ -380,6 +388,7 @@ impl Request {
             Self::GetStateSizes => RequestKind::GetStateSizes,
             Self::CleanUpStates => RequestKind::CleanUpStates,
             Self::CloseTerminal { .. } => RequestKind::CloseTerminal,
+            Self::DismissResumable { .. } => RequestKind::DismissResumable,
         }
     }
 }
@@ -754,6 +763,10 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
         }
         Request::GetStateSizes | Request::CleanUpStates => {}
         Request::CloseTerminal { terminal } => out.text(terminal.as_str()),
+        Request::DismissResumable { workspace, session } => {
+            out.text(workspace.as_str());
+            out.optional(session.as_ref(), |out, session| out.text(session.as_str()));
+        }
     }
 }
 
@@ -904,6 +917,10 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
         RequestKind::CleanUpStates => Request::CleanUpStates,
         RequestKind::CloseTerminal => Request::CloseTerminal {
             terminal: TerminalId::new(input.text()?),
+        },
+        RequestKind::DismissResumable => Request::DismissResumable {
+            workspace: WorkspaceId::new(input.text()?),
+            session: input.optional(|input| Ok(SessionId::new(input.text()?)))?,
         },
     };
     Ok((id, request))

@@ -248,6 +248,14 @@ impl Switchboard {
             .collect()
     }
 
+    /// Clears a remembered session's resume offer while keeping the session remembered.
+    pub fn dismiss_offer(&mut self, session: &SessionId) -> bool {
+        self.sessions
+            .iter_mut()
+            .find(|entry| entry.known.id == *session)
+            .is_some_and(|entry| entry.offer.take().is_some())
+    }
+
     /// `draw` gives a fresh id per call. An event of an ended session is a resume; a step outside a
     /// turn opens none. A turn start while one is open interrupts it.
     pub fn take(
@@ -1676,5 +1684,26 @@ mod tests {
     fn no_session_shows_no_state() {
         assert_eq!(shown([]), None);
         assert_eq!(shown(Vec::<State>::new()), None);
+    }
+
+    #[test]
+    fn dismissing_an_offer_removes_it_from_resumable_while_keeping_the_session_remembered() {
+        let mut board = Switchboard::new();
+        let first = session_drawn(1);
+        let second = session_drawn(2);
+        board.remember_resumable(first.clone(), AGENT, CliSession("a".to_owned()), None);
+        board.remember_resumable(second.clone(), AGENT, CliSession("b".to_owned()), None);
+        let cmd = |_agent: &str, cli: &CliSession, _record: Option<&Path>| Some(cli.0.clone());
+
+        assert_eq!(board.resumable(&cmd).len(), 2);
+        assert!(board.dismiss_offer(&first));
+        assert!(!board.dismiss_offer(&first));
+        assert!(!board.dismiss_offer(&session_drawn(9)));
+
+        let remaining = board.resumable(&cmd);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].session, second);
+        // The dismissed session is still remembered if its CLI ever reports again.
+        assert!(board.session(&first).is_some());
     }
 }

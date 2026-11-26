@@ -1251,3 +1251,113 @@ fn a_bash_command_denied_at_its_dialog_leaves_no_command_window_open() {
     );
     let _ = setup.finish();
 }
+
+#[test]
+fn dismissing_resumable_sessions_clears_offers_across_restarts_and_preserves_reviews() {
+    let mut setup = Setup::new();
+    let records = recorded::hook_events(TOOLS);
+    let dialogs = recorded::hook_events(DIALOGS);
+    let second_terminal = setup.window.open_terminal(&setup.workspace);
+    setup.hooks(&records, &[1]);
+    setup.hook_in(&second_terminal, &dialogs[0]);
+    let started = setup.agents_until("both sessions idle", |agents| agents.sessions.len() == 2);
+    let (s1, r1) = (
+        started.sessions[0].id.clone(),
+        started.sessions[0].review.clone().expect("review 1"),
+    );
+    let (s2, r2) = (
+        started.sessions[1].id.clone(),
+        started.sessions[1].review.clone().expect("review 2"),
+    );
+    let (scratch, workspace) = (setup.scratch, setup.workspace);
+    setup.window.stop(setup.keeper);
+
+    // Restart Keeper: both cut-off sessions are offered as resumable.
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let listed = window.agents();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].sessions.iter().all(|s| s.resumable));
+
+    // Unknown workspace is refused.
+    let missing = WorkspaceId::new("f".repeat(32));
+    assert_eq!(
+        window.ask(Request::DismissResumable {
+            workspace: missing.clone(),
+            session: None,
+        }),
+        Err(Refusal::UnknownWorkspace { workspace: missing })
+    );
+
+    // Dismiss one session: AgentsChanged broadcasts immediately, review stays.
+    assert_eq!(
+        window.ask(Request::DismissResumable {
+            workspace: workspace.clone(),
+            session: Some(s1.clone()),
+        }),
+        Ok(Reply::Done)
+    );
+    let after_one = window.agents_until(&workspace, "first offer cleared", |agents| {
+        agents.sessions.iter().any(|s| s.id == s1 && !s.resumable)
+    });
+    assert_eq!(
+        after_one
+            .sessions
+            .iter()
+            .find(|s| s.id == s1)
+            .and_then(|s| s.review.clone()),
+        Some(r1.clone())
+    );
+    assert!(
+        after_one
+            .sessions
+            .iter()
+            .find(|s| s.id == s2)
+            .is_some_and(|s| s.resumable)
+    );
+
+    // Dismiss all remaining in workspace.
+    assert_eq!(
+        window.ask(Request::DismissResumable {
+            workspace: workspace.clone(),
+            session: None,
+        }),
+        Ok(Reply::Done)
+    );
+    let after_all = window.agents_until(&workspace, "all offers cleared", |agents| {
+        agents.sessions.iter().all(|s| !s.resumable)
+    });
+    assert_eq!(
+        after_all
+            .sessions
+            .iter()
+            .find(|s| s.id == s2)
+            .and_then(|s| s.review.clone()),
+        Some(r2.clone())
+    );
+    window.stop(keeper);
+
+    // Restart Keeper again: dismissed sessions stay non-resumable and keep their reviews.
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let listed = window.agents();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].sessions.iter().all(|s| !s.resumable));
+    assert_eq!(
+        listed[0]
+            .sessions
+            .iter()
+            .find(|s| s.id == s1)
+            .and_then(|s| s.review.clone()),
+        Some(r1)
+    );
+    assert_eq!(
+        listed[0]
+            .sessions
+            .iter()
+            .find(|s| s.id == s2)
+            .and_then(|s| s.review.clone()),
+        Some(r2)
+    );
+    window.stop(keeper);
+}

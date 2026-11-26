@@ -101,9 +101,10 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // Here although it waits: the CLI blocks on its piece, and the piece's connection has
         // nothing else to answer.
         RequestKind::Report => Answerer::Here,
-        RequestKind::ListAgents | RequestKind::GetTurn | RequestKind::ListTerminals => {
-            Answerer::Here
-        }
+        RequestKind::ListAgents
+        | RequestKind::GetTurn
+        | RequestKind::ListTerminals
+        | RequestKind::DismissResumable => Answerer::Here,
         // The kept output of an attached terminal must reach its Window after the reply.
         RequestKind::ShowWorkspace | RequestKind::AttachTerminal => Answerer::Here,
         RequestKind::GetHistory
@@ -155,7 +156,7 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         | RequestKind::MarkReviewed
         | RequestKind::SetViewed
         | RequestKind::Commit => false,
-        RequestKind::ListAgents => true,
+        RequestKind::ListAgents | RequestKind::DismissResumable => true,
         // Its facts come from the agents' thread, which takes the turn, and the answer waits for
         // that thread: a turn held here would wait for ever.
         RequestKind::Report => false,
@@ -478,6 +479,10 @@ impl Parts {
             }
             Request::GetStateSizes => crate::cleaning::sizes(kept),
             Request::CleanUpStates => crate::cleaning::clean_up_now(kept, &self.agents, &mut facts),
+            Request::DismissResumable { workspace, session } => {
+                self.agents
+                    .dismiss_resumable(kept, &workspace, session.as_ref(), &mut facts)
+            }
         };
         Answered::Now(Outcome { reply, facts, then })
     }

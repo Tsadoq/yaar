@@ -270,6 +270,64 @@ impl Store {
         })
     }
 
+    /// Marks cut-off (`EndedBy::KeeperStopped`) sessions in `workspace` as `EndedBy::ProcessGone`
+    /// without changing their `ended` order or touching any review. `Some(session)` clears that
+    /// session only; `None` clears every cut-off session in `workspace`. Returns the cleared ids.
+    pub fn dismiss_resumable(
+        &self,
+        workspace: &WorkspaceId,
+        session: Option<&SessionId>,
+    ) -> Result<Vec<SessionId>, StoreError> {
+        let workspace = workspace.0.clone();
+        let session = session.map(|s| s.0.clone());
+        let stopped = ended_by_number(EndedBy::KeeperStopped);
+        let gone = ended_by_number(EndedBy::ProcessGone);
+        self.try_ask(move |connection| {
+            let clearing = connection.transaction()?;
+            let ids: Vec<SessionId> = match &session {
+                Some(id) => clearing
+                    .prepare(
+                        "SELECT id FROM session
+                         WHERE workspace = ?1 AND id = ?2 AND running = 0 AND ended_by = ?3",
+                    )?
+                    .query_map(params![workspace, id, stopped], |row| {
+                        Ok(SessionId(row.get(0)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+                None => clearing
+                    .prepare(
+                        "SELECT id FROM session
+                         WHERE workspace = ?1 AND running = 0 AND ended_by = ?2
+                         ORDER BY seq",
+                    )?
+                    .query_map(params![workspace, stopped], |row| {
+                        Ok(SessionId(row.get(0)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+            };
+            if !ids.is_empty() {
+                match &session {
+                    Some(id) => {
+                        clearing.execute(
+                            "UPDATE session SET ended_by = ?4
+                             WHERE workspace = ?1 AND id = ?2 AND running = 0 AND ended_by = ?3",
+                            params![workspace, id, stopped, gone],
+                        )?;
+                    }
+                    None => {
+                        clearing.execute(
+                            "UPDATE session SET ended_by = ?3
+                             WHERE workspace = ?1 AND running = 0 AND ended_by = ?2",
+                            params![workspace, stopped, gone],
+                        )?;
+                    }
+                }
+            }
+            clearing.commit()?;
+            Ok(ids)
+        })
+    }
+
     pub fn set_review_agent(
         &self,
         review: &ReviewId,

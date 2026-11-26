@@ -455,6 +455,52 @@ impl Agents {
         self.push(Work::Reviewed(review.clone()));
     }
 
+    pub(crate) fn dismiss_resumable(
+        &self,
+        kept: &Kept,
+        workspace: &yaar_link::WorkspaceId,
+        session: Option<&yaar_link::SessionId>,
+        facts: &mut Vec<Fact>,
+    ) -> Result<Reply, Refusal> {
+        let ws = WorkspaceId::new(workspace.as_str());
+        let known = kept
+            .store
+            .workspaces()
+            .map_err(failed)?
+            .into_iter()
+            .any(|record| record.id == ws);
+        if !known {
+            return Err(Refusal::UnknownWorkspace {
+                workspace: workspace.clone(),
+            });
+        }
+        let target = session.map(|id| SessionId::new(id.as_str()));
+        let dismissed = kept
+            .store
+            .dismiss_resumable(&ws, target.as_ref())
+            .map_err(failed)?;
+        let mut changed = !dismissed.is_empty();
+        {
+            let mut holds = lock(&self.core.resuming);
+            let mut board = lock(&self.core.switchboard);
+            for id in &dismissed {
+                let sb_id = yaar_switchboard::SessionId(id.as_str().to_owned());
+                changed |= board.dismiss_offer(&sb_id);
+                holds.retain(|hold| hold.session != id.as_str());
+            }
+            // Clear any in-memory offer matching the target even if the store row had already moved.
+            if let Some(id) = session {
+                let sb_id = yaar_switchboard::SessionId(id.as_str().to_owned());
+                changed |= board.dismiss_offer(&sb_id);
+                holds.retain(|hold| hold.session != id.as_str());
+            }
+        }
+        if changed && let Some(agents) = self.core.workspace_agents(kept, &ws)? {
+            facts.push(Fact::AgentsChanged(agents));
+        }
+        Ok(Reply::Done)
+    }
+
     fn push(&self, work: Work) {
         // The receiving thread is gone only when the Keeper is.
         let _ = self.queue.send(work);

@@ -608,6 +608,10 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
             RequestKind::CloseTerminal => Request::CloseTerminal {
                 terminal: TerminalId::new("0".repeat(32)),
             },
+            RequestKind::DismissResumable => Request::DismissResumable {
+                workspace: workspace.clone(),
+                session: None,
+            },
         };
         assert_eq!(
             window.ask(request),
