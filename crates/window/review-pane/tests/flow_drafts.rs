@@ -489,6 +489,7 @@ fn c_in_flow_writes_nothing_where_there_is_no_line_of_the_live_diff_to_write_on(
         1,
         yaar_link::Step::Read {
             path: "r.txt".into(),
+            lines: None,
         },
     ));
     wait_until(&mut cx, "the file read", |cx| {

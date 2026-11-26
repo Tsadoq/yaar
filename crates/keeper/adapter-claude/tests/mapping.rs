@@ -51,12 +51,14 @@ fn a_turn_with_reads_edits_writes_and_shell_commands_gives_each_its_event() {
         4,
         vec![Event::FileRead {
             path: in_project("notes.txt"),
+            lines: None,
         }],
     );
     expect(
         7,
         vec![Event::FileRead {
             path: in_project("src/calc.py"),
+            lines: None,
         }],
     );
     expect(
@@ -122,7 +124,8 @@ fn what_a_sub_agent_does_is_the_sessions_own() {
         [told(
             &records[26],
             Event::FileRead {
-                path: in_project("README.md")
+                path: in_project("README.md"),
+                lines: None,
             }
         )]
     );

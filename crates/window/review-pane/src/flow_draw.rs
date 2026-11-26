@@ -266,9 +266,9 @@ impl ReviewPane {
         let form_switch = if in_flow {
             Segmented::new("flow-form")
                 .selector("flow-form")
-                .segment("timeline", "Timeline")
                 .segment("live", "Live diff")
-                .selected(if self.form == FlowForm::Timeline {
+                .segment("timeline", "Timeline")
+                .selected(if self.form == FlowForm::LiveDiff {
                     0
                 } else {
                     1
@@ -277,9 +277,9 @@ impl ReviewPane {
                     entity.update(cx, |pane, cx| {
                         pane.steered(cx);
                         let form = if index == 0 {
-                            FlowForm::Timeline
-                        } else {
                             FlowForm::LiveDiff
+                        } else {
+                            FlowForm::Timeline
                         };
                         pane.choose_form(form, cx);
                     });
@@ -489,7 +489,14 @@ impl ReviewPane {
             }
             TimelineEntry::Step { number, step, .. } => {
                 let (badge_label, badge_tone, detail, extra) = match step {
-                    Step::Read { path } => ("READ", Tone::Plain, path.display().to_string(), None),
+                    Step::Read { path, lines } => {
+                        let spans = lines
+                            .as_ref()
+                            .map(|range| format_line_ranges(Some(std::slice::from_ref(range))))
+                            .unwrap_or_default();
+                        let extra = (!spans.is_empty()).then(|| format!("lines {spans}"));
+                        ("READ", Tone::Plain, path.display().to_string(), extra)
+                    }
                     Step::Edit { path, lines } => {
                         let spans = format_line_ranges(lines.as_deref());
                         let extra = (!spans.is_empty()).then(|| format!("lines {spans}"));
@@ -608,7 +615,16 @@ fn entry_words(entry: &TimelineEntry) -> String {
     match entry {
         TimelineEntry::Turn { title, .. } => title.clone(),
         TimelineEntry::Step { step, .. } => match step {
-            Step::Read { path } => format!("Read {}", path.display()),
+            Step::Read { path, lines } => {
+                let spans = lines
+                    .as_ref()
+                    .map(|range| format_line_ranges(Some(std::slice::from_ref(range))))
+                    .unwrap_or_default();
+                match spans.is_empty() {
+                    true => format!("Read {}", path.display()),
+                    false => format!("Read {} lines {spans}", path.display()),
+                }
+            }
             Step::Edit { path, lines } => {
                 let lines = format_line_ranges(lines.as_deref());
                 match lines.is_empty() {

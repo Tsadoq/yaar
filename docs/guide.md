@@ -38,9 +38,10 @@ The review pane has two views, Changes and Flow. `f` switches between them.
   ended on them, in the order they happened, and last the uncommitted changes. Click an
   entry, or press `tab` and use `j`, `k`, Space and Enter, to review one commit, one turn
   or a range of them.
-- **Flow** shows what the agent does. Shift-L switches between its two forms. The
-  timeline lists each read, edit, new file and shell command of the turn. The live diff
-  shows the files the running turn has changed so far, then the files it only read.
+- **Flow** shows what the agent does. It opens in **Live diff**, following each file the
+  agent reads into a syntax-highlighted view centered on its read line range and switching
+  smoothly to the turn's live diff on each edit or write. Shift-L switches to **Timeline**,
+  which lists every read, edit, new file and shell command of the turn in order.
 - **Follow** is on in every new window. While it is on, Flow moves to each step as the
   agent takes it, and a message you send switches the pane to Flow. Scrolling, clicking
   or typing in the pane pauses it, and Shift-G resumes it. Shift-F turns it off and on.

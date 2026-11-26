@@ -1107,7 +1107,9 @@ impl Core {
             Began,
         }
         let (record, feed) = match event {
-            Event::FileRead { path } => (StepRecord::Read(inside(path)), Feed::Nothing),
+            Event::FileRead { path, lines } => {
+                (StepRecord::Read(inside(path), lines.clone()), Feed::Nothing)
+            }
             Event::FileWritten {
                 path,
                 tool: WriteTool::Edit,
@@ -1512,7 +1514,10 @@ fn attachment_of(attached: &yaar_store::AttachedRecord) -> yaar_link::Attachment
 
 fn step_of(record: &StepRecord) -> Step {
     match record {
-        StepRecord::Read(path) => Step::Read { path: path.clone() },
+        StepRecord::Read(path, lines) => Step::Read {
+            path: path.clone(),
+            lines: lines.clone(),
+        },
         StepRecord::Edit(path, lines) => Step::Edit {
             path: path.clone(),
             lines: lines.clone(),

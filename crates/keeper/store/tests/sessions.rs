@@ -115,7 +115,7 @@ fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
     store.put_turn(&turn(12, 2, 1)).expect("put turn");
     let odd = PathBuf::from(OsStr::from_bytes(b"src/\xff odd\n'name\".rs"));
     let steps = [
-        StepRecord::Read(odd.clone()),
+        StepRecord::Read(odd.clone(), Some(40..=120)),
         StepRecord::Edit(odd.clone(), Some(vec![3..=3, 10..=12])),
         StepRecord::Write(PathBuf::from("new.txt")),
         StepRecord::Command("echo \"a b\"\n  && ls".to_owned()),
@@ -486,13 +486,13 @@ fn the_steps_of_a_turn_come_back_in_number_order_with_the_lines_of_each_edit_as_
     store.put_step(&tid(10), 4, &edit_empty).expect("put 4");
     store.put_step(&tid(10), 2, &command).expect("put 2");
     store
-        .put_step(&tid(11), 1, &StepRecord::Read(PathBuf::from("a.rs")))
+        .put_step(&tid(11), 1, &StepRecord::Read(PathBuf::from("a.rs"), None))
         .expect("put");
 
     let (_, steps) = store.turn(&tid(10)).expect("read").expect("kept");
     assert_eq!(steps, [edit_many, command, edit_none_said, edit_empty]);
     let (_, steps) = store.turn(&tid(11)).expect("read").expect("kept");
-    assert_eq!(steps, [StepRecord::Read(PathBuf::from("a.rs"))]);
+    assert_eq!(steps, [StepRecord::Read(PathBuf::from("a.rs"), None)]);
 }
 
 #[test]
@@ -502,14 +502,14 @@ fn a_step_number_taken_twice_is_refused_and_the_first_step_stays() {
     put_all(&store, &[session(1, 1)]);
     store.put_turn(&turn(10, 1, 1)).expect("put turn");
     store
-        .put_step(&tid(10), 1, &StepRecord::Read(PathBuf::from("a.rs")))
+        .put_step(&tid(10), 1, &StepRecord::Read(PathBuf::from("a.rs"), None))
         .expect("put 1");
 
     let sentence =
         refusal_of(store.put_step(&tid(10), 1, &StepRecord::Write(PathBuf::from("b.rs"))));
     assert!(sentence.contains("step 1"), "{sentence}");
     let (_, steps) = store.turn(&tid(10)).expect("read").expect("kept");
-    assert_eq!(steps, [StepRecord::Read(PathBuf::from("a.rs"))]);
+    assert_eq!(steps, [StepRecord::Read(PathBuf::from("a.rs"), None)]);
 
     let step = StepRecord::Command("ls".to_owned());
     assert!(store.put_step(&tid(10), 0, &step).is_err());

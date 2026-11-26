@@ -85,6 +85,25 @@ impl Payload {
             None => named.to_path_buf(),
         })
     }
+
+    fn read_lines(&self) -> Option<RangeInclusive<u32>> {
+        let input = self.fields.get("input")?;
+        let number = |key: &str| u32::try_from(input.get(key)?.as_u64()?).ok();
+        let offset = number("offset");
+        let limit = number("limit").filter(|&limit| limit > 0);
+        match (offset, limit) {
+            (None, None) => None,
+            (Some(start), Some(count)) => {
+                let start = start.max(1);
+                Some(start..=start.saturating_add(count - 1))
+            }
+            (Some(start), None) => {
+                let start = start.max(1);
+                Some(start..=start)
+            }
+            (None, Some(count)) => Some(1..=count),
+        }
+    }
 }
 
 fn unreadable(why: String) -> ReportError {
@@ -182,6 +201,7 @@ impl Remembered {
                 _ if payload.failed() => Vec::new(),
                 "read" => vec![Event::FileRead {
                     path: payload.file()?,
+                    lines: payload.read_lines(),
                 }],
                 "edit" => vec![Event::FileWritten {
                     path: payload.file()?,

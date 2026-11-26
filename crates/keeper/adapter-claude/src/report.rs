@@ -187,6 +187,7 @@ fn tool_event(hook: &str, input: &Value) -> Result<Option<Event>, ReportError> {
         (_, "Bash") => Some(command()),
         ("PostToolUse", "Read") => Some(Event::FileRead {
             path: path_of(tool, tool_input)?,
+            lines: read_lines(tool_input),
         }),
         ("PostToolUse", "Write") => Some(Event::FileWritten {
             path: path_of(tool, tool_input)?,
@@ -207,6 +208,26 @@ fn path_of(tool: &str, tool_input: &Value) -> Result<PathBuf, ReportError> {
         .or_else(|| text(tool_input, "notebook_path"))
         .map(PathBuf::from)
         .ok_or_else(|| unreadable(&format!("the input of {tool} names no file")))
+}
+
+/// The lines `Read` asked for, from `offset` and `limit` in `tool_input`. None when neither is
+/// named or both are unusable.
+fn read_lines(tool_input: &Value) -> Option<RangeInclusive<u32>> {
+    let number = |key: &str| u32::try_from(tool_input.get(key)?.as_u64()?).ok();
+    let offset = number("offset");
+    let limit = number("limit").filter(|&limit| limit > 0);
+    match (offset, limit) {
+        (None, None) => None,
+        (Some(start), Some(count)) => {
+            let start = start.max(1);
+            Some(start..=start.saturating_add(count - 1))
+        }
+        (Some(start), None) => {
+            let start = start.max(1);
+            Some(start..=start)
+        }
+        (None, Some(count)) => Some(1..=count),
+    }
 }
 
 /// The lines an edit changed, from the hunks of `structuredPatch`. None where there is no
@@ -454,9 +475,43 @@ mod tests {
         assert_eq!(
             said(&mut ClaudeCode::new(), None, &input).expect("a report"),
             [Event::FileRead {
-                path: PathBuf::from("/w/f")
+                path: PathBuf::from("/w/f"),
+                lines: None,
             }]
         );
+    }
+
+    #[test]
+    fn a_read_with_offset_and_limit_names_its_line_range() {
+        let read_with = |tool_input: Value| {
+            let input = hook(
+                "PostToolUse",
+                json!({"tool_name": "Read", "tool_input": tool_input}),
+            );
+            match said(&mut ClaudeCode::new(), None, &input).expect("a report")[..] {
+                [Event::FileRead { ref lines, .. }] => lines.clone(),
+                ref other => panic!("a read gives one event, not {other:?}"),
+            }
+        };
+
+        assert_eq!(
+            read_with(json!({"file_path": "/w/f", "offset": 40, "limit": 81})),
+            Some(40..=120)
+        );
+        assert_eq!(
+            read_with(json!({"file_path": "/w/f", "offset": 25})),
+            Some(25..=25)
+        );
+        assert_eq!(
+            read_with(json!({"file_path": "/w/f", "limit": 50})),
+            Some(1..=50)
+        );
+        assert_eq!(
+            read_with(json!({"file_path": "/w/f", "offset": 0, "limit": 10})),
+            Some(1..=10)
+        );
+        assert_eq!(read_with(json!({"file_path": "/w/f", "limit": 0})), None);
+        assert_eq!(read_with(json!({"file_path": "/w/f"})), None);
     }
 
     #[test]

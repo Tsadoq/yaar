@@ -37,7 +37,17 @@ fn s5() -> String {
 }
 
 fn read(path: &str) -> Step {
-    Step::Read { path: path.into() }
+    Step::Read {
+        path: path.into(),
+        lines: None,
+    }
+}
+
+fn read_lines(path: &str, first: u32, last: u32) -> Step {
+    Step::Read {
+        path: path.into(),
+        lines: Some(first..=last),
+    }
 }
 
 fn write(path: &str) -> Step {
@@ -1518,4 +1528,272 @@ fn a_second_edit_to_the_same_file_re_scrolls_once_the_updated_diff_loads(cx: &mu
     });
     assert!(drawn(&format!("flow-text-{second_row}-new:second 90"), &mut cx).is_some());
     assert!(drawn("flow-row-0", &mut cx).is_none());
+}
+
+#[gpui_kit::test]
+fn following_a_read_step_opens_the_file_highlights_its_line_range_and_jumps_across_files(
+    cx: &mut TestAppContext,
+) {
+    use common::navigator::NavigatorEnd;
+    use yaar_navigator::{Ask, FileKind, OpenedFile, Told};
+
+    let t = turn_id('t');
+    let (mut stage, mut cx) = in_the_live_diff(cx);
+    let mut navigator = NavigatorEnd::connect(&stage.models, &mut cx);
+    start_turn(&mut stage, &t, &s0(), &mut cx);
+    compared(&mut stage, &s0(), None, Vec::new(), &mut cx);
+
+    let first_text: String = (1..=100)
+        .map(|n| format!("fn first_{n}() {{ let x = {n}; }}\n"))
+        .collect();
+    let second_text: String = (1..=60)
+        .map(|n| format!("fn second_{n}() {{ let y = {n}; }}\n"))
+        .collect();
+
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t.clone(),
+        1,
+        read_lines("src/first.rs", 40, 45),
+    ));
+    let (ask_id, loc) = match navigator.ask(&mut cx) {
+        Ask::Open { id, location } => (id, location),
+        other => panic!("expected Ask::Open, got {other:?}"),
+    };
+    assert!(loc.path.ends_with("src/first.rs"), "{:?}", loc.path);
+    assert_eq!(loc.line, 40);
+    navigator.tell(
+        Told::Opened {
+            id: ask_id,
+            file: Ok(OpenedFile {
+                path: loc.path,
+                kind: FileKind::Worktree {
+                    workspace: id('1'),
+                    relative: PathBuf::from("src/first.rs"),
+                },
+                text: first_text,
+            }),
+        },
+        &mut cx,
+    );
+
+    wait_until(&mut cx, "first.rs opened in live read view", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.live_reading().is_some_and(|shown| {
+                shown.path == std::path::Path::new("src/first.rs")
+                    && shown.lines == Some(40..=45)
+                    && shown.line_count == 100
+            })
+        })
+    });
+    wait_until(&mut cx, "line 40 scrolled into view", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.live_reading_in_view().contains(&39))
+    });
+    assert!(drawn("flow-live-read-header", &mut cx).is_some());
+    assert!(drawn("flow-live-read-path:src/first.rs", &mut cx).is_some());
+    assert!(drawn("flow-live-read-active-40", &mut cx).is_some());
+    assert!(drawn("flow-live-read-active-45", &mut cx).is_some());
+    assert!(drawn("flow-live-read-line-46", &mut cx).is_some());
+
+    // A second read in another file jumps the live view straight to the new file and range.
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t,
+        2,
+        read_lines("src/second.rs", 12, 18),
+    ));
+    let (ask_id, loc) = match navigator.ask(&mut cx) {
+        Ask::Open { id, location } => (id, location),
+        other => panic!("expected Ask::Open for second.rs, got {other:?}"),
+    };
+    assert!(loc.path.ends_with("src/second.rs"), "{:?}", loc.path);
+    assert_eq!(loc.line, 12);
+    navigator.tell(
+        Told::Opened {
+            id: ask_id,
+            file: Ok(OpenedFile {
+                path: loc.path,
+                kind: FileKind::Worktree {
+                    workspace: id('1'),
+                    relative: PathBuf::from("src/second.rs"),
+                },
+                text: second_text,
+            }),
+        },
+        &mut cx,
+    );
+    wait_until(&mut cx, "second.rs opened in live read view", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.live_reading().is_some_and(|shown| {
+                shown.path == std::path::Path::new("src/second.rs")
+                    && shown.lines == Some(12..=18)
+                    && shown.line_count == 60
+            })
+        })
+    });
+    assert!(drawn("flow-live-read-path:src/second.rs", &mut cx).is_some());
+    assert!(drawn("flow-live-read-active-12", &mut cx).is_some());
+}
+
+#[gpui_kit::test]
+fn an_edit_step_after_a_read_switches_from_the_read_file_to_the_live_diff_centered_on_the_edit(
+    cx: &mut TestAppContext,
+) {
+    use common::navigator::NavigatorEnd;
+    use yaar_navigator::{Ask, FileKind, OpenedFile, Told};
+
+    let t = turn_id('t');
+    let (mut stage, mut cx) = in_the_live_diff(cx);
+    let mut navigator = NavigatorEnd::connect(&stage.models, &mut cx);
+    start_turn(&mut stage, &t, &s0(), &mut cx);
+    compared(&mut stage, &s0(), None, Vec::new(), &mut cx);
+
+    let before: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+    let after: String = (1..=40)
+        .map(|n| {
+            if n == 20 {
+                "edited line 20\n".to_owned()
+            } else {
+                format!("line {n}\n")
+            }
+        })
+        .collect();
+
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t.clone(),
+        1,
+        read_lines("src/first.rs", 15, 25),
+    ));
+    let (ask_id, loc) = match navigator.ask(&mut cx) {
+        Ask::Open { id, location } => (id, location),
+        other => panic!("expected Ask::Open, got {other:?}"),
+    };
+    navigator.tell(
+        Told::Opened {
+            id: ask_id,
+            file: Ok(OpenedFile {
+                path: loc.path,
+                kind: FileKind::Worktree {
+                    workspace: id('1'),
+                    relative: PathBuf::from("src/first.rs"),
+                },
+                text: before.clone(),
+            }),
+        },
+        &mut cx,
+    );
+    wait_until(&mut cx, "first.rs opened", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.live_reading().is_some())
+    });
+
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t,
+        2,
+        edit("src/first.rs", 20, 20),
+    ));
+    wait_until(
+        &mut cx,
+        "an edit clears the read file view and switches to the live diff",
+        |cx| {
+            stage
+                .pane
+                .read_with(cx, |pane, _| pane.live_reading().is_none())
+        },
+    );
+    compared(
+        &mut stage,
+        &s0(),
+        None,
+        vec![file("src/first.rs", FileStatus::Modified)],
+        &mut cx,
+    );
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("src/first.rs", &before, &after)],
+        &mut cx,
+    );
+    let edited = Position {
+        path: "src/first.rs".into(),
+        side: Side::New,
+        line: 19,
+    };
+    wait_until(&mut cx, "live diff centered on the edited line", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.live_position() == Some(&edited))
+    });
+}
+
+#[gpui_kit::test]
+fn a_command_step_keeps_the_followed_read_file_visible_under_the_activity_banner(
+    cx: &mut TestAppContext,
+) {
+    use common::navigator::NavigatorEnd;
+    use yaar_navigator::{Ask, FileKind, OpenedFile, Told};
+
+    let t = turn_id('t');
+    let (mut stage, mut cx) = in_the_live_diff(cx);
+    let mut navigator = NavigatorEnd::connect(&stage.models, &mut cx);
+    start_turn(&mut stage, &t, &s0(), &mut cx);
+    compared(&mut stage, &s0(), None, Vec::new(), &mut cx);
+
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t.clone(),
+        1,
+        read_lines("src/first.rs", 1, 10),
+    ));
+    let (ask_id, loc) = match navigator.ask(&mut cx) {
+        Ask::Open { id, location } => (id, location),
+        other => panic!("expected Ask::Open, got {other:?}"),
+    };
+    navigator.tell(
+        Told::Opened {
+            id: ask_id,
+            file: Ok(OpenedFile {
+                path: loc.path,
+                kind: FileKind::Worktree {
+                    workspace: id('1'),
+                    relative: PathBuf::from("src/first.rs"),
+                },
+                text: "one\ntwo\nthree\n".to_owned(),
+            }),
+        },
+        &mut cx,
+    );
+    wait_until(&mut cx, "first.rs opened", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.live_reading().is_some())
+    });
+
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t,
+        2,
+        Step::Command {
+            command: "cargo test".to_owned(),
+        },
+    ));
+    wait_until(&mut cx, "command step recorded", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.activity().is_some())
+    });
+    assert!(drawn("flow-activity", &mut cx).is_some());
+    assert!(drawn("flow-live-read-header", &mut cx).is_some());
+    assert_eq!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.live_reading().map(|r| r.path)),
+        Some(PathBuf::from("src/first.rs"))
+    );
 }

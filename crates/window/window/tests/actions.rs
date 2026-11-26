@@ -374,11 +374,14 @@ impl Composed {
                 self.wait_for_the_echoes(setting, cx);
                 match passed {
                     Request::SetSetting {
-                        setting: Setting::FlowForm { .. },
-                    } => wait_until(cx, "the live diff as the form of Flow", |cx| {
-                        self.review
-                            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
-                    }),
+                        setting: Setting::FlowForm { form, .. },
+                    } => {
+                        let wanted = *form;
+                        wait_until(cx, "the chosen form of Flow", |cx| {
+                            self.review
+                                .read_with(cx, |pane, _| pane.flow_form() == wanted)
+                        })
+                    }
                     Request::SetSetting {
                         setting:
                             Setting::ServersInRepository {
@@ -1291,10 +1294,14 @@ impl Composed {
                     let on_screen = self
                         .on_screen(cx)
                         .expect("a workspace is on screen before the walk sets a form of Flow");
+                    let flipped = match self.review.read_with(cx, |pane, _| pane.flow_form()) {
+                        FlowForm::LiveDiff => FlowForm::Timeline,
+                        FlowForm::Timeline => FlowForm::LiveDiff,
+                    };
                     let request = Request::SetSetting {
                         setting: Setting::FlowForm {
                             workspace: on_screen.id,
-                            form: FlowForm::LiveDiff,
+                            form: flipped,
                         },
                     };
                     (Answer::Nothing, Box::new(move |passed| *passed == request))

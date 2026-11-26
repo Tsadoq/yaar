@@ -475,6 +475,7 @@ mod tests {
     fn read(path: &str) -> Event {
         Event::FileRead {
             path: PathBuf::from(path),
+            lines: None,
         }
     }
 

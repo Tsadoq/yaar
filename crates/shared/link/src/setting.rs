@@ -9,9 +9,9 @@ use crate::workspace::{RepositoryId, WorkspaceId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FlowForm {
-    #[default]
     Timeline,
     /// From the state the worktree was in when the turn started to the files on disk.
+    #[default]
     LiveDiff,
 }
 

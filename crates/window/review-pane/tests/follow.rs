@@ -12,12 +12,12 @@ use gpui_kit::{
 };
 use yaar_link::{
     ChangedFile, CreditedFile, Fact, FileStatus, FlowForm, History, Reply, Request, Session,
-    SessionState, Step, TurnId,
+    SessionState, Setting, Step, TurnId,
 };
 use yaar_review_pane::{ChangeShown, FlowAt, Following, PaneRow, TimelineEntry, View};
 
 use common::{
-    Stage, agents_of, drawn, file, id, open, open_staged, review_id, review_with, reviews_of,
+    Stage, agents_of, drawn, file, id, open_staged, review_id, review_with, reviews_of,
     running_turn, self_started, session, session_id, since_main, step_fact, texts, turn_id,
     wait_for_files, wait_until, working_on, workspace,
 };
@@ -41,7 +41,10 @@ fn history_start() -> String {
 }
 
 fn read(path: &str) -> Step {
-    Step::Read { path: path.into() }
+    Step::Read {
+        path: path.into(),
+        lines: None,
+    }
 }
 
 fn write(path: &str) -> Step {
@@ -211,6 +214,10 @@ fn at_work_in_flow_with(
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature"), workspace('2', "other")],
         |keeper| {
+            keeper.set_settings(vec![Setting::FlowForm {
+                workspace: id('1'),
+                form: FlowForm::Timeline,
+            }]);
             if let Some(start) = start {
                 keeper.set_history(History {
                     workspace: id('1'),
@@ -352,7 +359,16 @@ fn wait_for_the_offer(stage: &Stage, cx: &mut VisualTestContext) -> ChangeShown 
 #[gpui_kit::test]
 fn follow_is_on_until_the_user_turns_it_off_with_its_control(cx: &mut TestAppContext) {
     let t = turn_id('t');
-    let (mut stage, mut cx) = open(vec![workspace('1', "feature"), workspace('2', "other")], cx);
+    let (mut stage, mut cx) = open_staged(
+        vec![workspace('1', "feature"), workspace('2', "other")],
+        |keeper| {
+            keeper.set_settings(vec![Setting::FlowForm {
+                workspace: id('1'),
+                form: FlowForm::Timeline,
+            }]);
+        },
+        cx,
+    );
     show_changes(&mut stage, &mut cx);
     assert_eq!(following(&stage, &cx), Following::On);
 

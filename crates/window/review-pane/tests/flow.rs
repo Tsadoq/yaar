@@ -28,7 +28,10 @@ fn s1() -> String {
 }
 
 fn read(path: &str) -> Step {
-    Step::Read { path: path.into() }
+    Step::Read {
+        path: path.into(),
+        lines: None,
+    }
 }
 
 fn edit(path: &str, first: u32, last: u32) -> Step {
@@ -221,6 +224,10 @@ fn the_timeline_lists_each_edit_read_and_command_of_the_turn_in_order(cx: &mut T
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature")],
         |keeper| {
+            keeper.set_settings(vec![Setting::FlowForm {
+                workspace: id('1'),
+                form: FlowForm::Timeline,
+            }]);
             keeper.set_agents(vec![agents_of(vec![session_a_on(&t)])]);
             keeper.set_turn(running_turn(
                 turn_id('t'),
@@ -516,6 +523,10 @@ fn j_and_k_move_the_reviewer_through_the_entries_and_stay_at_the_first_and_the_l
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature")],
         |keeper| {
+            keeper.set_settings(vec![Setting::FlowForm {
+                workspace: id('1'),
+                form: FlowForm::Timeline,
+            }]);
             keeper.set_agents(vec![agents_of(vec![session_a_on(&turn_id('t'))])]);
             keeper.set_turn(running_turn(
                 turn_id('t'),
@@ -574,6 +585,10 @@ fn the_list_of_a_long_timeline_scrolls_with_the_reviewer_and_keeps_its_place_acr
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature")],
         |keeper| {
+            keeper.set_settings(vec![Setting::FlowForm {
+                workspace: id('1'),
+                form: FlowForm::Timeline,
+            }]);
             keeper.set_agents(vec![agents_of(vec![session_a_on(&turn_id('t'))])]);
             keeper.set_turn(running_turn(
                 turn_id('t'),
@@ -752,7 +767,7 @@ fn shift_l_with_changes_on_screen_switches_no_form_and_sends_nothing(cx: &mut Te
     click("review-row-1", &mut cx);
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     press("shift-l", &mut cx);
-    assert_eq!(form(&stage, &mut cx), FlowForm::Timeline);
+    assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
     // The barrier: Flow's own `shift-l` sends its setting after anything the first sent.
     press("f", &mut cx);
     press("shift-l", &mut cx);
@@ -763,13 +778,13 @@ fn shift_l_with_changes_on_screen_switches_no_form_and_sends_nothing(cx: &mut Te
         stage.keeper.settings_set(),
         [Setting::FlowForm {
             workspace: id('1'),
-            form: FlowForm::LiveDiff
+            form: FlowForm::Timeline
         }]
     );
 }
 
 #[gpui_kit::test]
-fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_time(
+fn flow_opens_as_the_live_diff_the_first_time_and_the_two_forms_switch_at_any_time(
     cx: &mut TestAppContext,
 ) {
     let t = turn_id('t');
@@ -780,25 +795,24 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
 
     focus_by_the_bar(&stage, &mut cx);
     press("f", &mut cx);
-    assert_eq!(form(&stage, &mut cx), FlowForm::Timeline);
+    assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
     assert!(drawn("flow-empty", &mut cx).is_some());
-    assert!(drawn("flow-live", &mut cx).is_none());
+    assert!(drawn("flow-live", &mut cx).is_some());
 
     press("shift-l", &mut cx);
-    assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
-    let live = Setting::FlowForm {
+    assert_eq!(form(&stage, &mut cx), FlowForm::Timeline);
+    let timeline_setting = Setting::FlowForm {
         workspace: id('1'),
-        form: FlowForm::LiveDiff,
+        form: FlowForm::Timeline,
     };
     wait_until(&mut cx, "the form to reach the Keeper", |_| {
-        stage.keeper.settings_set() == [live.clone()]
+        stage.keeper.settings_set() == [timeline_setting.clone()]
     });
-    assert!(drawn("flow-live", &mut cx).is_some());
-    assert!(drawn("flow-entry-0", &mut cx).is_none());
+    assert!(drawn("flow-live", &mut cx).is_none());
 
     press("f", &mut cx);
     press("f", &mut cx);
-    assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
+    assert_eq!(form(&stage, &mut cx), FlowForm::Timeline);
     stage
         .models
         .workspaces
@@ -811,9 +825,9 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
     wait_until(&mut cx, "the form of the other workspace", |cx| {
         stage
             .pane
-            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::Timeline)
+            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
     });
-    assert!(drawn("flow-live", &mut cx).is_none());
+    assert!(drawn("flow-live", &mut cx).is_some());
     stage
         .models
         .workspaces
@@ -822,11 +836,9 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
     wait_until(&mut cx, "the form of the first workspace again", |cx| {
         stage
             .pane
-            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
+            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::Timeline)
     });
     assert_eq!(view(&stage, &mut cx), View::Flow);
-    press("shift-l", &mut cx);
-    assert_eq!(form(&stage, &mut cx), FlowForm::Timeline);
 
     stage.keeper.set_turn(running_turn(
         t.clone(),
@@ -881,7 +893,7 @@ fn afterwards_flow_opens_in_the_form_chosen_last_in_a_new_window(cx: &mut TestAp
         |keeper| {
             keeper.set_settings(vec![Setting::FlowForm {
                 workspace: id('1'),
-                form: FlowForm::LiveDiff,
+                form: FlowForm::Timeline,
             }]);
         },
         cx,
@@ -892,27 +904,26 @@ fn afterwards_flow_opens_in_the_form_chosen_last_in_a_new_window(cx: &mut TestAp
     wait_until(&mut cx, "the form the Keeper holds", |cx| {
         stage
             .pane
-            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
+            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::Timeline)
     });
-    assert!(drawn("flow-live", &mut cx).is_some());
-    assert!(drawn("flow-entry-0", &mut cx).is_none());
+    assert!(drawn("flow-live", &mut cx).is_none());
 
     stage.keeper.tell(Fact::SettingChanged(Setting::FlowForm {
         workspace: id('1'),
-        form: FlowForm::Timeline,
+        form: FlowForm::LiveDiff,
     }));
     wait_until(&mut cx, "the form another window chose", |cx| {
         stage
             .pane
-            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::Timeline)
+            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
     });
-    assert!(drawn("flow-live", &mut cx).is_none());
+    assert!(drawn("flow-live", &mut cx).is_some());
     // The form another window chose is no choice of this window's, so nothing was sent. The barrier
     // is this window's own choice, which reaches the Keeper after anything the told form sent.
     press("shift-l", &mut cx);
     let own = Setting::FlowForm {
         workspace: id('1'),
-        form: FlowForm::LiveDiff,
+        form: FlowForm::Timeline,
     };
     wait_until(&mut cx, "the form chosen here to reach the Keeper", |_| {
         !stage.keeper.settings_set().is_empty()

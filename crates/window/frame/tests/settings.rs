@@ -83,7 +83,7 @@ fn the_settings_the_keeper_lists_when_reached_are_held_in_its_order_and_asked_fo
     models.settings.read_with(cx, |list, _| {
         assert_eq!(list.flow_form(&id('2')), FlowForm::LiveDiff);
         assert_eq!(list.flow_form(&id('1')), FlowForm::Timeline);
-        assert_eq!(list.flow_form(&id('3')), FlowForm::Timeline, "none chosen");
+        assert_eq!(list.flow_form(&id('3')), FlowForm::LiveDiff, "none chosen");
     });
     settle('x', &models, &mut keeper, cx);
     assert_eq!(keeper.settings_asked(), 1);

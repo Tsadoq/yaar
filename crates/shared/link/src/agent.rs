@@ -90,6 +90,8 @@ pub enum Step {
     Read {
         /// Relative to the worktree folder when inside it, absolute otherwise.
         path: PathBuf,
+        /// The lines asked for, numbered from 1; None when read whole or the CLI did not say.
+        lines: Option<RangeInclusive<u32>>,
     },
     Edit {
         path: PathBuf,
@@ -307,9 +309,13 @@ pub(crate) fn read_workspace_agents(input: &mut In<'_>) -> Result<WorkspaceAgent
 
 pub(crate) fn write_step(out: &mut Out, step: &Step) {
     match step {
-        Step::Read { path } => {
+        Step::Read { path, lines } => {
             out.u8(0);
             out.path(path);
+            out.optional(lines.as_ref(), |out, range| {
+                out.u32(*range.start());
+                out.u32(*range.end());
+            });
         }
         Step::Edit { path, lines } => {
             out.u8(1);
@@ -336,6 +342,16 @@ pub(crate) fn read_step(input: &mut In<'_>) -> Result<Step, LinkError> {
     Ok(match input.u8()? {
         0 => Step::Read {
             path: input.path()?,
+            lines: input.optional(|input| {
+                let start = input.u32()?;
+                let end = input.u32()?;
+                if end < start {
+                    return Err(LinkError::Malformed(
+                        "a range of lines ends before it starts",
+                    ));
+                }
+                Ok(start..=end)
+            })?,
         },
         1 => Step::Edit {
             path: input.path()?,

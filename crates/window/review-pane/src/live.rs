@@ -9,17 +9,28 @@ use std::rc::Rc;
 
 use gpui_kit::*;
 use yaar_diff::{Row, Side};
-use yaar_frame::AskError;
+use yaar_frame::{AskError, NavError};
 use yaar_link::{
     ChangedFile, Fact, FileStatus, FlowForm, HistoryEntry, Reply, Request, Step, TurnId,
 };
+use yaar_navigator::{Location, OpenedFile};
 
+use crate::file_view::line_ranges;
 use crate::tree::checked_out;
 use crate::{
     FILES_ON_THEIR_WAY, FileContent, FlowAt, Following, LiveChange, PaneRow, Position, ReviewPane,
     ShownDiff, ShownFile, TimelineEntry, Unshown, View, file_rows, stops, stops_of, versions,
     whose,
 };
+
+pub(crate) struct LiveRead {
+    pub(crate) path: PathBuf,
+    pub(crate) lines: Option<RangeInclusive<u32>>,
+    pub(crate) opened: OpenedFile,
+    pub(crate) line_ranges: Vec<Range<usize>>,
+    pub(crate) scroll: UniformListScrollHandle,
+    pub(crate) in_view: Rc<RefCell<Range<usize>>>,
+}
 
 pub(crate) struct Live {
     change: Option<LiveChange>,
@@ -41,6 +52,9 @@ pub(crate) struct Live {
     asked: HashMap<PathBuf, u64>,
     sequence: u64,
     ended: Option<(TurnId, Option<String>)>,
+    reading: Option<LiveRead>,
+    reading_task: Option<Task<()>>,
+    read_sequence: u64,
     pub(crate) scroll: UniformListScrollHandle,
     pub(crate) in_view: Rc<RefCell<Range<usize>>>,
 }
@@ -66,9 +80,24 @@ impl Live {
             asked: HashMap::new(),
             sequence: 0,
             ended: None,
+            reading: None,
+            reading_task: None,
+            read_sequence: 0,
             scroll: UniformListScrollHandle::new(),
             in_view: Rc::new(RefCell::new(0..0)),
         }
+    }
+
+    pub(crate) fn reading(&self) -> Option<&LiveRead> {
+        self.reading.as_ref()
+    }
+
+    pub(crate) fn files_count(&self) -> usize {
+        self.files.len()
+    }
+
+    pub(crate) fn mark_scrolled(&mut self, at: &FlowAt) {
+        self.scrolled_to = Some(at.clone());
     }
 
     pub(crate) fn change(&self) -> Option<&LiveChange> {
@@ -226,6 +255,7 @@ impl Live {
     }
 
     fn start_over(&mut self, change: Option<LiveChange>) {
+        let keep_reading = self.change.is_none() && change.is_some();
         self.epoch += 1;
         self.change = change;
         self.files.clear();
@@ -241,6 +271,11 @@ impl Live {
         self.queue.clear();
         self.in_flight = 0;
         self.asked.clear();
+        if !keep_reading {
+            self.reading = None;
+            self.reading_task = None;
+            self.read_sequence += 1;
+        }
         *self.in_view.borrow_mut() = 0..0;
         self.scroll
             .0
@@ -348,6 +383,9 @@ impl ReviewPane {
                 self.live.ended = Some((turn.clone(), state.clone()));
                 self.live.stale = true;
                 self.live.everything = true;
+                if !self.live.files.is_empty() {
+                    self.live_clear_read(cx);
+                }
                 self.live_look(cx);
             }
             _ => {}
@@ -393,6 +431,108 @@ impl ReviewPane {
         cx.notify();
     }
 
+    pub(crate) fn live_open_read(
+        &mut self,
+        path: PathBuf,
+        lines: Option<RangeInclusive<u32>>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(reading) = self.live.reading.as_mut()
+            && reading.path == path
+        {
+            reading.lines = lines.clone();
+            let (row, strategy) = read_scroll_target(lines.as_ref(), reading.line_ranges.len());
+            reading.scroll.scroll_to_item(row, strategy);
+            self.live.reading_task = None;
+            cx.notify();
+            return;
+        }
+        let Some(absolute) = self.resolve_read_path(&path, cx) else {
+            self.live_clear_read(cx);
+            return;
+        };
+        self.live.read_sequence += 1;
+        let sequence = self.live.read_sequence;
+        let line = lines.as_ref().map_or(1, |range| (*range.start()).max(1));
+        let asking = self.models.navigation.update(cx, |navigation, cx| {
+            navigation.open(
+                Location {
+                    path: absolute,
+                    line,
+                    column: 0,
+                    text: String::new(),
+                },
+                cx,
+            )
+        });
+        let task = cx.spawn(async move |pane, cx| {
+            let answer = asking.await;
+            pane.update(cx, |pane, cx| {
+                pane.live_read_opened(sequence, path, lines, answer, cx)
+            })
+            .ok();
+        });
+        self.live.reading_task = Some(task);
+    }
+
+    pub(crate) fn live_clear_read(&mut self, cx: &mut Context<Self>) {
+        self.live.read_sequence += 1;
+        self.live.reading_task = None;
+        if self.live.reading.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn resolve_read_path(&self, path: &Path, cx: &App) -> Option<PathBuf> {
+        if path.is_absolute() {
+            return Some(path.to_path_buf());
+        }
+        let workspace = self
+            .live
+            .change
+            .as_ref()
+            .map(|change| &change.workspace)
+            .or_else(|| self.models.changes.read(cx).workspace())?;
+        let root = &self.models.workspaces.read(cx).workspace(workspace)?.path;
+        Some(root.join(path))
+    }
+
+    fn live_read_opened(
+        &mut self,
+        sequence: u64,
+        path: PathBuf,
+        lines: Option<RangeInclusive<u32>>,
+        answer: Result<Result<OpenedFile, String>, NavError>,
+        cx: &mut Context<Self>,
+    ) {
+        if sequence != self.live.read_sequence {
+            return;
+        }
+        self.live.reading_task = None;
+        match answer {
+            Ok(Ok(opened)) => {
+                let ranges = line_ranges(&opened.text);
+                let (row, strategy) = read_scroll_target(lines.as_ref(), ranges.len());
+                let scroll = UniformListScrollHandle::new();
+                scroll.scroll_to_item(row, strategy);
+                self.live.reading = Some(LiveRead {
+                    path,
+                    lines,
+                    opened,
+                    line_ranges: ranges,
+                    scroll,
+                    in_view: Rc::new(RefCell::new(0..0)),
+                });
+                cx.notify();
+            }
+            Ok(Err(_)) | Err(_) => {
+                if self.live.reading.take().is_some() {
+                    cx.notify();
+                }
+            }
+        }
+    }
+
     /// None for a command, and for an edit or a write whose file the list does not hold yet.
     pub(crate) fn live_row_of(&self, at: &FlowAt) -> Option<usize> {
         let shown = self.live.change.as_ref()?;
@@ -400,7 +540,7 @@ impl ReviewPane {
             return None;
         }
         match self.flow.step(at)? {
-            Step::Read { path } => self.live.heading_of(path).or_else(|| {
+            Step::Read { path, .. } => self.live.heading_of(path).or_else(|| {
                 self.live
                     .rows
                     .iter()
@@ -492,7 +632,7 @@ impl ReviewPane {
         for entry in self.flow.entries() {
             if let TimelineEntry::Step {
                 turn,
-                step: Step::Read { path },
+                step: Step::Read { path, .. },
                 ..
             } = entry
                 && *turn == shown.turn
@@ -559,9 +699,29 @@ impl ReviewPane {
         if self.live.scrolled_to.as_ref() == Some(&at) {
             return;
         }
-        if let Some(row) = self.live_row_of(&at) {
-            self.scroll_live_to(row);
-            cx.notify();
+        match self.flow.step(&at).cloned() {
+            Some(Step::Read { path, lines }) => {
+                self.live_open_read(path, lines, cx);
+                if let Some(row) = self.live_row_of(&at) {
+                    self.scroll_live_to(row);
+                    cx.notify();
+                } else {
+                    self.live.scrolled_to = Some(at);
+                }
+            }
+            Some(Step::Edit { .. } | Step::Write { .. }) => {
+                self.live_clear_read(cx);
+                if let Some(row) = self.live_row_of(&at) {
+                    self.scroll_live_to(row);
+                    cx.notify();
+                }
+            }
+            _ => {
+                if let Some(row) = self.live_row_of(&at) {
+                    self.scroll_live_to(row);
+                    cx.notify();
+                }
+            }
         }
     }
 
@@ -775,4 +935,16 @@ impl ReviewPane {
         self.live_remade(cx);
         self.live_pump(cx);
     }
+}
+
+fn read_scroll_target(
+    lines: Option<&RangeInclusive<u32>>,
+    line_count: usize,
+) -> (usize, ScrollStrategy) {
+    let Some(range) = lines else {
+        return (0, ScrollStrategy::Top);
+    };
+    let last = line_count.saturating_sub(1);
+    let target = (range.start().saturating_sub(1) as usize).min(last);
+    (target, ScrollStrategy::Center)
 }

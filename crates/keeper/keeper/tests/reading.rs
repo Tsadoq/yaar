@@ -672,7 +672,7 @@ fn a_turn_is_read_with_its_steps_in_order_also_while_it_runs_and_an_unknown_one_
     let s1 = kept.state(&workspace, &worktree);
     let ended = kept.turn(&a, 1, Some(&s1));
     for (number, step) in [
-        StepRecord::Read(PathBuf::from("base.txt")),
+        StepRecord::Read(PathBuf::from("base.txt"), Some(5..=20)),
         StepRecord::Edit(PathBuf::from("base.txt"), Some(vec![2..=4, 9..=9])),
         StepRecord::Edit(PathBuf::from("other.txt"), None),
         StepRecord::Write(PathBuf::from("one.txt")),
@@ -707,7 +707,8 @@ fn a_turn_is_read_with_its_steps_in_order_also_while_it_runs_and_an_unknown_one_
             state: Some(s1),
             steps: vec![
                 Step::Read {
-                    path: PathBuf::from("base.txt")
+                    path: PathBuf::from("base.txt"),
+                    lines: Some(5..=20),
                 },
                 Step::Edit {
                     path: PathBuf::from("base.txt"),

@@ -190,7 +190,7 @@ fn a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff(cx: &mut Te
         TimelineEntry::Step {
             turn: read_in,
             number: 1,
-            step: Step::Read { path: read },
+            step: Step::Read { path: read, .. },
         },
         TimelineEntry::Step {
             turn: edit_in,
@@ -247,7 +247,6 @@ fn a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff(cx: &mut Te
             && !window.focus_is_in(yaar_frame::PROGRAM_CONTEXT, &mut cx),
         "the focus is in the review pane"
     );
-    cx.simulate_keystrokes("shift-l");
     assert_eq!(
         window.review.read_with(&cx, |pane, _| pane.flow_form()),
         FlowForm::LiveDiff
@@ -395,6 +394,13 @@ fn the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_resta
         View::Flow
     );
     cx.simulate_keystrokes("shift-l");
+    wait_for_form(&mut client, &a, FlowForm::Timeline);
+    wait_until(&mut cx, "the timeline shown", |cx| {
+        window
+            .review
+            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::Timeline)
+    });
+    cx.simulate_keystrokes("shift-l");
     wait_for_form(&mut client, &a, FlowForm::LiveDiff);
     wait_until(&mut cx, "the live diff shown", |cx| {
         window
@@ -403,7 +409,7 @@ fn the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_resta
     });
     cx.simulate_keystrokes("shift-l");
     wait_for_form(&mut client, &a, FlowForm::Timeline);
-    wait_until(&mut cx, "the timeline shown", |cx| {
+    wait_until(&mut cx, "the timeline shown again", |cx| {
         window
             .review
             .read_with(cx, |pane, _| pane.flow_form() == FlowForm::Timeline)
@@ -425,9 +431,11 @@ fn the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_resta
     );
     assert_eq!(
         window.review.read_with(&cx, |pane, _| pane.flow_form()),
-        FlowForm::Timeline,
+        FlowForm::LiveDiff,
         "no form was chosen in B yet"
     );
+    cx.simulate_keystrokes("shift-l");
+    wait_for_form(&mut client, &b, FlowForm::Timeline);
     cx.simulate_keystrokes("shift-l");
     wait_for_form(&mut client, &b, FlowForm::LiveDiff);
 

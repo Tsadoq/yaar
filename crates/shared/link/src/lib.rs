@@ -44,7 +44,7 @@ use wire::{In, Out};
 
 /// Raised whenever a frame other than the two fixed ones changes, never lowered:
 /// [`Hello::age_against`] relies on it.
-pub const PROTOCOL_VERSION: u16 = 12;
+pub const PROTOCOL_VERSION: u16 = 13;
 
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
 
@@ -1749,6 +1749,11 @@ mod tests {
             steps: vec![
                 Step::Read {
                     path: PathBuf::from("notes.txt"),
+                    lines: None,
+                },
+                Step::Read {
+                    path: PathBuf::from("src/été.rs"),
+                    lines: Some(40..=120),
                 },
                 Step::Edit {
                     path: PathBuf::from("src/été.rs"),

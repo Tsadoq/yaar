@@ -41,7 +41,7 @@ enum FileItem {
     Comment(ThreadId, CommentId),
 }
 
-fn line_ranges(text: &str) -> Vec<Range<usize>> {
+pub(crate) fn line_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut start = 0;
     for line in text.split_inclusive('\n') {
