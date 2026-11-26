@@ -44,7 +44,7 @@ use wire::{In, Out};
 
 /// Raised whenever a frame other than the two fixed ones changes, never lowered:
 /// [`Hello::age_against`] relies on it.
-pub const PROTOCOL_VERSION: u16 = 11;
+pub const PROTOCOL_VERSION: u16 = 12;
 
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
 
@@ -1158,7 +1158,15 @@ mod tests {
             Request::CloseTerminal {
                 terminal: terminal(),
             },
+            Request::DismissResumable {
+                workspace: workspace.clone(),
+                session: Some(session_id()),
+            },
         ];
+        let dismiss_all = Request::DismissResumable {
+            workspace: workspace.clone(),
+            session: None,
+        };
         let refused = Request::AnswerConsent {
             agent: "pi".to_owned(),
             answer: ConsentAnswer::No,
@@ -1629,7 +1637,7 @@ mod tests {
                 request,
             });
         }
-        for request in [refused, asked_again] {
+        for request in [refused, asked_again, dismiss_all] {
             messages.push(Message::Request {
                 id: RequestId(u32::MAX - 4),
                 request,
@@ -1990,6 +1998,7 @@ mod tests {
                 RequestKind::AttachReview,
                 RequestKind::AnswerConsent,
                 RequestKind::AnswerConsent,
+                RequestKind::DismissResumable,
             ]
         );
     }
@@ -2049,6 +2058,7 @@ mod tests {
             RequestKind::ListClis,
             RequestKind::CompareForReview,
             RequestKind::ListConsents,
+            RequestKind::DismissResumable,
         ] {
             assert_eq!(kind.origin(), Origin::Window, "{kind:?}");
         }

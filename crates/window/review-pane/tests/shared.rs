@@ -651,6 +651,7 @@ fn moving_to_another_review_takes_the_marks_of_a_list_made_for_the_review_before
 
     // The reviewer moves to `t`'s review. The list stays, but its credits were made for `s`'s
     // review: read as `t`'s, they would mark a file `s` also changed, which no list for `t` says.
+    click("review-session-picker", &mut cx);
     click("review-session-1", &mut cx);
     assert_eq!(
         stage
@@ -821,6 +822,7 @@ fn the_list_of_s_is_shown_among(
 fn moving_to_another_review_lists_the_change_shown_again_for_that_review(cx: &mut TestAppContext) {
     let (mut stage, mut cx) = the_list_of_s_is_shown(cx);
 
+    click("review-session-picker", &mut cx);
     click("review-session-1", &mut cx);
     listed_for(
         &mut stage,
@@ -897,6 +899,7 @@ fn moving_to_the_review_of_no_agent_lists_the_change_shown_again_with_no_credits
         &mut cx,
     );
 
+    click("review-session-picker", &mut cx);
     click("review-session-1", &mut cx);
     let asked = stage.keeper.expect(
         Request::CompareVersions {
@@ -996,6 +999,7 @@ fn the_list_of_s_and_then_the_review_of_no_agent(
         &review_of_no_agent(),
         cx,
     );
+    click("review-session-picker", &mut cx);
     click("review-session-2", &mut cx);
     let asked = stage.keeper.expect(
         Request::CompareVersions {
@@ -1053,6 +1057,7 @@ fn a_click_back_from_the_review_of_no_agent_lists_the_change_again_for_the_sessi
 ) {
     let (mut stage, mut cx) = the_list_of_s_and_then_the_review_of_no_agent(cx);
 
+    click("review-session-picker", &mut cx);
     click("review-session-0", &mut cx);
     back_to_the_list_of_s(&mut stage, &mut cx);
 }
@@ -1080,6 +1085,7 @@ fn the_cycle_of_shift_a_through_every_review_ends_on_the_list_of_the_review_it_s
         &review_of_no_agent(),
         cx,
     );
+    click("review-session-picker", &mut cx);
     click("review-session-0", &mut cx);
     cx.simulate_keystrokes("shift-a");
     listed_for(

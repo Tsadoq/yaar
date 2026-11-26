@@ -71,22 +71,7 @@ impl ReviewPane {
                     .selector("review-reviewed")
             });
 
-        let sessions = self.session_chips(cx);
-        let sessions_group = (!sessions.is_empty()).then(|| {
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(SPACE_2)
-                .child(
-                    div()
-                        .typed(TypeRole::Small)
-                        .text_color(palette.text_dim)
-                        .whitespace_nowrap()
-                        .child("Reviewing:"),
-                )
-                .children(sessions)
-        });
+        let session_picker = self.render_session_picker(cx);
         let server_chip = self.render_server_chip(cx);
 
         let (total_added, total_removed) = self.total_diff_stats();
@@ -230,7 +215,7 @@ impl ReviewPane {
 
             row = row
                 .children(reviewed_chip)
-                .children(sessions_group)
+                .children(session_picker)
                 .children(server_chip)
                 .children(file_stats)
                 .child(div().flex_1())

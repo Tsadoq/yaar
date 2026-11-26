@@ -59,13 +59,15 @@ Each terminal starts your login shell (`SHELL`, else the shell of your user, els
 terminal. Each worktree keeps its own terminals, which run on while another worktree is on
 screen.
 
-- Cmd-T opens a shell. A row at the top of the pane holds a launcher for a shell and one
-  for each agent CLI. Cmd-Shift-T opens the chosen CLI, and Cmd-Alt-C chooses the next.
+- Cmd-T opens a shell. A single header bar at the top of the pane holds open terminal tabs
+  and a `+ ▾` launcher: `+` opens the chosen agent CLI (Cmd-Shift-T; Cmd-Alt-C chooses the
+  next), and `▾` lists each agent CLI alongside Shell and lets you switch the default.
   The launcher starts the CLI through your login shell, so it is the same program you type
   in a shell.
 - Cmd-] and Cmd-[ move between terminals, Cmd-Shift-W (or a tab's close button) closes a
-  terminal, and Cmd-D shows two side by side.
-- Cmd-Alt-P moves the pane to the left of the diff, below it, and back to the right.
+  terminal, and Cmd-D (or `Split`) shows two terminals at once.
+- Cmd-Alt-P (or `Dock ▾`) moves the pane to the left of the diff, below it, and back to
+  the right.
 - The window's title is the one the program of the focused terminal sets.
 
 ## Agents
@@ -92,10 +94,12 @@ other byte. Cmd-Alt-Shift-E later takes that string out again. Outside the app t
 extension does nothing: it acts only where a shell of the app sets `YAAR_PI_REPORT`. Until
 you say yes, the app writes nothing of pi's and does not hear it.
 
-**Resume.** After a restart of the machine or a Cmd-Alt-Q, a line under the launchers
-offers "Resume" for each session of the worktree that was running. A click, or Cmd-Shift-R,
-runs `claude --resume '<id>'` or `pi --session-dir '<folder>' --session '<id>'`, and the
-session comes back with its review.
+**Resume.** After a restart of the machine or a Cmd-Alt-Q, a `↺ N ▾` control in the
+terminal header lists each session of the worktree that was running. Clicking a session,
+or pressing Cmd-Shift-R, runs `claude --resume '<id>'` or
+`pi --session-dir '<folder>' --session '<id>'`, and the session comes back with its
+review. You can also dismiss individual offers (`×`) or clear them all (`Dismiss all`)
+without deleting any saved reviews.
 
 ## Comments and review rounds
 
@@ -132,8 +136,9 @@ session comes back with its review.
   start that CLI with the review (Shift-N; `ctrl-n` chooses another CLI).
 - **One review for each session.** Each worktree has one review that belongs to no agent;
   the first session started in it takes it over. Two sessions in one worktree have a
-  review each, and Shift-A shows the other's. A file both changed is marked "also changed
-  by another agent".
+  review each; switch between them from the session picker dropdown in the review header
+  (grouped into active sessions and past reviews) or with Shift-A. A file both changed is
+  marked "also changed by another agent".
 
 ## Worktrees with an agent
 

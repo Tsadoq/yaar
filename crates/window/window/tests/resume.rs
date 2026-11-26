@@ -19,7 +19,7 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
     window.open_this_folder(cut_off.repo.path(), &mut cx);
 
     wait_until(&mut cx, "the control to resume the session", |cx| {
-        drawn("terminal-resume-0", cx).is_some()
+        drawn("terminal-resume", cx).is_some()
     });
     assert_eq!(
         window
@@ -27,6 +27,11 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
             .read_with(&cx, |pane, cx| pane.resumable(cx)),
         std::slice::from_ref(&cut_off.session)
     );
+    let trigger = window.point_in("terminal-resume", &mut cx);
+    cx.simulate_click(trigger, Modifiers::none());
+    wait_until(&mut cx, "the resume menu", |cx| {
+        drawn("terminal-resume-0", cx).is_some()
+    });
     assert!(drawn("terminal-resume-1", &mut cx).is_none(), "one control");
     assert_eq!(
         window.terminals.read_with(&cx, |pane, _| pane.terminals()),
@@ -80,10 +85,10 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
             .session(&cut_off.session)
             .is_some_and(|session| session.resumable)
     });
-    let line = drawn("terminal-resume-0", &mut cx).is_some();
+    let trigger_shown = drawn("terminal-resume", &mut cx).is_some();
     assert!(
-        listed && line,
-        "no look after the click found the session listed with its line: listed {listed}, line {line}"
+        listed && trigger_shown,
+        "no look after the click found the session listed with its trigger: listed {listed}, trigger {trigger_shown}"
     );
 
     std::fs::write(&start_gate, "").expect("let the stand-in report");
@@ -96,9 +101,9 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
                     .session(&cut_off.session)
                     .is_some_and(|session| session.resumable)
             });
-            let line = drawn("terminal-resume-0", cx).is_some();
+            let trigger_shown = drawn("terminal-resume", cx).is_some();
             assert!(
-                !listed || line,
+                !listed || trigger_shown,
                 "the control went before the session was listed resumable no more"
             );
             !listed
@@ -136,7 +141,7 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         })
     });
     wait_until(&mut cx, "the control gone", |cx| {
-        drawn("terminal-resume-0", cx).is_none()
+        drawn("terminal-resume", cx).is_none()
     });
     let opened = window.terminals.read_with(&cx, |pane, _| pane.terminals());
     assert_eq!(opened.len(), 1, "the click opened one terminal: {opened:?}");

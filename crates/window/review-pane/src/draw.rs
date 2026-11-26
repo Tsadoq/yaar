@@ -99,6 +99,7 @@ impl Render for ReviewPane {
         let start = self.render_offer_to_start(cx);
         let offer = self.offer_bar(cx);
         let bar = self.render_bar(cx);
+        let session_popover = self.render_session_popover(cx);
         let servers = self.render_servers(cx);
         let hover = self.render_hover(window, cx);
         let references = self.render_references(window, cx);
@@ -110,7 +111,12 @@ impl Render for ReviewPane {
             .flex_col()
             .bg(palette.pane)
             .typed(TypeRole::Body)
-            .text_color(palette.text);
+            .text_color(palette.text)
+            .capture_key_down(cx.listener(|pane, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && pane.close_session_picker(cx) {
+                    cx.stop_propagation();
+                }
+            }));
         // Anything inside `body` is what the reviewer reads: acting on it pauses follow.
         let body = div()
             .flex_1()
@@ -217,23 +223,31 @@ impl Render for ReviewPane {
                 )
         });
         if let Some(file_view) = file_view {
-            return pane.children(bar).children(servers).child(
-                body.child(self.with_file_keys(div().flex_1().min_h_0().child(file_view), cx))
-                    .children(hover)
-                    .children(references)
-                    .children(notice)
-                    .children(comment_box),
-            );
+            return pane
+                .children(bar)
+                .children(servers)
+                .child(
+                    body.child(self.with_file_keys(div().flex_1().min_h_0().child(file_view), cx))
+                        .children(hover)
+                        .children(references)
+                        .children(notice)
+                        .children(comment_box),
+                )
+                .children(session_popover);
         }
         if let Some(flow) = flow {
-            return pane.children(bar).children(servers).child(
-                body.child(self.with_keys(div().flex_1().min_h_0().child(flow), cx))
-                    .children(hover)
-                    .children(references)
-                    .children(notice)
-                    .children(comment_box)
-                    .children(commit_field),
-            );
+            return pane
+                .children(bar)
+                .children(servers)
+                .child(
+                    body.child(self.with_keys(div().flex_1().min_h_0().child(flow), cx))
+                        .children(hover)
+                        .children(references)
+                        .children(notice)
+                        .children(comment_box)
+                        .children(commit_field),
+                )
+                .children(session_popover);
         }
         if self.rows.is_empty() {
             let (title, detail) = self.idle_lines(cx);
@@ -254,15 +268,19 @@ impl Render for ReviewPane {
                 .flex()
                 .children(left_column)
                 .child(self.with_keys(idle, cx));
-            return pane.children(bar).children(servers).child(
-                body.children(start)
-                    .children(rounds)
-                    .children(offer)
-                    .child(main_area)
-                    .children(notice)
-                    .children(comment_box)
-                    .children(commit_field),
-            );
+            return pane
+                .children(bar)
+                .children(servers)
+                .child(
+                    body.children(start)
+                        .children(rounds)
+                        .children(offer)
+                        .child(main_area)
+                        .children(notice)
+                        .children(comment_box)
+                        .children(commit_field),
+                )
+                .children(session_popover);
         }
         if !self.first_diff_marked
             && self
@@ -320,17 +338,20 @@ impl Render for ReviewPane {
                     ),
                 ),
         );
-        pane.children(bar).children(servers).child(
-            body.children(start)
-                .children(rounds)
-                .children(offer)
-                .child(main_area)
-                .children(hover)
-                .children(references)
-                .children(notice)
-                .children(comment_box)
-                .children(commit_field),
-        )
+        pane.children(bar)
+            .children(servers)
+            .child(
+                body.children(start)
+                    .children(rounds)
+                    .children(offer)
+                    .child(main_area)
+                    .children(hover)
+                    .children(references)
+                    .children(notice)
+                    .children(comment_box)
+                    .children(commit_field),
+            )
+            .children(session_popover)
     }
 }
 

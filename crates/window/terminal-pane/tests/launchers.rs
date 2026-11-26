@@ -5,10 +5,11 @@ mod common;
 
 use gpui_kit::{
     Bounds, Modifiers, Pixels, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point,
+    px,
 };
 use yaar_link::{
     AgentCli, Ending, Fact, Program, Reply, Repository, Request, Session, SessionId, SessionState,
-    TerminalId, WorkspaceAgents, WorkspaceId,
+    TerminalId, TerminalPlace, WorkspaceAgents, WorkspaceId,
 };
 use yaar_terminal_pane::{CloseTerminal, NewAgentTerminal, NewTerminal, NextAgentCli, ResumeAgent};
 
@@ -72,7 +73,44 @@ fn chosen(panes: &Panes, cx: &mut VisualTestContext) -> Option<AgentCli> {
     panes.pane.read_with(cx, |pane, cx| pane.chosen_cli(cx))
 }
 
+fn open_launcher_menu(cx: &mut VisualTestContext) {
+    wait_drawn(cx, "the launcher menu trigger", |cx| {
+        drawn("terminal-launcher-menu", cx).is_some()
+    });
+    if drawn("terminal-launcher-popover", cx).is_none() {
+        click_in("terminal-launcher-menu", cx);
+        wait_drawn(cx, "the launcher menu", |cx| {
+            drawn("terminal-launcher-popover", cx).is_some()
+        });
+    }
+}
+
+fn open_resume_menu(cx: &mut VisualTestContext) {
+    wait_drawn(cx, "the resume trigger", |cx| {
+        drawn("terminal-resume", cx).is_some()
+    });
+    if drawn("terminal-resume-popover", cx).is_none() {
+        click_in("terminal-resume", cx);
+        wait_drawn(cx, "the resume menu", |cx| {
+            drawn("terminal-resume-popover", cx).is_some()
+        });
+    }
+}
+
+fn open_dock_menu(cx: &mut VisualTestContext) {
+    wait_drawn(cx, "the dock trigger", |cx| {
+        drawn("terminal-place", cx).is_some()
+    });
+    if drawn("terminal-place-popover", cx).is_none() {
+        click_in("terminal-place", cx);
+        wait_drawn(cx, "the dock menu", |cx| {
+            drawn("terminal-place-popover", cx).is_some()
+        });
+    }
+}
+
 fn wait_for_chosen_mark(all: &[&str], agent: &str, cx: &mut VisualTestContext) -> Bounds<Pixels> {
+    open_launcher_menu(cx);
     let others: Vec<String> = all
         .iter()
         .filter(|other| **other != agent)
@@ -104,31 +142,53 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
         [claude(), pi()]
     );
 
-    wait_drawn(&mut cx, "the launchers", |cx| {
-        drawn("terminal-launcher-pi", cx).is_some()
+    wait_drawn(&mut cx, "the terminal header bar", |cx| {
+        drawn("terminal-launchers", cx).is_some()
+            && drawn("terminal-launcher-add", cx).is_some()
+            && drawn("terminal-launcher-menu", cx).is_some()
     });
     let row = bounds_of("terminal-launchers", &mut cx);
-    let (shell, first, second) = (
-        bounds_of("terminal-launcher-shell", &mut cx),
-        bounds_of("terminal-launcher-claude", &mut cx),
-        bounds_of("terminal-launcher-pi", &mut cx),
-    );
-    assert!(shell.right() <= first.left() && first.right() <= second.left());
-    assert!(
-        second.size.width > first.size.width,
-        "{second:?} is not wider than {first:?}: the launcher does not carry the CLI's title"
-    );
-    for launcher in [shell, first, second] {
-        assert!(within(launcher, row), "{launcher:?} lies outside {row:?}");
+    assert_eq!(row.size.height, px(40.));
+    for control in [
+        bounds_of("terminal-launcher-add", &mut cx),
+        bounds_of("terminal-launcher-menu", &mut cx),
+        bounds_of("terminal-split-toggle", &mut cx),
+        bounds_of("terminal-place", &mut cx),
+    ] {
+        assert!(within(control, row), "{control:?} lies outside {row:?}");
     }
     let how_to_open = bounds_of("terminal-how-to-open", &mut cx);
     assert!(row.bottom() <= how_to_open.top());
     assert_eq!(row.top(), bounds_of("elsewhere-pane", &mut cx).top());
 
+    open_launcher_menu(&mut cx);
+    let menu = bounds_of("terminal-launcher-popover", &mut cx);
+    let (first, second, shell) = (
+        bounds_of("terminal-launcher-claude", &mut cx),
+        bounds_of("terminal-launcher-pi", &mut cx),
+        bounds_of("terminal-launcher-shell", &mut cx),
+    );
+    assert!(first.bottom() <= second.top() && second.bottom() <= shell.top());
+    let first_title = bounds_of("terminal-launcher-title-claude", &mut cx);
+    let second_title = bounds_of("terminal-launcher-title-pi", &mut cx);
+    assert!(
+        second_title.size.width > first_title.size.width,
+        "{second_title:?} is not wider than {first_title:?}: the launcher does not carry the CLI's title"
+    );
+    for launcher in [first, second, shell] {
+        assert!(within(launcher, menu), "{launcher:?} lies outside {menu:?}");
+    }
+
     assert_eq!(chosen(&panes, &mut cx), Some(claude()));
     let mark = wait_for_chosen_mark(&["claude", "pi"], "claude", &mut cx);
     assert!(within(mark, first));
     assert!(drawn("terminal-launcher-chosen-shell", &mut cx).is_none());
+
+    // Close menu before checking terminal slot sizing.
+    click_in("terminal-launcher-menu", &mut cx);
+    wait_drawn(&mut cx, "launcher menu closed", |cx| {
+        drawn("terminal-launcher-popover", cx).is_none()
+    });
 
     let first_terminal = terminal('a');
     panes.open_terminal(&first_terminal, &mut cx);
@@ -141,9 +201,11 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
     });
     let size = panes.grid(&first_terminal);
 
-    click_in("terminal-launcher-claude", &mut cx);
+    // Primary `+` button launches the chosen default CLI.
+    click_in("terminal-launcher-add", &mut cx);
     panes.answer_open(&terminal('x'), agent("claude"), &mut cx);
 
+    open_launcher_menu(&mut cx);
     click_in("terminal-launcher-pi", &mut cx);
     let (workspace, asked) = panes.answer_open(&terminal('b'), agent("pi"), &mut cx);
     assert_eq!((workspace, asked), (one.clone(), size));
@@ -167,12 +229,14 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
     assert_eq!(chosen(&panes, &mut cx), Some(pi()));
     let mark = wait_for_chosen_mark(&["claude", "pi"], "pi", &mut cx);
     assert!(within(mark, bounds_of("terminal-launcher-pi", &mut cx)));
+    click_in("terminal-launcher-menu", &mut cx);
     panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
     panes.answer_open(&terminal('d'), agent("pi"), &mut cx);
 
     panes.press_in_the_app::<NextAgentCli>(&mut cx);
     assert_eq!(chosen(&panes, &mut cx), Some(claude()));
     wait_for_chosen_mark(&["claude", "pi"], "claude", &mut cx);
+    click_in("terminal-launcher-menu", &mut cx);
     panes.press_in_the_app::<NextAgentCli>(&mut cx);
     assert_eq!(chosen(&panes, &mut cx), Some(pi()));
     panes.press_in_the_app::<NextAgentCli>(&mut cx);
@@ -222,13 +286,19 @@ fn the_chosen_launcher_is_the_choice_of_the_frames_model_which_another_part_may_
     assert_eq!(model_choice(&panes, &mut cx), Some(claude()));
     assert_eq!(chosen(&panes, &mut cx), Some(claude()));
     wait_for_chosen_mark(&["claude", "pi"], "claude", &mut cx);
+
+    // Switching the default CLI from the launcher menu updates the shared model.
+    click_in("terminal-launcher-default-pi", &mut cx);
+    wait_for_chosen_mark(&["claude", "pi"], "pi", &mut cx);
+    assert_eq!(model_choice(&panes, &mut cx), Some(pi()));
     panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
-    panes.answer_open(&terminal('b'), agent("claude"), &mut cx);
+    panes.answer_open(&terminal('b'), agent("pi"), &mut cx);
 }
 
 #[gpui_kit::test]
 fn with_no_cli_named_the_pane_offers_only_the_shell_and_the_key_says_so(cx: &mut TestAppContext) {
     let (mut panes, mut cx) = open_naming_in(cx, two_workspaces(), Vec::new());
+    open_launcher_menu(&mut cx);
     wait_drawn(&mut cx, "the shell's launcher", |cx| {
         drawn("terminal-launcher-shell", cx).is_some()
     });
@@ -240,6 +310,7 @@ fn with_no_cli_named_the_pane_offers_only_the_shell_and_the_key_says_so(cx: &mut
     assert_eq!(chosen(&panes, &mut cx), None);
     assert!(drawn("terminal-launcher-claude", &mut cx).is_none());
     assert!(drawn("terminal-launcher-pi", &mut cx).is_none());
+    click_in("terminal-launcher-menu", &mut cx);
 
     // A key that fell back to a shell would ask for one in the workspace on screen, so the barrier
     // is a shell asked for in the other workspace.
@@ -275,6 +346,7 @@ fn with_no_cli_named_the_pane_offers_only_the_shell_and_the_key_says_so(cx: &mut
 #[gpui_kit::test]
 fn the_shell_launcher_opens_a_shell_as_new_terminal_does(cx: &mut TestAppContext) {
     let (mut panes, mut cx) = open_naming(cx, vec![claude(), pi()]);
+    open_launcher_menu(&mut cx);
     wait_drawn(&mut cx, "the launchers", |cx| {
         drawn("terminal-launcher-shell", cx).is_some()
     });
@@ -291,6 +363,7 @@ fn a_launcher_the_keeper_refuses_adds_no_terminal_and_the_reason_is_the_notice(
     cx: &mut TestAppContext,
 ) {
     let (panes, mut cx) = open_naming(cx, vec![claude(), pi()]);
+    open_launcher_menu(&mut cx);
     wait_drawn(&mut cx, "the launchers", |cx| {
         drawn("terminal-launcher-pi", cx).is_some()
     });
@@ -463,44 +536,40 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     let elsewhere = session('d', "pi", &two, true);
     tell_agents(&panes, &one, vec![a.clone(), b.clone(), ended]);
     tell_agents(&panes, &two, vec![elsewhere.clone()]);
-    wait_drawn(&mut cx, "the resume line", |cx| {
-        drawn("terminal-resume-1", cx).is_some()
+    wait_drawn(&mut cx, "the resume trigger", |cx| {
+        drawn("terminal-resume", cx).is_some()
     });
     assert_eq!(offered(&panes, &mut cx), [a.id.clone(), b.id.clone()]);
-    assert!(drawn("terminal-resume-2", &mut cx).is_none());
 
-    // The resume line lies under the launchers and takes its room from the terminal, which is
-    // resized to fewer rows.
-    let (launchers, line) = (
+    // The resume trigger sits in the single 40 px header bar and takes no height from the terminal.
+    let (launchers, trigger) = (
         bounds_of("terminal-launchers", &mut cx),
         bounds_of("terminal-resume", &mut cx),
     );
-    assert!(launchers.bottom() <= line.top());
+    assert_eq!(launchers.size.height, px(40.));
+    assert!(within(trigger, launchers));
+    assert_eq!(panes.grid(&first_terminal), whole);
+    assert!(launchers.bottom() <= bounds_of("terminal-slot-0", &mut cx).top());
+
+    open_resume_menu(&mut cx);
+    assert!(drawn("terminal-resume-2", &mut cx).is_none());
+    let menu = bounds_of("terminal-resume-popover", &mut cx);
     let (first, second) = (
         bounds_of("terminal-resume-0", &mut cx),
         bounds_of("terminal-resume-1", &mut cx),
     );
-    assert!(first.right() <= second.left());
-    assert!(within(first, line) && within(second, line));
+    assert!(first.bottom() <= second.top());
+    assert!(within(first, menu) && within(second, menu));
+    let first_title = bounds_of("terminal-resume-title-0", &mut cx);
+    let second_title = bounds_of("terminal-resume-title-1", &mut cx);
     assert!(
-        second.size.width > first.size.width,
-        "{second:?} is not wider than {first:?}: the control does not carry the title"
+        second_title.size.width > first_title.size.width,
+        "{second_title:?} is not wider than {first_title:?}: the control does not carry the title"
     );
-    wait_until(&mut cx, "the terminal made shorter", |_| {
-        panes
-            .keeper
-            .resizes(&first_terminal)
-            .last()
-            .is_some_and(|last| last.rows < whole.rows)
-    });
-    let shorter = panes.grid(&first_terminal);
-    assert_eq!(shorter.columns, whole.columns);
-    assert!(shorter.rows < whole.rows, "{shorter:?} and {whole:?}");
-    assert!(line.bottom() <= bounds_of("terminal-slot-0", &mut cx).top());
 
     click_in("terminal-resume-1", &mut cx);
     let (workspace, asked) = panes.answer_open(&terminal('b'), resume(&b), &mut cx);
-    assert_eq!((workspace, asked), (one.clone(), shorter));
+    assert_eq!((workspace, asked), (one.clone(), whole));
     wait_drawn(&mut cx, "the focus in the resume", |cx| {
         panes.focused_terminal(cx) == Some(terminal('b'))
     });
@@ -544,6 +613,7 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     (running.resumable, running.terminal, running.state) =
         (false, Some(terminal('c')), SessionState::Works);
     tell_agents(&panes, &one, vec![running, b.clone()]);
+    open_resume_menu(&mut cx);
     wait_drawn(&mut cx, "the first control gone", |cx| {
         drawn("terminal-resume-1", cx).is_none()
     });
@@ -561,14 +631,10 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     });
 
     tell_agents(&panes, &one, Vec::new());
-    wait_drawn(&mut cx, "the line gone", |cx| {
+    wait_drawn(&mut cx, "the trigger gone", |cx| {
         drawn("terminal-resume", cx).is_none()
     });
     assert!(offered(&panes, &mut cx).is_empty());
-    let shown = terminal('c');
-    wait_until(&mut cx, "the terminal made taller", |_| {
-        panes.keeper.resizes(&shown).last() == Some(&whole)
-    });
 
     tell_agents(&panes, &one, vec![b.clone()]);
     wait_drawn(&mut cx, "the offer again", |cx| {
@@ -598,7 +664,8 @@ fn a_resume_the_keeper_refuses_is_the_notice_and_the_session_can_be_resumed_agai
     let one = workspace_id('1');
     let a = session('a', "claude", &one, true);
     tell_agents(&panes, &one, vec![a.clone()]);
-    wait_drawn(&mut cx, "the resume line", |cx| {
+    open_resume_menu(&mut cx);
+    wait_drawn(&mut cx, "the resume item", |cx| {
         drawn("terminal-resume-0", cx).is_some()
     });
 
@@ -633,16 +700,16 @@ fn a_resume_asked_for_once_is_not_asked_for_again_while_the_session_is_listed_re
     let (one, two) = (workspace_id('1'), workspace_id('2'));
     let a = session('a', "claude", &one, true);
     tell_agents(&panes, &one, vec![a.clone()]);
-    wait_drawn(&mut cx, "the resume line", |cx| {
-        drawn("terminal-resume-0", cx).is_some()
-    });
 
     // A second click before the answer asks nothing: the Keeper refuses a session only once it
     // runs, which is too late. Nor do a click or Resume Agent while the session is listed
     // resumable; the shell asked for in the other workspace is the barrier.
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('b'), resume(&a), &mut cx);
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
 
@@ -686,11 +753,9 @@ fn a_resume_whose_terminal_ends_before_the_session_reports_can_be_asked_for_agai
     let one = workspace_id('1');
     let a = session('a', "claude", &one, true);
     tell_agents(&panes, &one, vec![a.clone()]);
-    wait_drawn(&mut cx, "the resume line", |cx| {
-        drawn("terminal-resume-0", cx).is_some()
-    });
 
     // The resumed program exits before it reports, as a CLI does that cannot find its session.
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('b'), resume(&a), &mut cx);
     panes.keeper.tell(Fact::TerminalEnded {
@@ -698,6 +763,7 @@ fn a_resume_whose_terminal_ends_before_the_session_reports_can_be_asked_for_agai
         ending: Ending::Exited(1),
     });
     wait_for_ending(&panes, &terminal('b'), &mut cx);
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('c'), resume(&a), &mut cx);
     panes.keeper.tell(Fact::TerminalEnded {
@@ -718,12 +784,10 @@ fn a_resume_whose_terminal_ended_before_the_answer_was_taken_can_be_asked_for_ag
     let one = workspace_id('1');
     let a = session('a', "claude", &one, true);
     tell_agents(&panes, &one, vec![a.clone()]);
-    wait_drawn(&mut cx, "the resume line", |cx| {
-        drawn("terminal-resume-0", cx).is_some()
-    });
 
     // A program that fails at once can end before the pane takes the answer that named its
     // terminal: the end is sent first, then a change of the agents, then the answer.
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
     let (id, request) = panes.keeper.request(&mut cx);
     assert!(
@@ -756,6 +820,7 @@ fn a_resume_whose_terminal_ended_before_the_answer_was_taken_can_be_asked_for_ag
             .pane
             .read_with(cx, |pane, _| pane.terminals().contains(&terminal('b')))
     });
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('c'), resume(&a), &mut cx);
 }
@@ -770,9 +835,7 @@ fn a_resume_is_held_until_its_own_terminal_ends_and_the_end_of_another_terminal_
     panes.answer_open(&terminal('s'), Program::Shell, &mut cx);
     let a = session('a', "claude", &one, true);
     tell_agents(&panes, &one, vec![a.clone()]);
-    wait_drawn(&mut cx, "the resume line", |cx| {
-        drawn("terminal-resume-0", cx).is_some()
-    });
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('b'), resume(&a), &mut cx);
 
@@ -783,6 +846,7 @@ fn a_resume_is_held_until_its_own_terminal_ends_and_the_end_of_another_terminal_
         ending: Ending::Exited(0),
     });
     wait_for_ending(&panes, &terminal('s'), &mut cx);
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
     click_in(&format!("sidebar-workspace-{two}"), &mut cx);
@@ -818,6 +882,7 @@ fn a_resume_is_held_until_its_own_terminal_ends_and_the_end_of_another_terminal_
         ending: Ending::Exited(1),
     });
     wait_for_ending(&panes, &terminal('b'), &mut cx);
+    open_resume_menu(&mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('c'), resume(&a), &mut cx);
 }
@@ -852,23 +917,21 @@ fn tab_close_button_closes_running_terminal_and_dismisses_ended_terminal_locally
 ) {
     let (mut panes, mut cx) = open_naming(cx, vec![claude(), pi()]);
     let (t1, t2) = (terminal('1'), terminal('2'));
-    assert!(drawn("terminal-tabs-bar", &mut cx).is_none());
 
     panes.open_terminal(&t1, &mut cx);
     panes.open_terminal(&t2, &mut cx);
     let close_t1 = format!("terminal-tab-{t1}-close");
     let close_t2 = format!("terminal-tab-{t2}-close");
-    wait_drawn(&mut cx, "the terminal tabs bar", |cx| {
-        drawn("terminal-tabs-bar", cx).is_some()
+    wait_drawn(&mut cx, "the terminal tabs inside the header bar", |cx| {
+        drawn("terminal-launchers", cx).is_some()
             && drawn(&close_t1, cx).is_some()
             && drawn(&close_t2, cx).is_some()
     });
 
-    // Open terminal tabs sit in a dedicated row below the launchers row.
+    // Open terminal tabs sit inside the single 40 px header bar.
     let launchers_row = bounds_of("terminal-launchers", &mut cx);
-    let tabs_bar = bounds_of("terminal-tabs-bar", &mut cx);
-    assert!(launchers_row.bottom() <= tabs_bar.top());
-    assert!(within(bounds_of(&close_t1, &mut cx), tabs_bar));
+    assert_eq!(launchers_row.size.height, px(40.));
+    assert!(within(bounds_of(&close_t1, &mut cx), launchers_row));
 
     // Clicking the close button on a running terminal sends CloseTerminal and removes it.
     click_in(&close_t1, &mut cx);
@@ -904,7 +967,7 @@ fn tab_close_button_closes_running_terminal_and_dismisses_ended_terminal_locally
         |cx| {
             panes.pane.read_with(cx, |pane, _| {
                 pane.terminals().is_empty() && pane.shown().is_empty()
-            }) && drawn("terminal-tabs-bar", cx).is_none()
+            }) && drawn(&close_t2, cx).is_none()
                 && drawn("terminal-how-to-open", cx).is_some()
         },
     );
@@ -930,6 +993,113 @@ fn tab_close_button_closes_running_terminal_and_dismisses_ended_terminal_locally
             .pane
             .read_with(cx, |pane, _| pane.terminals().is_empty())
     });
+}
+
+#[gpui_kit::test]
+fn dismissing_resumable_sessions_from_the_popover_sends_dismiss_requests_for_one_or_all(
+    cx: &mut TestAppContext,
+) {
+    let (panes, mut cx) = open_panes_listing(cx, &[two_workspaces()], |_, _| {});
+    let one = workspace_id('1');
+    let a = session('a', "claude", &one, true);
+    let b = session('b', "pi", &one, true);
+    tell_agents(&panes, &one, vec![a.clone(), b.clone()]);
+    open_resume_menu(&mut cx);
+
+    click_in("terminal-resume-dismiss-0", &mut cx);
+    let (req_id, request) = panes.keeper.request(&mut cx);
+    assert_eq!(
+        request,
+        Request::DismissResumable {
+            workspace: one.clone(),
+            session: Some(a.id.clone()),
+        }
+    );
+    panes.keeper.reply(req_id, Ok(Reply::Done));
+    tell_agents(&panes, &one, vec![b.clone()]);
+    wait_drawn(&mut cx, "one offer left", |cx| {
+        offered(&panes, cx) == [b.id.clone()]
+    });
+
+    click_in("terminal-resume-dismiss-all", &mut cx);
+    let (req_id, request) = panes.keeper.request(&mut cx);
+    assert_eq!(
+        request,
+        Request::DismissResumable {
+            workspace: one.clone(),
+            session: None,
+        }
+    );
+    panes.keeper.reply(req_id, Ok(Reply::Done));
+    tell_agents(&panes, &one, Vec::new());
+    wait_drawn(&mut cx, "resume trigger gone", |cx| {
+        drawn("terminal-resume", cx).is_none() && drawn("terminal-resume-popover", cx).is_none()
+    });
+}
+
+#[gpui_kit::test]
+fn dock_popover_changes_terminal_placement_and_escape_closes_popovers(cx: &mut TestAppContext) {
+    let (panes, mut cx) = open_naming(cx, vec![claude(), pi()]);
+    open_dock_menu(&mut cx);
+    click_in("terminal-place-bottom", &mut cx);
+    wait_drawn(&mut cx, "dock popover closed", |cx| {
+        drawn("terminal-place-popover", cx).is_none()
+    });
+    assert_eq!(
+        panes
+            .models
+            .settings
+            .read_with(&cx, |settings, _| settings.terminal_place()),
+        TerminalPlace::Below
+    );
+
+    open_dock_menu(&mut cx);
+    click_in("terminal-place-left", &mut cx);
+    wait_drawn(&mut cx, "dock popover closed after left", |cx| {
+        drawn("terminal-place-popover", cx).is_none()
+    });
+    assert_eq!(
+        panes
+            .models
+            .settings
+            .read_with(&cx, |settings, _| settings.terminal_place()),
+        TerminalPlace::Left
+    );
+
+    open_launcher_menu(&mut cx);
+    cx.update(|window, cx| panes.pane_focus.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    wait_drawn(&mut cx, "launcher popover dismissed by escape", |cx| {
+        drawn("terminal-launcher-popover", cx).is_none()
+    });
+}
+
+#[gpui_kit::test]
+fn many_open_tabs_stay_on_one_40px_row_without_clipping_right_controls(cx: &mut TestAppContext) {
+    let (mut panes, mut cx) = open_naming(cx, vec![claude(), pi()]);
+    for ch in ['1', '2', '3', '4', '5', '6', '7', '8'] {
+        panes.open_terminal(&terminal(ch), &mut cx);
+    }
+    wait_drawn(&mut cx, "all right controls remain visible", |cx| {
+        drawn("terminal-launchers", cx).is_some()
+            && drawn("terminal-launcher-split", cx).is_some()
+            && drawn("terminal-split-toggle", cx).is_some()
+            && drawn("terminal-place", cx).is_some()
+    });
+    let bar = bounds_of("terminal-launchers", &mut cx);
+    assert_eq!(bar.size.height, px(40.));
+    for selector in [
+        "terminal-launcher-split",
+        "terminal-split-toggle",
+        "terminal-place",
+    ] {
+        let bounds = bounds_of(selector, &mut cx);
+        assert!(
+            within(bounds, bar),
+            "{selector} ({bounds:?}) fell outside {bar:?}"
+        );
+    }
 }
 
 #[gpui_kit::test]

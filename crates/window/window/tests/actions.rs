@@ -447,7 +447,8 @@ impl Composed {
             | RequestKind::CompareForReview
             | RequestKind::ListConsents
             | RequestKind::ExportVersion
-            | RequestKind::GetStateSizes => {
+            | RequestKind::GetStateSizes
+            | RequestKind::DismissResumable => {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
             RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
@@ -1325,7 +1326,8 @@ impl Composed {
                 | RequestKind::CompareForReview
                 | RequestKind::ListConsents
                 | RequestKind::ExportVersion
-                | RequestKind::GetStateSizes => {
+                | RequestKind::GetStateSizes
+                | RequestKind::DismissResumable => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
                 RequestKind::Report => {

@@ -491,6 +491,7 @@ impl TerminalPane {
         // Read before the frame that leaves the old terminal is drawn.
         let had_the_focus = self.focus.contains_focused(window, cx);
         self.on_screen = now;
+        self.close_popover(cx);
         let arrived = self.focus_on_arrival.is_some() && self.focus_on_arrival == self.on_screen;
         if arrived {
             self.focus_on_arrival = None;
@@ -1000,6 +1001,7 @@ impl Render for TerminalPane {
         let shown = self.shown();
         let split = shown.len() == 2;
         let launchers = self.render_launchers(cx);
+        let popover = self.render_popover(cx);
         let consent = self.render_consent(cx);
         let slots = shown.iter().enumerate().filter_map(|(n, id)| {
             let entry = self.entry(id)?;
@@ -1197,16 +1199,11 @@ impl Render for TerminalPane {
         });
         let cell = TerminalView::metrics(window, cx).2;
         let (weak, seen) = (cx.weak_entity(), self.room_seen.clone());
-        let reserved_for_tabs = if self.terminals_here().is_empty() {
-            launchers::TABS_BAR_HEIGHT
-        } else {
-            Pixels::ZERO
-        };
         let room = div().absolute().inset_0().px(SPACE_5).py(SPACE_3).child(
             canvas(
                 |bounds, _, _| bounds,
                 move |_, bounds, window, cx| {
-                    let height = (bounds.size.height - reserved_for_tabs).max(Pixels::ZERO);
+                    let height = bounds.size.height.max(Pixels::ZERO);
                     let columns =
                         (f32::from(bounds.size.width) / f32::from(cell.width)).floor() as u16;
                     let rows = (f32::from(height) / f32::from(cell.height)).floor() as u16;
@@ -1235,6 +1232,14 @@ impl Render for TerminalPane {
         div()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
+            .capture_key_down(cx.listener(|pane, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape"
+                    && !event.keystroke.modifiers.modified()
+                    && pane.close_popover(cx)
+                {
+                    cx.stop_propagation();
+                }
+            }))
             .on_key_down(cx.listener(|pane, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "enter"
                     && !event.keystroke.modifiers.modified()
@@ -1265,6 +1270,7 @@ impl Render for TerminalPane {
                     .children(empty)
                     .children(slots_area),
             )
+            .children(popover)
     }
 }
 
